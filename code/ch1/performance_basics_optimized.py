@@ -1,10 +1,11 @@
 """Optimized benchmarking script for Chapter 1 with all performance improvements."""
 
 from __future__ import annotations
-import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import time
 import torch
+
+from arch_config import compile_model  # Local helper ensures TF32 defaults & compilation.
 
 
 def measure_goodput_original(model: torch.nn.Module, device: torch.device, iterations: int = 20) -> None:
@@ -39,65 +40,64 @@ def measure_goodput_original(model: torch.nn.Module, device: torch.device, itera
     print(f"Original - goodput={ratio * 100:.1f}% (useful={useful:.3f}s total={total:.3f}s)")
 
 
-def measure_goodput_optimized(model: torch.nn.Module, device: torch.device, 
+def measure_goodput_optimized(model: torch.nn.Module, device: torch.device,
                                iterations: int = 20, batch_size: int = 128) -> None:
-    """Optimized implementation with all improvements."""
+    """Optimized implementation showcasing pinned memory + CUDA Graphs."""
     model.eval()
-    
-    # Optimization 1: Preallocate tensors on device
-    # This eliminates the 210ms CPU overhead from aten::empty_strided
-    print("\n=== Optimization 1: Preallocated Tensors ===")
+
+    print("\n=== Optimization 1: Preallocated Device Buffers ===")
     data_buf = torch.empty(batch_size, 256, device=device)
     target_buf = torch.empty(batch_size, dtype=torch.long, device=device)
-    
-    # Fill with dummy data (in real training, this would be from DataLoader)
-    data_buf.normal_(0, 1)
-    target_buf.random_(0, 10)
-    
+
+    print("=== Optimization 2: Pinned Host Staging (non_blocking copies) ===")
+    host_data = torch.empty(batch_size, 256, pin_memory=True)
+    host_target = torch.empty(batch_size, dtype=torch.long, pin_memory=True)
+    host_data.normal_(0, 1)
+    host_target.random_(0, 10)
+    data_buf.copy_(host_data, non_blocking=True)
+    target_buf.copy_(host_target, non_blocking=True)
+
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
-    
-    # Optimization 2: CUDA Graphs for static computation graph
-    # This reduces kernel launch overhead
-    print("=== Optimization 2: CUDA Graphs (Forward Only) ===")
-    print("Note: Full training with graphs requires careful optimizer state handling")
-    
-    # Warmup - forward pass only for this demo
+
+    print("=== Optimization 3: CUDA Graphs (Forward Only) ===")
+    print("NOTE: Capturing backward/optimizer requires static optimizer state setup.")
+
+    torch.cuda.synchronize(device)
+    torch.set_grad_enabled(False)
     for _ in range(5):
         logits = model(data_buf)
         loss = torch.nn.functional.cross_entropy(logits, target_buf)
     torch.cuda.synchronize(device)
-    
-    # Capture graph for forward pass
+
     graph = torch.cuda.CUDAGraph()
-    
     with torch.cuda.graph(graph):
         logits = model(data_buf)
         loss = torch.nn.functional.cross_entropy(logits, target_buf)
-    
     torch.cuda.synchronize(device)
-    
+    torch.set_grad_enabled(True)
+
     useful = 0.0
     total = 0.0
-    
+
     for _ in range(iterations):
         iter_start = time.time()
-        
-        # In real training, copy new batch data here:
-        # data_buf.copy_(batch['input'], non_blocking=True)
-        # target_buf.copy_(batch['target'], non_blocking=True)
-        
+        host_data.normal_(0, 1)
+        host_target.random_(0, 10)
+        data_buf.copy_(host_data, non_blocking=True)
+        target_buf.copy_(host_target, non_blocking=True)
+
         compute_start = time.time()
-        graph.replay()  # Much faster than re-launching kernels
+        graph.replay()
         torch.cuda.synchronize(device)
-        
+
         useful_time = time.time() - compute_start
         useful += useful_time
         iter_total = time.time() - iter_start
         total += iter_total
-    
+
     ratio = useful / total if total else 0.0
-    print(f"Optimized (CUDA Graphs) - goodput={ratio * 100:.1f}% (useful={useful:.3f}s total={total:.3f}s)")
-    print(f"Speedup vs baseline: ~{(0.2 / total):.1f}x (eliminates launch overhead)")
+    print(f"Optimized (CUDA Graphs) - goodput={ratio * 100:.1f}% "
+          f"(useful={useful:.3f}s total={total:.3f}s)")
 
 
 def measure_goodput_with_pinned_memory(model: torch.nn.Module, device: torch.device,
@@ -110,8 +110,10 @@ def measure_goodput_with_pinned_memory(model: torch.nn.Module, device: torch.dev
     
     # Simulate DataLoader with pin_memory=True
     # In real code: DataLoader(dataset, batch_size=32, pin_memory=True, num_workers=4)
-    data = torch.randn(32, 256, pin_memory=True).to(device, non_blocking=True)
-    target = torch.randint(0, 10, (32,), pin_memory=True).to(device, non_blocking=True)
+    host_data = torch.empty(32, 256, pin_memory=True)
+    host_target = torch.empty(32, dtype=torch.long, pin_memory=True)
+    data = torch.empty(32, 256, device=device)
+    target = torch.empty(32, dtype=torch.long, device=device)
     
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
     
@@ -121,6 +123,10 @@ def measure_goodput_with_pinned_memory(model: torch.nn.Module, device: torch.dev
     
     for _ in range(iterations):
         iter_start = time.time()
+        host_data.normal_(0, 1)
+        host_target.random_(0, 10)
+        data.copy_(host_data, non_blocking=True)
+        target.copy_(host_target, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
         logits = model(data)
         loss = torch.nn.functional.cross_entropy(logits, target)
@@ -149,9 +155,6 @@ def create_optimized_model(device: torch.device, batch_size: int = 128) -> torch
         torch.nn.ReLU(),
         torch.nn.Linear(256, 10),
     ).to(device)
-    
-    # Enable cuDNN autotuner for optimal kernel selection
-    torch.backends.cudnn.benchmark = True
     
     return model
 
@@ -222,6 +225,7 @@ def main() -> None:
         torch.nn.ReLU(),
         torch.nn.Linear(256, 10),
     ).to(device)
+    model_pinned = compile_model(model_pinned, mode="reduce-overhead", fullgraph=False, dynamic=False)
     measure_goodput_with_pinned_memory(model_pinned, device, iterations=20)
     
     # Test 3: CUDA Graphs with larger batch

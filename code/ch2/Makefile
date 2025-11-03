@@ -2,13 +2,14 @@
 
 include ../common/cuda_arch.mk
 
-NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS)
+NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) -lineinfo -Xptxas -O3
+NVCC_DEBUG_FLAGS = $(NVCC_FLAGS) -G
 SUFFIX = $(TARGET_SUFFIX)
 
 BASE_TARGETS = nvlink_c2c_p2p_blackwell gb200_coherency cpu_gpu_zero_copy_coherent
 TARGETS = $(addsuffix $(SUFFIX), $(BASE_TARGETS))
 
-.PHONY: all clean compare profile-hta profile-perf profile-all blackwell grace-blackwell $(TARGETS)
+.PHONY: all clean compare profile-hta profile-perf profile-all blackwell grace-blackwell debug $(TARGETS)
 
 all: $(TARGETS)
 	@echo "Building Chapter 2 targets with $(ARCH) (CUDA $(CUDA_VERSION))"
@@ -83,3 +84,7 @@ clean:
 	rm -f gb200_coherency_sm100 gb200_coherency_sm121
 	rm -f *.o *.so *.a
 	rm -f nsys_profile_* hta_profile_* perf.data_* comprehensive_*
+debug:
+	@echo "Building Chapter 2 debug targets with lineinfo and -G"
+	$(NVCC) $(NVCC_DEBUG_FLAGS) -o nvlink_c2c_p2p_blackwell_debug nvlink_c2c_p2p_blackwell.cu
+	$(NVCC) $(NVCC_DEBUG_FLAGS) -o gb200_coherency_debug gb200_grace_blackwell_coherency.cu

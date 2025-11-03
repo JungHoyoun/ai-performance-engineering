@@ -64,7 +64,7 @@ After maintenance or hardware replacement, re-enable the standard config:
 ```bash
 unset NCCL_P2P_LEVEL
 unset NCCL_P2P_DISABLE
-./verify_nvlink.py && ./verify_pytorch.py
+python3 tools/verification/verify_nvlink.py && python3 tools/verification/verify_pytorch.py
 ```
 
 Finish with a full multi-GPU benchmark:

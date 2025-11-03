@@ -1,7 +1,15 @@
 """High-throughput DataLoader patterns for storage-bound training (PyTorch 2.9)."""
 
 from __future__ import annotations
-import arch_config  # noqa: F401 - Configure Blackwell optimizations
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    import arch_config  # noqa: F401 - Configure Blackwell optimizations
+except ImportError:
+    pass  # Graceful fallback if arch_config not available
+
 
 import time
 from dataclasses import dataclass
@@ -59,9 +67,13 @@ def train_epoch(model: torch.nn.Module,
 
     for inputs, targets in loader:
         if stream is not None:
-            with torch.cuda.stream(stream):
+            copy_stream = stream
+            with torch.cuda.stream(copy_stream):
                 inputs = inputs.to(device, non_blocking=True)
                 targets = targets.to(device, non_blocking=True)
+                inputs.record_stream(copy_stream)
+                targets.record_stream(copy_stream)
+            torch.cuda.current_stream(device).wait_stream(copy_stream)
         else:
             inputs = inputs.to(device)
             targets = targets.to(device)

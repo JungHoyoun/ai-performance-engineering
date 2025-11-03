@@ -161,7 +161,7 @@ unset NCCL_P2P_DISABLE
 Run the automated check to confirm all 18 links are active at runtime:
 
 ```bash
-python3 verify_nvlink.py
+python3 tools/verification/verify_nvlink.py
 ```
 
 Expected summary:

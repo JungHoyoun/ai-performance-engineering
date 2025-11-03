@@ -1,0 +1,36 @@
+{
+  "players": {
+    "cfregly": {
+      "runs": [
+        {
+          "level": "ch1",
+          "metrics": {
+            "dtype": "bfloat16",
+            "generated_tokens": 12,
+            "latency_s": 1.8174526249999872,
+            "max_memory_bytes": 41923731456,
+            "max_new_tokens": 4,
+            "model_id": "openai/gpt-oss-20b",
+            "prompt_tokens": 52,
+            "prompts": 3,
+            "requests_per_s": 1.650662008315084,
+            "tokens_per_s": 6.602648033260336,
+            "total_tokens": 64
+          },
+          "note": "bf16 baseline (no ncu)",
+          "timestamp": "2025-11-03T15:37:50.368747+00:00"
+        },
+        {
+          "level": "ch1",
+          "metrics": {
+            "throughput": 0,
+            "tokens_per_s": 0
+          },
+          "note": "dry-run",
+          "timestamp": "2025-11-03T14:02:44.620180+00:00"
+        }
+      ]
+    }
+  },
+  "schema_version": 1
+}

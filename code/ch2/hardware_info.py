@@ -4,7 +4,15 @@
 Analyze CPU/GPU topology, memory bandwidth, and interconnect characteristics
 for NVIDIA Blackwell-based systems.
 """
-import arch_config  # noqa: F401 - Configure Blackwell optimizations
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    import arch_config  # noqa: F401 - Configure Blackwell optimizations
+except Exception:  # pragma: no cover - optional per-environment tweak
+    arch_config = None  # Graceful fallback if arch_config is absent
+
 
 import time
 from typing import Any, Dict
@@ -40,7 +48,7 @@ def get_architecture_info() -> Dict[str, Any]:
             "name": "Blackwell B200/B300",
             "compute_capability": "10.0",
             "sm_version": "sm_100",
-            "memory_bandwidth": "7.8 TB/s",
+            "memory_bandwidth": "up to ~8 TB/s",
             "tensor_cores": "5th Gen",
             "features": ["HBM3e", "TMA", "NVLink-C2C"],
         }
@@ -84,7 +92,7 @@ def get_gpu_info() -> Dict[str, Any]:
 
     if major == 10:
         architecture = "Blackwell B200/B300"
-        memory_bandwidth_tbps = 7.8
+        memory_bandwidth_tbps = 8.0
         tensor_cores = "5th Generation"
         hbm3e_memory = True
         tma_support = True
@@ -101,7 +109,7 @@ def get_gpu_info() -> Dict[str, Any]:
     return {
         "name": device_props.name,
         "compute_capability": compute_capability,
-        "total_memory_gb": device_props.total_memory / 1e9,
+        "total_memory_gb": device_props.total_memory / (1024 ** 3),
         "memory_bandwidth_gbps": (memory_bandwidth_tbps * 1000) if memory_bandwidth_tbps else None,
         "max_threads_per_block": getattr(device_props, 'max_threads_per_block', 1024),
         "max_threads_per_sm": device_props.max_threads_per_multi_processor,
@@ -182,9 +190,11 @@ def demonstrate_blackwell_features() -> None:
         print(f" Memory Bandwidth: {gpu_info['memory_bandwidth_tbps']} TB/s")
         print(" 5th Generation Tensor Cores")
         print(" TMA (Tensor Memory Accelerator)")
-        print(" NVLink-C2C (Direct GPU-to-GPU communication)")
+        print(" NVLink-C2C (Grace CPU ↔ Blackwell GPU coherent link)")
         print(" Unified Memory Architecture")
         print(f" Max Unified Memory: {gpu_info['max_unified_memory_tb']} TB")
+        print(" Grace LPDDR5X bandwidth: single-Grace provides up to ~500 GB/s")
+        print(" Dual-Grace \"Grace CPU Superchip\" reaches ~1 TB/s (not part of GB200)")
     elif architecture == "Grace-Blackwell GB10":
         print(" This is a Grace-Blackwell GB10 GPU")
         print(f" Compute Capability: {gpu_info['compute_capability']} ({gpu_info.get('sm_version', 'unknown SM')})")

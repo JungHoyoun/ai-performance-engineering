@@ -109,18 +109,19 @@ make
 
 ---
 
-### 4. `gb200_topology_aware.py` - NUMA Topology
+### 4. `cpu_gpu_topology_aware.py` - CPU-GPU Topology
 
-**Purpose**: Query and display NUMA topology for multi-GPU systems.
+**Purpose**: Query and display CPU-GPU topology for any system architecture (GB200, GB10, GH200, etc.).
 
 **What it shows**:
-- GPU-to-GPU affinity
-- NUMA node assignments
-- NVLink connectivity matrix
+- CPU architecture and NUMA topology
+- GPU architecture detection (Blackwell, Blackwell Ultra sm_121, Hopper, etc.)
+- CPU-GPU interconnect type (NVLink-C2C, PCIe Gen4/5, etc.)
+- NUMA node assignments and GPU affinity
 
 **How to run**:
 ```bash
-python3 gb200_topology_aware.py
+python3 cpu_gpu_topology_aware.py
 ```
 
 **Expected output**:
@@ -237,8 +238,8 @@ make
 # GB200 only: Test coherency
 ./gb200_coherency  # Only on GB200 systems
 
-# Check topology
-python3 gb200_topology_aware.py
+# Check topology (works with any CPU-GPU architecture)
+python3 cpu_gpu_topology_aware.py
 ```
 
 ---

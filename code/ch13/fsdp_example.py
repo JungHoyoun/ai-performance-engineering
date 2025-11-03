@@ -1,4 +1,12 @@
-import arch_config  # noqa: F401 - Configure architecture optimizations
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    import arch_config  # noqa: F401 - Configure architecture optimizations
+except ImportError:
+    pass  # Graceful fallback if arch_config not available
+
 from arch_config import ArchitectureConfig
 import torch.profiler as profiler
 from torch.profiler import profile, record_function, ProfilerActivity, schedule
@@ -139,7 +147,8 @@ def setup_distributed():
     world_size = dist.get_world_size()
     
     if torch.cuda.is_available():
-        torch.cuda.set_device(rank % torch.cuda.device_count())
+        local_rank = int(os.environ.get("LOCAL_RANK", rank % torch.cuda.device_count()))
+        torch.cuda.set_device(local_rank)
     
     return rank, world_size
 

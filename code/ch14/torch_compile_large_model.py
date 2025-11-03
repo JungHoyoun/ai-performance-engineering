@@ -24,6 +24,8 @@ import torch
 import torch.nn as nn
 import triton.testing
 
+QUICK_MODE = os.getenv("BENCHMARK_QUICK", "0") not in ("0", "false", "False")
+
 
 def configure_for_peak_performance():
     """Configure PyTorch for Blackwell B200 peak performance"""
@@ -192,7 +194,9 @@ def benchmark_with_proper_warmup(model, x, name):
         with torch.no_grad():
             return model(x)
     
-    avg_time_ms = triton.testing.do_bench(run_model)
+    warmup = 5 if not QUICK_MODE else 1
+    rep = 50 if not QUICK_MODE else 10
+    avg_time_ms = triton.testing.do_bench(run_model, warmup=warmup, rep=rep)
     throughput = 1000.0 / avg_time_ms  # iter/s
     
     print(f"  Average time: {avg_time_ms:.2f} ms")
@@ -215,6 +219,13 @@ def main():
     print("=" * 80)
     
     sizes_to_test = ['small', 'medium', 'large', 'xl', '5b', '10b', '20b', '50b', '100b']
+    batch_size = 16
+    seq_len = 1024
+
+    if QUICK_MODE:
+        sizes_to_test = ['small']
+        batch_size = 4
+        seq_len = 256
     
     # Find largest model that fits
     selected_size = None
@@ -224,9 +235,6 @@ def main():
     for size in sizes_to_test:
         print(f"\nTesting {size} model...")
         model, config, total_params = create_model(size)
-        
-        batch_size = 16
-        seq_len = 1024
         
         inference_mem, training_mem = estimate_memory(
             batch_size, seq_len, config['d_model'], total_params

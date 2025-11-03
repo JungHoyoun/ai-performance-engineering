@@ -29,7 +29,7 @@ class RooflineAnalyzer:
         """
         self.peak_bandwidth = peak_bandwidth_gbs  # GB/s
         self.peak_compute = peak_compute_tflops   # TFLOPS
-        self.ridge_point = peak_compute / peak_bandwidth  # FLOP/Byte
+        self.ridge_point = self.peak_compute / self.peak_bandwidth  # FLOP/Byte
         
         print(f"Roofline Analyzer initialized for NVIDIA B200:")
         print(f"  Peak Memory Bandwidth: {self.peak_bandwidth} GB/s")
@@ -359,4 +359,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

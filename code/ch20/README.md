@@ -509,7 +509,7 @@ Congratulations on completing all 20 chapters! You now have the knowledge to:
 6. [CUDA Basics](../ch6/README.md) - From sequential to parallel
 7. [Memory Access](../ch7/README.md) - Coalescing, bandwidth
 8. [Occupancy & ILP](../ch8/README.md) - Utilization, warp divergence
-9. [Kernel Fusion](../ch9/README.md) - Reduce memory traffic
+9. [Kernel Efficiency & Arithmetic Intensity](../ch9/README.md) - Increase FLOP/Byte + reduce memory traffic
 10. [Tensor Cores](../ch10/README.md) - WMMA, pipelines, TMA
 11. [CUDA Streams](../ch11/README.md) - Concurrency, async ops
 12. [CUDA Graphs](../ch12/README.md) - Launch overhead elimination
@@ -523,4 +523,3 @@ Congratulations on completing all 20 chapters! You now have the knowledge to:
 20. [Putting It All Together](../ch20/README.md) - End-to-end case studies ← You are here
 
 **Happy optimizing!** 🚀
-

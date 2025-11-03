@@ -199,6 +199,18 @@ Matrix Multiply:
 Roofline plot saved to roofline_plot.png
 ```
 
+---
+
+### Game hooks (Inference Empire)
+
+Interactive “Inference Empire” hooks now live under `bootcamp/ch1/game_hooks.py`. Run them from the project root:
+
+```bash
+python3 bootcamp/ch1/game_hooks.py
+```
+
+The chapter benchmarking/profiling scripts also pick up that file automatically, so you’ll still see game-hook results when running `./benchmark_chapter.sh 1 …` or `./profile_chapter.sh 1 …`.
+
 **Key insight**: Operations below the ridge point (AI < 250 for B200) are limited by memory bandwidth, not compute!
 
 ---
@@ -385,4 +397,3 @@ Learn about:
 **Chapter Status**: ✅ Complete  
 **Last Updated**: November 3, 2025  
 **Tested On**: 8x NVIDIA B200 GPUs, PyTorch 2.9, CUDA 13.0
-

@@ -1,16 +1,11 @@
 """Simple benchmarking script for Chapter 1 (goodput measurement)."""
 
 from __future__ import annotations
-import sys
-import os
-
-# Add parent directory to path to import arch_config
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import time
 import torch
+
+from arch_config import compile_model  # Local helper applies TF32 + torch.compile defaults.
 
 
 def measure_goodput(model: torch.nn.Module, device: torch.device, iterations: int = 20) -> None:
@@ -51,6 +46,7 @@ def main() -> None:
         torch.nn.ReLU(),
         torch.nn.Linear(256, 10),
     ).to(device)
+    model = compile_model(model, mode="reduce-overhead", fullgraph=False, dynamic=False)
     measure_goodput(model, device)
 
 

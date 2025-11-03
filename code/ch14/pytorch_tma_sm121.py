@@ -21,12 +21,15 @@ Usage:
     python pytorch_tma_sm121.py
 """
 
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import time
 from typing import Dict, List, Tuple
-import os
 
 # Import architecture configuration to enable TMA optimizations
 try:

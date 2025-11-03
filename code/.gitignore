@@ -1,6 +1,9 @@
 # Book materials (not publicly exposed)
 book/
 
+benchmark_results/
+.torch_inductor/
+
 # Python
 __pycache__/
 *.pyc
@@ -27,6 +30,11 @@ build/
 # Profiling outputs
 profiles/
 profiles_*/
+profiling_results/
+profiling_results_*/
+profiling_results_new/
+ch*/profiling_results/
+code/profiles/
 *.nsys-rep
 *.ncu-rep
 *.sqlite
@@ -39,6 +47,8 @@ perf.data_*
 comprehensive_*
 
 # Test and benchmark results
+benchmark_results/
+*/benchmark_results/
 test_results/
 test_results_*/
 quick_test_results/
@@ -57,7 +67,12 @@ power_baseline*.json
 nvlink_bandwidth_test.json
 large_model_eager_8xb200*.json
 
+# PyTorch compile caches
+.torch_inductor/
+
 # Build and run artifacts
+artifacts/*
+!artifacts/golden/
 artifacts/20*/
 ch*/*_build.log
 ch*/*_profile.log
@@ -70,6 +85,10 @@ ch*/*_benchmark.log
 ch*/roofline_plot.png
 ch*/*.png
 ch*/*.svg
+
+# Chapter NVCC build products (extensionless executables)
+ch*/[A-Za-z0-9_-]*
+!ch*/Makefile
 
 # NFS files
 .nfs*

@@ -10,7 +10,25 @@ Requirements:
 
 Expected Runtime: ~5-10 seconds on 2 GPUs
 """
-import arch_config  # noqa: F401 - Configure Blackwell optimizations
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    import arch_config  # noqa: F401 - Configure Blackwell optimizations
+except ImportError:
+    pass
+try:
+    from distributed_helper import setup_single_gpu_env
+except ImportError:
+    def setup_single_gpu_env():
+        if "RANK" not in os.environ:
+            os.environ.setdefault("RANK", "0")
+            os.environ.setdefault("WORLD_SIZE", "1")
+            os.environ.setdefault("MASTER_ADDR", "localhost")
+            os.environ.setdefault("MASTER_PORT", "29500")
+            os.environ.setdefault("LOCAL_RANK", "0")  # Graceful fallback if arch_config not available
+
 
 import torch
 import torch.distributed as dist
@@ -29,7 +47,8 @@ def setup_distributed():
         local_rank = int(os.environ.get("LOCAL_RANK", rank))
         
         # Use NCCL backend for GPU communication with timeout
-        dist.init_process_group(
+        setup_single_gpu_env()  # Auto-setup for single-GPU mode
+    dist.init_process_group(
             backend="nccl",
             init_method="env://",
             world_size=world_size,

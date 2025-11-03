@@ -10,6 +10,7 @@ import triton
 import triton.language as tl
 import triton.testing
 from triton.runtime import _allocation as triton_allocation
+import os
 
 
 # Setup allocator for TMA
@@ -161,16 +162,25 @@ def main():
     print(f"GPU: {device_props.name}")
     print(f"Compute Capability: {device_props.major}.{device_props.minor}")
     print(f"Triton Version: {triton.__version__}\n")
+
+    if device_props.major >= 12 and device_props.minor >= 1:
+        print("Grace-Blackwell SM 12.x does not expose TMA instructions yet (CUDA 13.0). Skipping benchmark.")
+        return
     
     print("=" * 90)
     print("TMA Configuration Benchmark: Conservative vs Aggressive")
     print("=" * 90)
     
+    quick_mode = os.getenv("BENCHMARK_QUICK", "0") not in ("0", "false", "False", "")
+
     test_sizes = [
         (2048, 2048, 2048),
         (4096, 4096, 4096),
         (8192, 8192, 8192),
     ]
+
+    if quick_mode:
+        test_sizes = [(1024, 1024, 1024)]
     
     for M, N, K in test_sizes:
         print(f"\nMatrix Size: {M}x{K} × {K}x{N} = {M}x{N}")
@@ -228,4 +238,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

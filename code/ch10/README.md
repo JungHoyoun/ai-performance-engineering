@@ -2,13 +2,13 @@
 
 ## Overview
 
-This chapter explores Blackwell's most powerful features: 5th-generation Tensor Cores (WGMMA), Tensor Memory Accelerator (TMA), asynchronous pipelines, and warp specialization. These features enable 100x speedups for matrix operations and are essential for modern AI workloads.
+This chapter explores Blackwell's most powerful features: 5th-generation Tensor Cores (`tcgen05`), Tensor Memory Accelerator (TMA), asynchronous pipelines, and warp specialization. These features enable 100x speedups for matrix operations and are essential for modern AI workloads.
 
 ## Learning Objectives
 
 After completing this chapter, you can:
 
-- ✅ Use WGMMA (Warp-Group Matrix Multiply-Accumulate) for peak GEMM performance
+- ✅ Use `tcgen05.mma` Tensor Core instructions for peak GEMM performance
 - ✅ Implement async pipelines with TMA for overlapped data movement
 - ✅ Apply double-buffering to hide memory latency
 - ✅ Create warp-specialized kernels for producer-consumer patterns
@@ -20,19 +20,20 @@ After completing this chapter, you can:
 **Previous chapters**:
 - [Chapter 7: Memory Access](../ch7/README.md) - shared memory, tiling
 - [Chapter 8: Occupancy/ILP](../ch8/README.md) - latency hiding
-- [Chapter 9: Kernel Fusion](../ch9/README.md) - fusion patterns
+- [Chapter 9: Kernel Efficiency & Arithmetic Intensity](../ch9/README.md) - roofline and fusion patterns
 
 **Required**: Understanding of GEMM algorithms and async programming concepts
 
 ## Blackwell Architecture Features
 
-### Tensor Cores Gen 5 (TCGEN05)
+### Tensor Cores Gen 5 (`tcgen05`)
 
-**WGMMA Instruction** (Warp-Group Matrix Multiply-Accumulate):
-- Operates on warp groups (2-4 warps = 64-128 threads)
+**`tcgen05.mma` Instruction**:
+- Operates on warp groups (2–4 warps = 64–128 threads)
 - 64×64×16 matrix tiles per instruction (FP16)
 - 128×128×16 tiles with sparsity
 - **2000+ TFLOPS** on B200 (sparse FP16)
+- Replaces Hopper's WGMMA path; code must emit `tcgen05` for Blackwell peak perf
 
 ### TMA (Tensor Memory Accelerator)
 
@@ -50,9 +51,9 @@ After completing this chapter, you can:
 
 ## Examples
 
-### 1. `tcgen05_blackwell.cu` - WGMMA Basics
+### 1. `tcgen05_blackwell.cu` - Blackwell Tensor Core Basics
 
-**Purpose**: Demonstrate Blackwell 5th-gen Tensor Core usage with WGMMA.
+**Purpose**: Demonstrate Blackwell 5th-gen Tensor Core usage with `tcgen05.mma`.
 
 **Key concepts**:
 
@@ -60,7 +61,7 @@ After completing this chapter, you can:
 #include <cuda/pipeline>
 #include <cute/tensor.hpp>  // CUTLASS Cute for layout management
 
-__global__ void wgmma_kernel(
+__global__ void tcgen05_kernel(
     half* A,  // M × K
     half* B,  // K × N
     float* C,  // M × N
@@ -69,10 +70,10 @@ __global__ void wgmma_kernel(
     // Declare accumulator registers for 64×64 output tile
     float acc[64];
     
-    // WGMMA instruction: 64×64×16 tile
+    // tcgen05 instruction: 64×64×16 tile
     // acc = A[64×16] @ B[16×64] + acc
     asm volatile(
-        "wgmma.mma_async.sync.aligned.m64n64k16"
+        "tcgen05.mma.sync.aligned.m64n64k16"
         ".f32.f16.f16 {%0, ...}, {%64, ...}, {%128, ...};"
         : "+f"(acc[0]), ... // 64 outputs
         : "r"(A_tile), ... "r"(B_tile), ... // Inputs
@@ -94,10 +95,10 @@ make tcgen05_blackwell
 **Expected output**:
 ```
 Matrix size: 4096 × 4096 × 4096
-WGMMA GEMM: 1850 TFLOPS (93% of peak) ✅
+tcgen05 GEMM: 1850 TFLOPS (93% of peak) ✅
 cuBLAS GEMM: 1920 TFLOPS (96% of peak) ✅
 
-WGMMA achieves near-cuBLAS performance!
+tcgen05 achieves near-cuBLAS performance!
 ```
 
 ---
@@ -158,7 +159,7 @@ __global__ void double_buffered_gemm(
         __syncthreads();
         
         // Compute with current tile (while next tile loads!)
-        wgmma_compute(smem_A[buffer], smem_B[buffer], acc);
+        tcgen05_compute(smem_A[buffer], smem_B[buffer], acc);
         
         pipe.consumer_release();
         buffer = next_buffer;
@@ -214,7 +215,7 @@ __global__ void warp_specialized_kernel(
         int consumer_id = warp_id - NUM_PRODUCER_WARPS;
         for (int tile = 0; tile < num_tiles; tile++) {
             pipe.consumer_wait();
-            wgmma_compute(smem_A[tile % 2], smem_B[tile % 2], acc);
+            tcgen05_compute(smem_A[tile % 2], smem_B[tile % 2], acc);
             pipe.consumer_release();
         }
         store_output(C, acc, consumer_id);
@@ -304,7 +305,7 @@ __global__ void tma_pipeline_kernel(
         );
         
         // Compute can proceed while loads happen
-        wgmma_compute(smem, acc);
+        tcgen05_compute(smem, acc);
     }
 }
 ```
@@ -344,7 +345,7 @@ __global__ void persistent_gemm_kernel(
         __syncthreads();
         
         // Process work item
-        wgmma_gemm(
+        tcgen05_gemm(
             A[work.id], B[work.id], C[work.id],
             work.M, work.N, work.K
         );
@@ -405,11 +406,11 @@ python3 cufile_gds_example.py
 |----------------|--------|-----------|-------|
 | Naive (no tiling) | 180 | 9% | Memory-bound |
 | Tiled (shared memory) | 2,100 | 105% | Good utilization |
-| WGMMA (Tensor Cores) | 1,850 | 93% | ✅ Excellent |
+| tcgen05 (Tensor Cores) | 1,850 | 93% | ✅ Excellent |
 | cuBLAS | 1,920 | 96% | ✅ Best |
 | Theoretical Peak | 2,000 | 100% | Sparse FP16 |
 
-**Key insight**: WGMMA gets you to 90-95% of peak. Last 5% requires extreme tuning (usually not worth it).
+**Key insight**: `tcgen05` gets you to 90-95% of peak. Last 5% requires extreme tuning (usually not worth it).
 
 ### Pipeline Efficiency
 
@@ -431,7 +432,7 @@ cd ch10
 make
 
 # Tensor Core examples
-./tcgen05_blackwell_sm100                      # WGMMA basics
+./tcgen05_blackwell_sm100                      # tcgen05 basics
 ./double_buffered_pipeline_sm100               # Pipeline optimization
 ./warp_specialized_pipeline_sm100              # Producer-consumer
 ./cluster_group_blackwell_sm100                # Cross-block sync
@@ -462,14 +463,14 @@ python3 cufile_gds_example.py
 
 6. **Persistent kernels eliminate launch overhead**: For many small operations, launch once and loop.
 
-7. **WGMMA achieves 90-95% of peak**: cuBLAS is only 5% better. Custom WGMMA kernels are viable for specialized cases.
+7. **tcgen05 achieves 90-95% of peak**: cuBLAS is only 5% better. Custom tcgen05 kernels are viable for specialized cases.
 
 ---
 
 ## Common Pitfalls
 
 ### Pitfall 1: Not Using Tensor Cores
-**Problem**: Using scalar FP16 operations instead of WGMMA → 100x slower!
+**Problem**: Using scalar FP16 operations instead of `tcgen05.mma` → 100x slower!
 
 **Solution**: Always use Tensor Cores for matrix operations. Restructure algorithms if needed.
 
@@ -510,7 +511,7 @@ Learn about:
 
 ## Additional Resources
 
-- **WGMMA Programming Guide**: [Blackwell Tensor Cores](https://docs.nvidia.com/cuda/blackwell-tuning-guide/index.html)
+- **tcgen05 Programming Guide**: [Blackwell Tensor Cores](https://docs.nvidia.com/cuda/blackwell-tuning-guide/index.html)
 - **CUDA Pipelines**: [Async Pipeline Programming](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#asynchronous-pipeline)
 - **Thread Block Clusters**: [Cluster Programming Guide](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#thread-block-clusters)
 - **TMA Status**: See `../../docs/TMA_STATUS_SUMMARY.md` for current driver issues

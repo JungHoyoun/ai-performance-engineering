@@ -480,7 +480,7 @@ python3 warp_divergence_pytorch.py
 
 ## Next Steps
 
-**Learn kernel fusion** → [Chapter 9: Kernel Fusion](../ch9/README.md)
+**Learn kernel efficiency & fusion** → [Chapter 9: Kernel Efficiency & Arithmetic Intensity](../ch9/README.md)
 
 Learn about:
 - Fusing multiple operations into single kernel
@@ -504,4 +504,3 @@ Learn about:
 **Chapter Status**: ✅ Complete  
 **Last Updated**: November 3, 2025  
 **Tested On**: NVIDIA B200 GPU, CUDA 13.0, sm_100 architecture
-

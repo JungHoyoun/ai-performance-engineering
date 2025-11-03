@@ -1,7 +1,15 @@
 """NUMA-aware affinity helpers for Chapter 3 examples (CUDA 13 / PyTorch 2.9)."""
 
 from __future__ import annotations
-import arch_config  # noqa: F401 - Configure Blackwell optimizations
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    import arch_config  # noqa: F401 - Configure Blackwell optimizations
+except ImportError:
+    pass  # Graceful fallback if arch_config not available
+
 
 import ctypes
 import glob

@@ -11,7 +11,7 @@ torchaudio==2.9.*+cu130
 
 # Optional: install upstream Triton if you author custom GPU kernels outside of
 # TorchInductor (PyTorch ships a bundled runtime already).
-triton==3.5.0
+triton==3.5.*
 
 # Monitoring and system insight
 nvidia-ml-py==12.560.30
@@ -20,8 +20,8 @@ GPUtil==1.4.0
 py-cpuinfo==9.0.0
 
 # Data processing stack
-numpy==1.26.4
-pandas==2.2.2
+numpy>=2.1,<3
+pandas>=2.2,<3
 scikit-learn==1.4.2
 pillow==10.2.0
 

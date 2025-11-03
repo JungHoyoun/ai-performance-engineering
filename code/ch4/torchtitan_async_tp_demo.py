@@ -24,7 +24,25 @@ Async-TP currently requires:
 """
 
 from __future__ import annotations
-import arch_config  # noqa: F401 - Configure Blackwell optimizations
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    import arch_config  # noqa: F401 - Configure Blackwell optimizations
+except ImportError:
+    pass
+try:
+    from distributed_helper import setup_single_gpu_env
+except ImportError:
+    def setup_single_gpu_env():
+        if "RANK" not in os.environ:
+            os.environ.setdefault("RANK", "0")
+            os.environ.setdefault("WORLD_SIZE", "1")
+            os.environ.setdefault("MASTER_ADDR", "localhost")
+            os.environ.setdefault("MASTER_PORT", "29500")
+            os.environ.setdefault("LOCAL_RANK", "0")  # Graceful fallback if arch_config not available
+
 
 import argparse
 import os
@@ -76,6 +94,7 @@ def init_distributed(tp_degree: int) -> int:
     else:  # pragma: no cover - torchrun always sets LOCAL_RANK
         local_rank = 0
 
+    setup_single_gpu_env()  # Auto-setup for single-GPU mode
     dist.init_process_group(backend="nccl")
     world_size = dist.get_world_size()
     if world_size != tp_degree:

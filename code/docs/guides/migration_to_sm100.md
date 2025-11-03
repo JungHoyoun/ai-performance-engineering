@@ -51,11 +51,11 @@ results later (see `tools/continuous_benchmark.py --archive`).
 
 2. **Install Software**
    - `sudo ./setup.sh` (installs R580 driver + CUDA 13.0 + PyTorch 2.9 stack).
-   - Verify with `./verify_pytorch.py`, `./verify_nvlink.py`,
-     `./verify_cutlass.py`.
+   - Verify with `python3 tools/verification/verify_pytorch.py`, `python3 tools/verification/verify_nvlink.py`,
+     `python3 tools/verification/verify_cutlass.py`.
 
 3. **Confirm Fabric Health**
-   - Expect ~250 GB/s P2P and ~273 GB/s NCCL all-reduce (see `verify_nvlink`).
+   - Expect ~250 GB/s P2P and ~273 GB/s NCCL all-reduce (see `tools/verification/verify_nvlink.py`).
    - Run `python3 benchmark_peak.py` to record HBM (2.7–2.8 TB/s) and compute
      (1.28–1.30 PFLOPS) ceilings.
 
@@ -129,7 +129,7 @@ artifacts are archived.
   `ModuleNotFoundError: cutlass._mlir`.
 
 - **NVSwitch firmware drift**  
-  If `verify_nvlink.py` reports <200 GB/s, update NVSwitch firmware using
+  If `tools/verification/verify_nvlink.py` reports <200 GB/s, update NVSwitch firmware using
   NVIDIA's out-of-band tools before debugging PyTorch.
 
 - **FP8 numerical drift**  

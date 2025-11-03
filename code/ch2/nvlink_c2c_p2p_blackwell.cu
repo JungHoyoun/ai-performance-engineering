@@ -294,6 +294,8 @@ void demonstrate_page_migration() {
     {
         auto start = std::chrono::high_resolution_clock::now();
         
+        // For streamed transfers, prefer double-buffered prefetch (overlap copy/compute).
+        // On Hopper/Blackwell, also consider TMA + thread-block clusters for staging.
         // Prefetch with hint for bulk transfer
         cudaMemPrefetchAsync(managed_data, size, gpuLoc, 0, 0);
         CUDA_CHECK(cudaDeviceSynchronize());
@@ -312,6 +314,8 @@ void demonstrate_page_migration() {
                                  cudaMemAdviseSetPreferredLocation, gpuLoc));
         CUDA_CHECK(cudaMemAdvise(managed_data, size,
                                  cudaMemAdviseSetAccessedBy, gpuLoc));
+        CUDA_CHECK(cudaMemAdvise(managed_data, size,
+                                 cudaMemAdviseSetReadMostly, gpuLoc));
         
         // Reset to CPU
         cudaMemPrefetchAsync(managed_data, size, cpuLoc, 0, 0);
@@ -361,7 +365,25 @@ void benchmark_8gpu_p2p_bandwidth(const SystemInfo& info) {
                 int can_access;
                 CUDA_CHECK(cudaDeviceCanAccessPeer(&can_access, i, j));
                 if (can_access) {
-                    cudaDeviceEnablePeerAccess(j, 0);
+                    cudaError_t status = cudaDeviceEnablePeerAccess(j, 0);
+                    if (status == cudaErrorPeerAccessAlreadyEnabled) {
+                        cudaGetLastError();  // clear sticky error from previous enable
+                    } else if (status != cudaSuccess) {
+                        fprintf(stderr,
+                                "CUDA error enabling peer access %d->%d: %s\n",
+                                i, j, cudaGetErrorString(status));
+                        exit(EXIT_FAILURE);
+                    }
+                    if (i < j) {
+                        int native_atomics = 0;
+                        int perf_rank = 0;
+                        CUDA_CHECK(cudaDeviceGetP2PAttribute(
+                            &native_atomics, cudaDevP2PAttrNativeAtomicSupported, i, j));
+                        CUDA_CHECK(cudaDeviceGetP2PAttribute(
+                            &perf_rank, cudaDevP2PAttrPerformanceRank, i, j));
+                        printf("P2P %d ↔ %d: nativeAtomics=%d, perfRank=%d (lower is better)\n",
+                               i, j, native_atomics, perf_rank);
+                    }
                 }
             }
         }

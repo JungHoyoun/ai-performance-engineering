@@ -48,8 +48,8 @@ What this does:
    transformer-engine, and support tools (Nsight CLIs, CUTLASS DSL).
 3. Compiles core CUDA samples (`ch2`, `ch6`, `ch7`, `ch8`, `ch9`, `ch10`,
    `ch11`, `ch12`) to verify the toolchain.
-4. Runs capability checks (`verify_pytorch.py`, `verify_nvlink.py`,
-   `verify_cutlass.py`, `verify_working_optimizations.py`).
+4. Runs capability checks (`tools/verification/verify_pytorch.py`, `tools/verification/verify_nvlink.py`,
+   `tools/verification/verify_cutlass.py`, `tools/verification/verify_working_optimizations.py`).
 
 If the driver was upgraded, rerun `sudo ./setup.sh` after the reboot so the
 CUDA packages and Python environment finish installing.
@@ -65,13 +65,13 @@ Run these in order after setup:
 nvidia-smi
 
 # 2. Verify framework & CUDA availability
-./verify_pytorch.py
+python3 tools/verification/verify_pytorch.py
 
 # 3. Validate NVLink fabric
-./verify_nvlink.py
+python3 tools/verification/verify_nvlink.py
 
 # 4. CUTLASS support (tensor core pipeline tests)
-./verify_cutlass.py
+python3 tools/verification/verify_cutlass.py
 
 # 5. Run the consolidated smoke tests
 ./run_all_tests.sh
@@ -79,7 +79,7 @@ nvidia-smi
 
 Expected highlights (captured Oct 31, 2025):
 
-- `verify_nvlink.py` reports ~250 GB/s P2P and ~273 GB/s NCCL all-reduce.
+- `tools/verification/verify_nvlink.py` reports ~250 GB/s P2P and ~273 GB/s NCCL all-reduce.
 - `run_all_tests.sh` exits 0 and stores JSON logs under `test_results/`.
 - CUDA sample binaries land in each chapter directory (`ch7/hbm3e_peak_bandwidth`,
   `ch10/tma_2d_pipeline_blackwell`, etc.).

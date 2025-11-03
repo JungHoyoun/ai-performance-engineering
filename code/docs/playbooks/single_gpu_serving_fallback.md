@@ -5,7 +5,7 @@ single-GPU configuration to keep traffic flowing. This playbook captures the
 exact steps we exercise during rollback drills.
 
 ## When to Trigger the Fallback
-- NVLink mesh degraded (`verify_nvlink.py` reports less than 18 active links).
+- NVLink mesh degraded (`tools/verification/verify_nvlink.py` reports less than 18 active links).
 - NCCL collectives repeatedly hang or tear down the tensor-parallel server.
 - Production is pinned to PCIe-only hardware and sustained QPS drops by >30%.
 - Capacity planning needs a “fits anywhere” deployment (edge nodes, cold

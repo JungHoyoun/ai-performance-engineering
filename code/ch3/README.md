@@ -108,7 +108,7 @@ sudo ./system_tuning.sh
 
 ---
 
-### 3. `gb200_numa_optimizations.sh` - Grace-Blackwell Specific
+### 3. `cpu_gpu_numa_optimizations.sh` - Grace-Blackwell Specific
 
 **Purpose**: Additional tuning for GB200 systems with Grace CPU.
 
@@ -120,7 +120,7 @@ sudo ./system_tuning.sh
 
 **How to run** (GB200 only):
 ```bash
-sudo ./gb200_numa_optimizations.sh
+sudo ./cpu_gpu_numa_optimizations.sh
 ```
 
 ---
@@ -132,22 +132,19 @@ sudo ./gb200_numa_optimizations.sh
 **Key configurations**:
 
 ```dockerfile
-# Use NVIDIA base image with CUDA
-FROM nvcr.io/nvidia/pytorch:24.10-py3
+# Use NVIDIA base image with CUDA 13 + PyTorch 2.9
+FROM nvcr.io/nvidia/pytorch:25.09-py3
 
-# Set environment for optimal GPU performance
-ENV CUDA_VISIBLE_DEVICES=all
-ENV NVIDIA_VISIBLE_DEVICES=all
-ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+# Set allocator + arch flags for Blackwell (sm_100 + PTX fallback)
+ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+ENV TORCH_CUDA_ARCH_LIST="10.0+PTX"
+ENV CUDA_DEVICE_ORDER=PCI_BUS_ID
 
-# Enable THP in container
-RUN echo "always" > /sys/kernel/mm/transparent_hugepage/enabled
+# Install NUMA tooling and utilities
+RUN apt-get update && apt-get install -y numactl && rm -rf /var/lib/apt/lists/*
 
-# Set CPU affinity via numactl
-RUN apt-get update && apt-get install -y numactl
-
-# Entrypoint with NUMA binding
-ENTRYPOINT ["numactl", "--cpunodebind=0", "--membind=0"]
+# Default entrypoint keeps NUMA interleave as example
+ENTRYPOINT ["numactl", "--interleave=all", "python"]
 ```
 
 **Build and run**:
@@ -337,7 +334,7 @@ sudo ./system_tuning.sh
 python3 bind_numa_affinity.py --gpu 0 --validate
 
 # 5. GB200 only: Apply Grace-specific tuning
-sudo ./gb200_numa_optimizations.sh
+sudo ./cpu_gpu_numa_optimizations.sh
 
 # 6. Container examples
 docker build -f docker_gpu_optimized.dockerfile -t gpu-optimized .
@@ -430,4 +427,3 @@ Learn about:
 **Chapter Status**: ✅ Complete  
 **Last Updated**: November 3, 2025  
 **Tested On**: 8x NVIDIA B200 GPUs, Ubuntu 22.04, Linux 6.11
-

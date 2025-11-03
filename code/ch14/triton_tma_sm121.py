@@ -25,6 +25,10 @@ Note: Due to Triton 3.5 compiler bugs with aggressive TMA configurations,
       See ch14/triton_tma_blackwell.py for detailed bug documentation.
 """
 
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import torch
 import triton
 import triton.language as tl

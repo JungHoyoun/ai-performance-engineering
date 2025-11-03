@@ -85,6 +85,12 @@ code/
 └── tests/                  # Automated checks invoked by run_all_tests.sh
 ```
 
+## Cleanup Generated Artifacts
+- Inspect what would be removed: `./cleanup_generated_outputs.sh`
+- Remove everything for the default categories: `./cleanup_generated_outputs.sh --apply`
+- Target specific categories (e.g., caches only): `./cleanup_generated_outputs.sh --only caches --apply`
+- Skip categories you want to keep (e.g., profiling data): `./cleanup_generated_outputs.sh --skip profiles --apply`
+
 ## Next Steps
 - Track open work in `docs/planning/TODO.md` and planned enhancements in `docs/planning/future_optimizations.md`
 - Record measured metrics or new findings in `docs/reference/performance_baseline.md` and related docs under `docs/`

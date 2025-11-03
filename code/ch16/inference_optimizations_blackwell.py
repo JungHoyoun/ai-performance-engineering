@@ -23,7 +23,15 @@ Requirements:
 
 Author: Blackwell Optimization Project
 """
-import arch_config  # noqa: F401 - Configure Blackwell optimizations
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    import arch_config  # noqa: F401 - Configure Blackwell optimizations
+except ImportError:
+    pass  # Graceful fallback if arch_config not available
+
 
 import torch
 import torch.nn as nn
@@ -644,9 +652,11 @@ class TensorParallel8GPU:
         self.model = model
         self.num_gpus = num_gpus
         self.rank = rank
+        self.local_rank = int(os.environ.get("LOCAL_RANK", rank))
+        self.device = torch.device(f"cuda:{self.local_rank}")
         
         # Move model to current GPU
-        self.model = self.model.to(f"cuda:{rank}")
+        self.model = self.model.to(self.device)
         
         # Initialize process group if not already done
         import torch.distributed as dist
@@ -655,6 +665,7 @@ class TensorParallel8GPU:
             os.environ.setdefault("MASTER_ADDR", "localhost")
             os.environ.setdefault("MASTER_PORT", "12355")
             os.environ.setdefault("RANK", str(rank))
+            os.environ.setdefault("LOCAL_RANK", str(self.local_rank))
             os.environ.setdefault("WORLD_SIZE", str(num_gpus))
             dist.init_process_group(backend="nccl")
         
@@ -680,8 +691,7 @@ class TensorParallel8GPU:
         """
         Forward pass with tensor parallelism.
         """
-        device = f"cuda:{self.rank}"
-        input_ids = input_ids.to(device)
+        input_ids = input_ids.to(self.device)
         
         # If KV cache provided, shard it
         if kv_cache is not None:
@@ -717,6 +727,8 @@ def benchmark_8gpu_tensor_parallel():
     
     rank = dist.get_rank()
     world_size = dist.get_world_size()
+    local_rank = int(os.environ.get("LOCAL_RANK", rank))
+    device = torch.device(f"cuda:{local_rank}")
     
     if rank == 0:
         print("\n" + "=" * 80)
@@ -735,7 +747,7 @@ def benchmark_8gpu_tensor_parallel():
     layer = OptimizedDecoderLayer(
         d_model=d_model,
         num_heads=num_heads // world_size,  # Split heads
-        device=f"cuda:{rank}",
+        device=device,
     )
     
     # Create KV cache (sharded)
@@ -745,13 +757,13 @@ def benchmark_8gpu_tensor_parallel():
         max_seq_len=seq_len * 2,
         num_heads=num_heads // world_size,
         head_dim=d_model // num_heads,
-        device=f"cuda:{rank}",
+        device=device,
     )
     
     # Test input
     hidden_states = torch.randn(
         batch_size, seq_len, d_model,
-        device=f"cuda:{rank}",
+        device=device,
         dtype=torch.float16
     )
     

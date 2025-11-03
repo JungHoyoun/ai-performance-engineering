@@ -7,6 +7,8 @@ set -e
 CHAPTER_NUM=$1
 OUTPUT_DIR=${2:-"./benchmark_results"}
 ITERATIONS=${3:-100}  # Number of iterations for averaging
+BENCHMARK_QUICK_DEFAULT=${BENCHMARK_QUICK:-1}
+export BENCHMARK_QUICK=$BENCHMARK_QUICK_DEFAULT
 
 if [ -z "$CHAPTER_NUM" ]; then
     echo "Usage: $0 <chapter_number> [output_dir] [iterations]"
@@ -49,8 +51,18 @@ CU_FILES=$(find . -maxdepth 1 -name "*.cu" -type f 2>/dev/null || true)
 for cu_file in $CU_FILES; do
     filename=$(basename "$cu_file" .cu)
     
+    # Check for executable with or without suffix
+    executable=""
+    if [ -f "$filename" ]; then
+        executable="$filename"
+    elif [ -f "${filename}_sm121" ]; then
+        executable="${filename}_sm121"
+    elif [ -f "${filename}_sm100" ]; then
+        executable="${filename}_sm100"
+    fi
+    
     # Skip if executable doesn't exist
-    if [ ! -f "$filename" ]; then
+    if [ -z "$executable" ]; then
         echo "⚠️  Skipping $filename (not built)"
         continue
     fi
@@ -64,7 +76,7 @@ for cu_file in $CU_FILES; do
     for i in $(seq 1 $ITERATIONS); do
         # Run with timing
         START=$(date +%s%N)
-        if ./"$filename" > /dev/null 2>&1; then
+        if ./"$executable" > /dev/null 2>&1; then
             END=$(date +%s%N)
             TIME_MS=$(echo "scale=3; ($END - $START) / 1000000" | bc)
             TIMES+=($TIME_MS)
@@ -109,7 +121,7 @@ EOF
 done
 
 # Benchmark Python examples
-PY_FILES=$(find . -maxdepth 1 -name "*.py" -type f ! -name "__*" ! -name "setup.py" -type f 2>/dev/null || true)
+PY_FILES=$(find . -maxdepth 1 -name "*.py" -type f ! -name "__*" ! -name "setup.py" 2>/dev/null || true)
 for py_file in $PY_FILES; do
     filename=$(basename "$py_file" .py)
     
@@ -162,6 +174,58 @@ EOF
     echo ""
 done
 
+# Benchmark bootcamp game hooks if present
+BOOTCAMP_GAME_HOOKS="../bootcamp/ch${CHAPTER_NUM}/game_hooks.py"
+if [ -f "$BOOTCAMP_GAME_HOOKS" ]; then
+    filename="bootcamp_ch${CHAPTER_NUM}_game_hooks"
+    echo "⏱️  Benchmarking Python example: $filename"
+
+    TIMES=()
+    SUCCESS_COUNT=0
+
+    for i in $(seq 1 $ITERATIONS); do
+        START=$(date +%s%N)
+        if python3 "$BOOTCAMP_GAME_HOOKS" > /dev/null 2>&1; then
+            END=$(date +%s%N)
+            TIME_MS=$(echo "scale=3; ($END - $START) / 1000000" | bc)
+            TIMES+=($TIME_MS)
+            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+        fi
+
+        if [ $((i % 10)) -eq 0 ]; then
+            echo -n "."
+        fi
+    done
+    echo ""
+
+    if [ $SUCCESS_COUNT -gt 0 ]; then
+        MEAN=$(printf '%s\n' "${TIMES[@]}" | awk '{sum+=$1} END {print sum/NR}')
+        MIN=$(printf '%s\n' "${TIMES[@]}" | sort -n | head -1)
+        MAX=$(printf '%s\n' "${TIMES[@]}" | sort -n | tail -1)
+
+        if [ "$FIRST_ENTRY" = false ]; then
+            echo "," >> "$RESULTS_FILE"
+        fi
+        FIRST_ENTRY=false
+
+        cat >> "$RESULTS_FILE" <<EOF
+    "$filename": {
+      "type": "python",
+      "mean_ms": $MEAN,
+      "min_ms": $MIN,
+      "max_ms": $MAX,
+      "iterations": $SUCCESS_COUNT,
+      "success_rate": $(echo "scale=3; $SUCCESS_COUNT / $ITERATIONS" | bc)
+    }
+EOF
+
+        echo "  ✅ $filename: ${MEAN}ms (±$(echo "scale=2; $MAX - $MIN" | bc)ms)"
+    else
+        echo "  ❌ $filename: All runs failed"
+    fi
+    echo ""
+fi
+
 # Close JSON
 echo "" >> "$RESULTS_FILE"
 echo "  }" >> "$RESULTS_FILE"
@@ -176,4 +240,3 @@ echo ""
 echo "View results: cat $RESULTS_FILE"
 echo "Compare results: python3 common/profiling/compare_results.py <baseline.json> <optimized.json>"
 echo "========================================="
-

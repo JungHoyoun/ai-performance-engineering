@@ -45,7 +45,15 @@ Error Recovery:
 
 Author: Blackwell Performance Engineering Team
 """
-import arch_config  # noqa: F401 - Configure Blackwell optimizations
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    import arch_config  # noqa: F401 - Configure Blackwell optimizations
+except ImportError:
+    pass  # Graceful fallback if arch_config not available
+
 
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
@@ -1081,13 +1089,22 @@ class ContinuousBatchScheduler:
                 "total_tokens_generated": self.total_tokens_generated,
             }
 
+    def reset_metrics(self) -> None:
+        """Reset scheduler counters after warm-up."""
+        with self.lock:
+            self.total_requests = 0
+            self.completed_requests = 0
+            self.rejected_requests = 0
+            self.total_tokens_generated = 0
+            self._arrival_counter = 0
+
 # ============================================================================
 # Inference Server
 # ============================================================================
 
 class InferenceServer8GPU:
     """
-    Production inference server for 8x B200 GPUs.
+    Production inference server for 8x B200/B300 GPUs.
     """
     
     def __init__(
@@ -1102,6 +1119,7 @@ class InferenceServer8GPU:
         use_symmetric_kv: bool = False,
         symmetric_probe_interval: int = 0,
         enable_compile: bool = True,
+        compile_mode: str = "default",
         completion_callback: Optional[Callable[[RequestState, float], None]] = None,
     ):
         self.model = model
@@ -1112,6 +1130,13 @@ class InferenceServer8GPU:
         self.max_seq_len = max_seq_len
         self._completion_callback = completion_callback
         self._enable_compile = enable_compile
+        valid_compile_modes = {"default", "max-autotune", "reduce-overhead"}
+        if compile_mode not in valid_compile_modes:
+            raise ValueError(
+                f"Unsupported torch.compile mode '{compile_mode}'. "
+                f"Expected one of {sorted(valid_compile_modes)}."
+            )
+        self._compile_mode = compile_mode
 
         first_param = next(self.model.parameters(), None)
         self.model_dtype = first_param.dtype if first_param is not None else torch.float32
@@ -1207,10 +1232,10 @@ class InferenceServer8GPU:
             try:
                 for layer in getattr(self.model, "layers", []):
                     original_mlp = layer.mlp
-                    layer.mlp = torch.compile(original_mlp, dynamic=False)
+                    layer.mlp = torch.compile(original_mlp, dynamic=False, mode=self._compile_mode)
                     compiled_modules.append(("mlp", layer, original_mlp))
                 original_head = self.model.lm_head
-                self.model.lm_head = torch.compile(original_head, dynamic=False)
+                self.model.lm_head = torch.compile(original_head, dynamic=False, mode=self._compile_mode)
                 compiled_modules.append(("head", self.model, original_head))
             except (AttributeError, RuntimeError, TypeError, ValueError):
                 for tag, obj, original in compiled_modules:

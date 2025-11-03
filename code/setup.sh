@@ -1133,7 +1133,7 @@ VERIFICATION_FAILED=0
 
 # Verify PyTorch installation
 echo "▶️  Verifying PyTorch installation..."
-if python3 verify_pytorch.py; then
+if python3 tools/verification/verify_pytorch.py; then
     echo "✅ PyTorch verification passed"
 else
     echo "❌ PyTorch verification failed"
@@ -1146,7 +1146,7 @@ echo ""
 GPU_COUNT=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l)
 if [ "$GPU_COUNT" -gt 1 ]; then
     echo "▶️  Verifying NVLink connectivity..."
-    if python3 verify_nvlink.py; then
+    if python3 tools/verification/verify_nvlink.py; then
         echo "✅ NVLink verification passed"
     else
         echo "⚠️  NVLink verification had warnings (review output above)"
@@ -1159,7 +1159,7 @@ echo ""
 
 # Verify CUTLASS backend
 echo "▶️  Verifying CUTLASS backend..."
-if python3 verify_cutlass.py 2>/dev/null; then
+if python3 tools/verification/verify_cutlass.py 2>/dev/null; then
     echo "✅ CUTLASS verification passed"
 else
     echo "⚠️  CUTLASS verification had issues (may be expected)"

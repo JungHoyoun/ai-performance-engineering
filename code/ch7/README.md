@@ -511,7 +511,7 @@ Learn about:
 - Register pressure management
 - Warp divergence mitigation
 
-**Jump to fusion** → [Chapter 9: Kernel Fusion](../ch9/README.md)
+**Jump to kernel efficiency** → [Chapter 9: Kernel Efficiency & Arithmetic Intensity](../ch9/README.md)
 
 ---
 
@@ -527,4 +527,3 @@ Learn about:
 **Chapter Status**: ✅ Complete  
 **Last Updated**: November 3, 2025  
 **Tested On**: NVIDIA B200 GPU, CUDA 13.0, sm_100 architecture
-

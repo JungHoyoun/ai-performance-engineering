@@ -35,7 +35,7 @@ cd "$CHAPTER_DIR"
 # Detect file types and profile accordingly
 echo "Detecting examples..."
 CU_FILES=$(find . -maxdepth 1 -name "*.cu" -type f 2>/dev/null || true)
-PY_FILES=$(find . -maxdepth 1 -name "*.py" -type f ! -name "__*" ! -name "setup.py" -type f 2>/dev/null || true)
+PY_FILES=$(find . -maxdepth 1 -name "*.py" -type f ! -name "__*" ! -name "setup.py" 2>/dev/null || true)
 
 PROFILE_COUNT=0
 
@@ -43,8 +43,18 @@ PROFILE_COUNT=0
 for cu_file in $CU_FILES; do
     filename=$(basename "$cu_file" .cu)
     
+    # Check for executable with or without suffix
+    executable=""
+    if [ -f "$filename" ]; then
+        executable="$filename"
+    elif [ -f "${filename}_sm121" ]; then
+        executable="${filename}_sm121"
+    elif [ -f "${filename}_sm100" ]; then
+        executable="${filename}_sm100"
+    fi
+    
     # Skip if executable doesn't exist
-    if [ ! -f "$filename" ]; then
+    if [ -z "$executable" ]; then
         echo "⚠️  Skipping $filename (not built)"
         continue
     fi
@@ -58,7 +68,7 @@ for cu_file in $CU_FILES; do
             -o "../$OUTPUT_DIR/$CHAPTER_DIR/${filename}_nsys" \
             --stats=true \
             --force-overwrite=true \
-            ./"$filename" > "../$OUTPUT_DIR/$CHAPTER_DIR/${filename}_nsys.log" 2>&1 || {
+            ./"$executable" > "../$OUTPUT_DIR/$CHAPTER_DIR/${filename}_nsys.log" 2>&1 || {
                 echo "  ❌ nsys profiling failed (see log)"
             }
     fi
@@ -70,7 +80,7 @@ for cu_file in $CU_FILES; do
             -o "../$OUTPUT_DIR/$CHAPTER_DIR/${filename}_ncu" \
             --set basic \
             --force-overwrite \
-            ./"$filename" > "../$OUTPUT_DIR/$CHAPTER_DIR/${filename}_ncu.log" 2>&1 || {
+            ./"$executable" > "../$OUTPUT_DIR/$CHAPTER_DIR/${filename}_ncu.log" 2>&1 || {
                 echo "  ❌ ncu profiling failed (see log)"
             }
     fi
@@ -116,6 +126,38 @@ for py_file in $PY_FILES; do
     echo ""
 done
 
+# Profile bootcamp game hooks if present
+BOOTCAMP_GAME_HOOKS="../bootcamp/ch${CHAPTER_NUM}/game_hooks.py"
+if [ -f "$BOOTCAMP_GAME_HOOKS" ]; then
+    filename="bootcamp_ch${CHAPTER_NUM}_game_hooks"
+    
+    echo "🔍 Profiling Python example: $filename"
+    
+    PROFILE_OUTPUT_DIR="../$OUTPUT_DIR/$CHAPTER_DIR/${filename}_pytorch_profile"
+    mkdir -p "$PROFILE_OUTPUT_DIR"
+    
+    python3 "$BOOTCAMP_GAME_HOOKS" --profile-output-dir "$PROFILE_OUTPUT_DIR" > "../$OUTPUT_DIR/$CHAPTER_DIR/${filename}_output.log" 2>&1 || {
+        python3 "$BOOTCAMP_GAME_HOOKS" > "../$OUTPUT_DIR/$CHAPTER_DIR/${filename}_output.log" 2>&1 || {
+            echo "  ❌ Execution failed (see log)"
+        }
+    }
+    
+    if command -v nsys &> /dev/null; then
+        echo "  Running nsys on Python script..."
+        nsys profile \
+            -o "../$OUTPUT_DIR/$CHAPTER_DIR/${filename}_nsys" \
+            --stats=true \
+            --force-overwrite=true \
+            python3 "$BOOTCAMP_GAME_HOOKS" > "../$OUTPUT_DIR/$CHAPTER_DIR/${filename}_nsys.log" 2>&1 || {
+                echo "  ❌ nsys profiling failed (see log)"
+            }
+    fi
+    
+    PROFILE_COUNT=$((PROFILE_COUNT + 1))
+    echo "  ✅ Profiled $filename"
+    echo ""
+fi
+
 cd ..
 
 echo "========================================="
@@ -127,4 +169,3 @@ echo "View nsys reports with: nsys-ui $OUTPUT_DIR/$CHAPTER_DIR/*_nsys.nsys-rep"
 echo "View ncu reports with: ncu-ui $OUTPUT_DIR/$CHAPTER_DIR/*_ncu.ncu-rep"
 echo "View PyTorch profiles with: tensorboard --logdir $OUTPUT_DIR/$CHAPTER_DIR"
 echo "========================================="
-

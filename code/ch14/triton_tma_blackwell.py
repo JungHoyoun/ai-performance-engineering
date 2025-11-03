@@ -63,6 +63,7 @@ BUSINESS IMPACT:
 ================================================================================
 """
 
+import os
 import torch
 import triton
 import triton.language as tl
@@ -463,17 +464,34 @@ def main():
     print("Tensor Memory Accelerator Optimization")
     print("="*70)
     
+    quick_mode = os.getenv("BENCHMARK_QUICK", "0") not in ("0", "false", "False", "")
+
+    if not torch.cuda.is_available():
+        print("CUDA not available - skipping benchmarks")
+        return
+
+    props = torch.cuda.get_device_properties(0)
+    if props.major == 12 and props.minor >= 1:
+        print("Grace-Blackwell (SM 12.x) does not support TMA instructions yet. Skipping demo.")
+        return
+    if props.major != 10 or props.minor != 0:
+        print(f"Unsupported architecture SM {props.major}.{props.minor} for Blackwell TMA demo. Skipping.")
+        return
+
     demonstrate_tma_features()
     
-    if torch.cuda.is_available():
-        print("\nRunning performance benchmarks...")
-        results = benchmark_tma_vs_standard(
-            sizes=[2048, 4096, 8192],
-            num_iters=50,
-        )
-        print("\nBenchmarks complete!")
-    else:
-        print("\nCUDA not available - skipping benchmarks")
+    sizes = [2048, 4096, 8192]
+    iterations = 50
+    if quick_mode:
+        sizes = [1024, 2048]
+        iterations = 10
+    
+    print("\nRunning performance benchmarks...")
+    benchmark_tma_vs_standard(
+        sizes=sizes,
+        num_iters=iterations,
+    )
+    print("\nBenchmarks complete!")
     
     print("\n" + "="*70)
 

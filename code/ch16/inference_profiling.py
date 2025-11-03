@@ -1,4 +1,12 @@
-import arch_config  # noqa: F401 - Configure architecture optimizations
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    import arch_config  # noqa: F401 - Configure architecture optimizations
+except ImportError:
+    pass  # Graceful fallback if arch_config not available
+
 from arch_config import ArchitectureConfig
 import torch
 import os

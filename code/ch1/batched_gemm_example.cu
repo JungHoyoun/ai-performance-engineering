@@ -168,12 +168,20 @@ float benchmark_strided_batched_gemm(cublasHandle_t handle, int m, int n, int k,
     
     // Warmup
     const float alpha = 1.0f, beta = 0.0f;
-    CUBLAS_CHECK(cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N,
-                                           n, m, k, &alpha,
-                                           d_B, n, stride_B,
-                                           d_A, k, stride_A,
-                                           &beta, d_C, n, stride_C,
-                                           batch_count));
+    const cublasComputeType_t compute = CUBLAS_COMPUTE_32F_FAST_TF32;
+    const cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+    CUBLAS_CHECK(cublasGemmStridedBatchedEx(
+        handle,
+        CUBLAS_OP_N, CUBLAS_OP_N,
+        n, m, k,
+        &alpha,
+        d_B, CUDA_R_32F, n, static_cast<long long>(stride_B),
+        d_A, CUDA_R_32F, k, static_cast<long long>(stride_A),
+        &beta,
+        d_C, CUDA_R_32F, n, static_cast<long long>(stride_C),
+        batch_count,
+        compute,
+        algo));
     CUDA_CHECK(cudaDeviceSynchronize());
     
     // Benchmark
@@ -183,12 +191,18 @@ float benchmark_strided_batched_gemm(cublasHandle_t handle, int m, int n, int k,
     
     CUDA_CHECK(cudaEventRecord(start));
     for (int iter = 0; iter < 100; ++iter) {
-        CUBLAS_CHECK(cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N,
-                                               n, m, k, &alpha,
-                                               d_B, n, stride_B,
-                                               d_A, k, stride_A,
-                                               &beta, d_C, n, stride_C,
-                                               batch_count));
+        CUBLAS_CHECK(cublasGemmStridedBatchedEx(
+            handle,
+            CUBLAS_OP_N, CUBLAS_OP_N,
+            n, m, k,
+            &alpha,
+            d_B, CUDA_R_32F, n, static_cast<long long>(stride_B),
+            d_A, CUDA_R_32F, k, static_cast<long long>(stride_A),
+            &beta,
+            d_C, CUDA_R_32F, n, static_cast<long long>(stride_C),
+            batch_count,
+            compute,
+            algo));
     }
     CUDA_CHECK(cudaEventRecord(stop));
     CUDA_CHECK(cudaEventSynchronize(stop));
@@ -209,6 +223,7 @@ float benchmark_strided_batched_gemm(cublasHandle_t handle, int m, int n, int k,
 int main() {
     cublasHandle_t handle;
     CUBLAS_CHECK(cublasCreate(&handle));
+    CUBLAS_CHECK(cublasSetMathMode(handle, CUBLAS_TF32_TENSOR_OP_MATH));
     
     // Simulate the workload from profiling: 40 GEMMs with typical NN dimensions
     // From PyTorch profiling: aten::addmm with 100ms total, 40 calls
@@ -256,4 +271,3 @@ int main() {
     CUBLAS_CHECK(cublasDestroy(handle));
     return 0;
 }
-

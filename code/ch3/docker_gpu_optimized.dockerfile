@@ -1,5 +1,5 @@
 # Multi-stage Docker build for optimized GPU performance
-FROM nvcr.io/nvidia/pytorch:25.05-py3 AS base
+FROM nvcr.io/nvidia/pytorch:25.09-py3 AS base
 
 # Install additional dependencies for performance optimization
 RUN apt-get update && apt-get install -y \
@@ -17,7 +17,8 @@ ENV TCMALLOC_MAX_TOTAL_THREAD_CACHE_BYTES=536870912
 ENV TCMALLOC_RELEASE_RATE=16
 
 # Set CUDA environment variables for PyTorch 2.9 (cu130)
-ENV PYTORCH_ALLOC_CONF=max_split_size_mb:512
+ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+ENV TORCH_CUDA_ARCH_LIST="10.0+PTX"
 ENV CUDA_DEVICE_ORDER=PCI_BUS_ID
 
 # Copy application code

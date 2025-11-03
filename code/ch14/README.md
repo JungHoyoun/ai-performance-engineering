@@ -18,7 +18,7 @@ After completing this chapter, you can:
 ## Prerequisites
 
 **Previous chapters**:
-- [Chapter 9: Kernel Fusion](../ch9/README.md) - fusion concepts
+- [Chapter 9: Kernel Efficiency & Arithmetic Intensity](../ch9/README.md) - roofline + fusion concepts
 - [Chapter 13: PyTorch Profiling](../ch13/README.md) - identifying bottlenecks
 
 **Required**: PyTorch 2.0+, Python 3.8+

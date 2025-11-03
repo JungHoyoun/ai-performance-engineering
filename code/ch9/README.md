@@ -799,7 +799,7 @@ cd ../ch1 && ./arithmetic_intensity_demo_sm100
 **Master tensor cores** → [Chapter 10: Tensor Cores and Pipelines](../ch10/README.md)
 
 Learn about:
-- WGMMA (Warp-Group Matrix Multiply-Accumulate)
+- `tcgen05.mma` (Blackwell 5th-gen Tensor Cores)
 - TMA (Tensor Memory Accelerator) for async loads
 - Double-buffered pipelines for 2x throughput
 - Achieving peak AI at ridge point with Tensor Cores

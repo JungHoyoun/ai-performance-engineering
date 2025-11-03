@@ -1,97 +1,67 @@
-import arch_config  # noqa: F401 - Configure Blackwell optimizations
-# after_reinit_comm.py
+"""Preferred pattern: initialize the NCCL communicator once and reuse it."""
+
+from __future__ import annotations
+
+import os
+import time
+
 import torch
 import torch.distributed as dist
-import torch.multiprocessing as mp
-import time
-import os
 
-def run(rank, world_size):
-    # Check if we have enough GPUs for distributed training
-    if torch.cuda.device_count() < world_size:
-        print(f"Warning: Only {torch.cuda.device_count()} GPU(s) available, but {world_size} requested.", flush=True)
-        print("Falling back to single-GPU simulation.", flush=True)
-        # Single GPU simulation
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        
-        # Simulate one-time initialization
-        start_init = time.time()
-        # Simulate initialization work
-        time.sleep(0.001)  # Simulate initialization time
-        init_time = time.time() - start_init
-        print(f"One-time initialization took {init_time*1000:.2f} ms", flush=True)
-        
-        # Now run iterations with the same "communicator"
-        for i in range(5):
-            start_iter = time.time()
-            # Simulate some work
-            tensor = torch.ones(1, device=device)
-            _ = tensor * 2  # Simulate operation
-            iter_time = time.time() - start_iter
-            print(f"Iter {i} done (simulation took {iter_time*1000:.2f} ms)", flush=True)
-        return
-    
-    # Pin GPU
-    torch.cuda.set_device(rank)
-    
-    # Initialize NCCL communicator once
-    start_init = time.time()
-    try:
-        dist.init_process_group(
-            backend="nccl",
-            init_method="tcp://127.0.0.1:45678",
-            world_size=world_size,
-            rank=rank
-        )
-        init_time = time.time() - start_init
-        
+try:
+    import arch_config  # noqa: F401
+except ImportError:
+    pass
+try:
+    from distributed_helper import setup_single_gpu_env
+except ImportError:
+    def setup_single_gpu_env():
+        if "RANK" not in os.environ:
+            os.environ.setdefault("RANK", "0")
+            os.environ.setdefault("WORLD_SIZE", "1")
+            os.environ.setdefault("MASTER_ADDR", "localhost")
+            os.environ.setdefault("MASTER_PORT", "29500")
+            os.environ.setdefault("LOCAL_RANK", "0")
+
+
+def init_distributed() -> tuple[int, int, torch.device]:
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA device required for NCCL demo.")
+
+    if not dist.is_initialized():
+        setup_single_gpu_env()  # Auto-setup for single-GPU mode
+    dist.init_process_group("nccl", init_method="env://")
+
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    local_rank = int(os.environ.get("LOCAL_RANK", rank))
+
+    torch.cuda.set_device(local_rank)
+    device = torch.device(f"cuda:{local_rank}")
+    return rank, world_size, device
+
+
+def main() -> None:
+    rank, world_size, device = init_distributed()
+
+    t0 = time.time()
+    dist.barrier()
+    init_elapsed = time.time() - t0
+
+    if rank == 0:
+        print(f"One-time communicator initialization + barrier: {init_elapsed*1000:.2f} ms", flush=True)
+
+    for iteration in range(5):
+        start_iter = time.time()
+        tensor = torch.ones(1, device=device)
+        dist.all_reduce(tensor)
+        iter_elapsed = time.time() - start_iter
+
         if rank == 0:
-            print(f"One-time initialization took {init_time*1000:.2f} ms", flush=True)
-        
-        # Now run iterations with the same communicator
-        for i in range(5):
-            start_iter = time.time()
-            
-            # do a tiny all-reduce to simulate some work
-            tensor = torch.ones(1).cuda(rank)
-            dist.all_reduce(tensor)
-            
-            iter_time = time.time() - start_iter
-            
-            if rank == 0:
-                print(f"Iter {i} done (all-reduce took {iter_time*1000:.2f} ms)", flush=True)
-        
-        # Clean up once at the end
-        dist.destroy_process_group()
-    except Exception as e:
-        print(f"Failed to initialize distributed training: {e}", flush=True)
-        print("Falling back to single-GPU simulation.", flush=True)
-        # Single GPU simulation
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        
-        # Simulate one-time initialization
-        start_init = time.time()
-        time.sleep(0.001)  # Simulate initialization time
-        init_time = time.time() - start_init
-        print(f"One-time initialization took {init_time*1000:.2f} ms", flush=True)
-        
-        # Now run iterations with the same "communicator"
-        for i in range(5):
-            start_iter = time.time()
-            # Simulate some work
-            tensor = torch.ones(1, device=device)
-            _ = tensor * 2  # Simulate operation
-            iter_time = time.time() - start_iter
-            print(f"Iter {i} done (simulation took {iter_time*1000:.2f} ms)", flush=True)
+            print(f"[Iter {iteration}] all-reduce took {iter_elapsed*1000:.2f} ms", flush=True)
 
-def main():
-    world_size = min(2, torch.cuda.device_count())
-    if world_size == 1:
-        print("Only 1 GPU available, running single-GPU simulation.", flush=True)
-        run(0, 1)
-    else:
-        print(f"Running distributed training with {world_size} GPUs.", flush=True)
-        mp.spawn(run, args=(world_size,), nprocs=world_size)
+    dist.destroy_process_group()
+
 
 if __name__ == "__main__":
     main()

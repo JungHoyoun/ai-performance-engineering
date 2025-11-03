@@ -1,5 +1,5 @@
 """
-Load testing harness for the 8x B200 inference server.
+Load testing harness for the 8x B200/B300 inference server.
 
 Run with torchrun:
     torchrun --nproc_per_node=8 ch16/inference_server_load_test.py \
@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import time
 from dataclasses import asdict, dataclass
@@ -32,6 +31,9 @@ from ch16.inference_serving_8xb200 import (
     InferenceServer8GPU,
     RequestState,
 )
+
+QUICK_MODE = os.getenv("BENCHMARK_QUICK", "0") not in ("0", "false", "False", "")
+COMPILE_MODES = ("default", "max-autotune", "reduce-overhead")
 
 
 @dataclass
@@ -74,8 +76,6 @@ def run_load_test(
 ) -> Dict:
     """Main load execution loop (identical across all ranks)."""
     rank = dist.get_rank() if dist.is_initialized() else 0
-    start_time = time.time()
-    next_tick = start_time
     generated_counter = 0
 
     completions: List[CompletionRecord] = []
@@ -98,6 +98,80 @@ def run_load_test(
 
     # Precompute world size to distribute IDs
     world_size = dist.get_world_size() if dist.is_initialized() else 1
+
+    def _run_warmup_phase() -> None:
+        if QUICK_MODE:
+            return
+        warmup_new_tokens = max(1, min(4, max_new_tokens))
+        warmup_prompt_len = max(1, min(256, max_prompt_len))
+        if warmup_prompt_len <= 0:
+            return
+
+        if rank == 0:
+            timestamp = time.time()
+            warmup_specs: List[Dict[str, object]] = []
+            for idx in range(min(4, server.max_batch_size)):
+                warmup_specs.append(
+                    {
+                        "request_id": f"warmup_{idx}",
+                        "prompt_len": warmup_prompt_len,
+                        "priority": idx % 4,
+                        "arrived_at": timestamp,
+                    }
+                )
+        else:
+            warmup_specs = None  # type: ignore
+
+        warmup_specs = _broadcast_requests(warmup_specs)  # type: ignore
+
+        for spec in warmup_specs:
+            request = InferenceRequest(
+                request_id=str(spec["request_id"]),
+                prompt_tokens=list(range(int(spec["prompt_len"]))),
+                max_new_tokens=warmup_new_tokens,
+                temperature=float(temperature),
+                top_k=50,
+                priority=int(spec["priority"]),
+                arrived_at=float(spec["arrived_at"]),
+            )
+            server.scheduler.add_request(request)
+
+        step_budget = warmup_new_tokens + 2
+        for _ in range(step_budget):
+            batch = server.scheduler.get_next_batch(server.kv_cache)
+            if not batch:
+                break
+            server.generate_batch(batch, num_tokens=1)
+            server.scheduler.update_completions(
+                batch,
+                server.kv_cache,
+                server._on_request_complete,  # type: ignore[attr-defined]
+            )
+
+        drain_guard = 0
+        while server.scheduler.active_requests:
+            drain_guard += 1
+            if drain_guard > warmup_new_tokens * 4:
+                break
+            batch = server.scheduler.get_next_batch(server.kv_cache)
+            if not batch:
+                break
+            server.generate_batch(batch, num_tokens=1)
+            server.scheduler.update_completions(
+                batch,
+                server.kv_cache,
+                server._on_request_complete,  # type: ignore[attr-defined]
+            )
+
+        if dist.is_initialized():
+            dist.barrier()
+        server.scheduler.reset_metrics()
+        completions.clear()
+
+    _run_warmup_phase()
+
+    start_time = time.time()
+    next_tick = start_time
 
     while time.time() - start_time < duration:
         tick_start = time.time()
@@ -220,14 +294,37 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-batch-size", type=int, default=256, help="Maximum batch size for the server/model.")
     parser.add_argument("--max-seq-len", type=int, default=16384, help="Maximum sequence length for KV cache and requests.")
     parser.add_argument(
-        "--allow-smaller-world",
-        action="store_true",
-        help="Allow running with world size != 8 (useful for dry runs on limited hardware).",
+        "--require-world-size",
+        type=int,
+        default=None,
+        help="Optionally enforce an exact world size when validating deployments.",
     )
     parser.add_argument("--output-json", type=Path, help="Optional path to write aggregated results.")
     parser.add_argument("--disable-compile", action="store_true", help="Disable torch.compile on server submodules.")
     parser.add_argument("--disable-prefill-graph", action="store_true", help="Disable CUDA graph capture for prefill phase.")
-    return parser.parse_args()
+    parser.add_argument(
+        "--compile-mode",
+        choices=COMPILE_MODES,
+        default="default",
+        help="torch.compile mode for optimized submodules.",
+    )
+    args = parser.parse_args()
+
+    if QUICK_MODE:
+        # Keep the run lightweight so benchmarks can finish quickly.
+        args.duration = min(args.duration, 5.0)
+        args.target_qps = min(args.target_qps, 20.0)
+        args.tick_interval = max(args.tick_interval, 0.05)
+        args.prompt_len_min = max(8, min(args.prompt_len_min, 32))
+        args.prompt_len_max = max(args.prompt_len_min, min(args.prompt_len_max, 128))
+        args.max_new_tokens = min(args.max_new_tokens, 16)
+        args.num_layers = min(args.num_layers, 6)
+        args.d_model = min(args.d_model, 1024)
+        args.num_heads = min(args.num_heads, 16)
+        args.max_batch_size = min(args.max_batch_size, 32)
+        args.max_seq_len = min(args.max_seq_len, 2048)
+        os.environ.setdefault("INFERENCE_SERVER_QUICK_MODE", "1")
+    return args
 
 
 def main() -> None:
@@ -237,10 +334,16 @@ def main() -> None:
     rank = dist.get_rank()
     world_size = dist.get_world_size()
 
-    if world_size != 8 and not args.allow_smaller_world and rank == 0:
+    required_world = args.require_world_size
+    if required_world is not None and world_size != required_world and rank == 0:
         raise SystemExit(
-            f"This harness expects 8 ranks (found {world_size}). "
-            "Use --allow-smaller-world to bypass for dry runs."
+            f"World size mismatch: expected {required_world} ranks (found {world_size}). "
+            "Adjust --require-world-size or launch configuration."
+        )
+    if rank == 0 and required_world is None and world_size != 8:
+        print(
+            f"[info] Running benchmark with {world_size} rank(s). "
+            "Set --require-world-size to enforce a specific size if desired."
         )
 
     torch.manual_seed(args.seed + rank)
@@ -267,6 +370,7 @@ def main() -> None:
         max_batch_size=args.max_batch_size,
         max_seq_len=args.max_seq_len,
         enable_compile=not args.disable_compile,
+        compile_mode=args.compile_mode,
     )
 
     if args.disable_prefill_graph:

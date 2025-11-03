@@ -169,6 +169,38 @@ Speedup: 2.6x, CPU freed for other work!
 
 ---
 
+### 3. `gds_cufile_minimal.py` – Direct cuFile Read (CUDA 13)
+
+**Purpose**: Provide the smallest possible working cuFile example for systems with GPUDirect Storage enabled.
+
+**What it covers**:
+- Uses the CUDA Python bindings (`cuda-python>=13.0`) to call `driver_open`, `handle_register`, `buf_register`, and `read`.
+- Reads bytes straight into a CUDA tensor and prints throughput plus a byte preview.
+- Falls back from `O_DIRECT` automatically when the filesystem does not support it.
+
+**How to run**:
+```bash
+# Install dependencies (includes cuda-python and KvikIO bindings)
+pip install -r requirements.txt
+
+# Create a 4 MiB sample file and copy it to the GPU via cuFile
+python3 gds_cufile_minimal.py /tmp/gds-test.bin 4194304 --generate
+
+# Read without O_DIRECT (helpful for network or non-GDS filesystems)
+python3 gds_cufile_minimal.py /path/to/data.bin 1048576 --no-odirect
+```
+
+**Expected output**:
+```
+Read 4194304 bytes via cuFile in 3.84 ms (1.09 GB/s).
+Opened with O_DIRECT: True
+Buffer preview: 1f 8b 08 d5 ...
+```
+
+**Tip**: Run this example after `gdscheck -p` to verify your cuFile stack before launching larger end-to-end pipelines.
+
+---
+
 ## IO Bottleneck Analysis
 
 ### Identifying IO Bottlenecks
@@ -441,4 +473,3 @@ Learn about:
 **Chapter Status**: ✅ Complete  
 **Last Updated**: November 3, 2025  
 **Tested On**: 8x NVIDIA B200 GPUs, NVMe Gen4 SSD, PyTorch 2.9
-

@@ -24,6 +24,13 @@ export TCMALLOC_RELEASE_RATE=16
 # Set unlimited locked memory (for pinned memory)
 ulimit -l unlimited
 
+# Enable GPUDirect RDMA and GPUDirect Storage paths
+sudo modprobe nvidia-peermem || true
+sudo modprobe nvidia-fs || true
+export CUFILE_ENV_PATH_JSON=${CUFILE_ENV_PATH_JSON:-/etc/cufile.json}
+# Validate GDS bandwidth (uncomment to run)
+# gdsio -D 1M -s 16G -w /path/to/nvme
+
 # Example NUMA binding command
 # numactl --cpunodebind=1 --membind=1 python train.py --gpu 5
 

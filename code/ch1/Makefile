@@ -3,8 +3,8 @@
 
 include ../common/cuda_arch.mk
 
-NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS)
-NVCC_LIBS = -lcublas
+NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) --use_fast_math -lineinfo
+NVCC_LIBS = -lcublas -lcublasLt
 SUFFIX = $(TARGET_SUFFIX)
 
 TARGETS = batched_gemm_example$(SUFFIX) arithmetic_intensity_demo$(SUFFIX)

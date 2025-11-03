@@ -192,6 +192,7 @@ void benchmark_coherent_access(size_t size_mb) {
     cpuLoc.id = 0;
     CUDA_CHECK(cudaMemAdvise(data, size, cudaMemAdviseSetPreferredLocation, gpuLoc));
     CUDA_CHECK(cudaMemAdvise(data, size, cudaMemAdviseSetAccessedBy, cpuLoc));
+    CUDA_CHECK(cudaMemAdvise(data, size, cudaMemAdviseSetReadMostly, gpuLoc));
     
     // Initialize on CPU
     for (size_t i = 0; i < n_elements; i++) {
@@ -366,6 +367,15 @@ int main() {
     // Detect system
     SystemConfig config = detect_grace_blackwell();
     
+    // Reserve a portion of L2 for persisting lines (tune per workload; helps reuse-heavy kernels).
+    const size_t persist_bytes = 64ull * 1024ull * 1024ull;  // 64 MiB
+    cudaError_t limit_status = cudaDeviceSetLimit(cudaLimitPersistingL2CacheSize, persist_bytes);
+    if (limit_status == cudaErrorUnsupportedLimit) {
+        cudaGetLastError();  // Clear sticky error on older GPUs.
+    } else {
+        CUDA_CHECK(limit_status);
+    }
+    
     if (!config.has_unified_memory) {
         printf("ERROR: Unified memory not supported on this system\n");
         return 1;
@@ -408,4 +418,3 @@ int main() {
     
     return 0;
 }
-
