@@ -320,7 +320,7 @@ Recent sessions:
 
 ### Monthly Meetup Summaries
 
-- **September 15, 2025** – [YouTube](https://www.youtube.com/watch?v=eLnHXL1xXfM): Dynamic Adaptive RL inference kernel tuning deep dive; companion slides in `resources/Dynamic_Adaptive_RL_Inference_CUDA_Kernel_Tuning.pdf`.
+- **September 15, 2025** – [YouTube](https://www.youtube.com/watch?v=eLnHXL1xXfM): [Dynamic Adaptive RL inference kernel tuning deep dive](resources/High_Performance_Agentic_AI_Inference_Systems.pdf).
 - **August 18, 2025** – [YouTube](https://www.youtube.com/watch?v=SBPlOUww57I): Multi-GPU orchestration strategies and Nsight profiling case studies.
 - **July 21, 2025** – [YouTube](https://youtu.be/jaiMotxv8ck): FlashMLA, ThunderMLA, and FlexDecoding kernel walkthroughs with live Nsight Compute demos.
 - **June 16, 2025** – Slides: [High Performance Agentic AI Inference Systems](resources/High_Performance_Agentic_AI_Inference_Systems.pdf) covering disaggregated inference routing.
