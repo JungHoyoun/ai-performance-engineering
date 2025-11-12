@@ -320,6 +320,22 @@ else
     echo "Python 3.11 is already the default"
 fi
 
+# Ensure `python` points to python3.11 for convenience
+if ! command -v python >/dev/null 2>&1; then
+    echo "Creating python -> python3.11 alternative..."
+    update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
+    update-alternatives --set python /usr/bin/python3.11
+else
+    PYTHON_VERSION_OUTPUT="$(python --version 2>/dev/null || true)"
+    if [[ "$PYTHON_VERSION_OUTPUT" != "Python 3.11."* ]]; then
+        echo "Updating python alternative to point at python3.11..."
+        update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
+        update-alternatives --set python /usr/bin/python3.11
+    else
+        echo "python points to $(python --version) (no change needed)"
+    fi
+fi
+
 # Ensure pip is installed for Python 3.11
 if ! python3.11 -m pip --version &> /dev/null; then
     echo "Installing pip for Python 3.11..."
@@ -822,19 +838,6 @@ if dpkg -s python3-optree >/dev/null 2>&1; then
 fi
 # Clean up other conflicting Lambda Labs packages
 apt autoremove -y 2>/dev/null || true
-
-# Fix hardware info script compatibility
-echo ""
-echo "Fixing hardware info script compatibility..."
-if [ -f "$PROJECT_ROOT/ch2/hardware_info.py" ]; then
-    # Backup original file
-    cp "$PROJECT_ROOT/ch2/hardware_info.py" "$PROJECT_ROOT/ch2/hardware_info.py.backup"
-    
-    # Fix the compatibility issue
-    sed -i 's/"max_threads_per_block": device_props.max_threads_per_block,/"max_threads_per_block": getattr(device_props, '\''max_threads_per_block'\'', 1024),/' "$PROJECT_ROOT/ch2/hardware_info.py"
-    
-    echo "Fixed hardware info script compatibility"
-fi
 
 # Verify installation
 echo ""

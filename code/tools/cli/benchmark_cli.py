@@ -365,7 +365,7 @@ if TYPER_AVAILABLE:
     def run(
         targets: Optional[List[str]] = Option(None, "--targets", "-t", help="Chapter(s) or chapter:example pairs to run. Repeat the flag for multiple targets. Omit or use 'all' for every chapter."),
         output_format: str = Option("both", "--format", "-f", help="Output format: 'json', 'markdown', or 'both'"),
-        enable_profiling: bool = Option(False, "--profile/--no-profile", help="Enable profiling (nsys/ncu/PyTorch). Disabled by default to avoid long GPU stalls."),
+        enable_profiling: bool = Option(False, "--profile", help="Enable profiling (nsys/ncu/PyTorch). Disabled by default to avoid long GPU stalls.", is_flag=True),
         suite_timeout: Optional[int] = Option(None, "--suite-timeout", help="Suite timeout in seconds (default: 14400 = 4 hours, 0 = disabled)"),
         timeout_multiplier: float = Option(1.0, "--timeout-multiplier", help="Multiply all benchmark timeouts by this factor (e.g., 2.0 = double all timeouts)"),
         reproducible: bool = Option(False, "--reproducible", help="Enable reproducible mode: set all seeds to 42 and enable deterministic algorithms (may impact performance)"),
