@@ -24,6 +24,7 @@ from common.python.benchmark_harness import (
     BenchmarkConfig,
 )
 from ch6.cuda_extensions import load_coalescing_extension
+from ch16.coalescing_utils import resolve_matrix_shape
 
 
 def resolve_device() -> torch.device:
@@ -44,18 +45,22 @@ class BaselineCoalescingBenchmark(Benchmark):
         self.device = resolve_device()
         self.input = None
         self.output = None
-        self.N = 16_000_000
-        self.stride = 32  # Large stride prevents coalescing
+        self.rows = 4096
+        self.cols = 4096
+        self.N = self.rows * self.cols
         self._extension = None
 
     def setup(self) -> None:
         """Setup: Initialize tensors and load CUDA extension."""
         torch.manual_seed(42)
         self._extension = load_coalescing_extension()
+        rows, cols = resolve_matrix_shape(self.rows, self.cols, self.N)
+        self.rows, self.cols = rows, cols
+        self.N = rows * cols
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
         # Warm up once to keep compilation time out of the measurement loop.
-        self._extension.uncoalesced_copy(self.output, self.input, self.stride)
+        self._extension.uncoalesced_copy(self.output, self.input, rows, cols)
         torch.cuda.synchronize()
 
     def benchmark_fn(self) -> None:
@@ -68,8 +73,9 @@ class BaselineCoalescingBenchmark(Benchmark):
         if self._extension is None or self.input is None or self.output is None:
             raise RuntimeError("Extension/tensors not initialized")
 
+        rows, cols = resolve_matrix_shape(self.rows, self.cols, self.N)
         with nvtx_range("baseline_coalescing_uncoalesced", enable=enable_nvtx):
-            self._extension.uncoalesced_copy(self.output, self.input, self.stride)
+            self._extension.uncoalesced_copy(self.output, self.input, rows, cols)
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -89,6 +95,12 @@ class BaselineCoalescingBenchmark(Benchmark):
         """Validate benchmark result."""
         if self.input is None or self.output is None:
             return "Tensors not initialized"
+        rows, cols = resolve_matrix_shape(self.rows, self.cols, self.N)
+        output_matrix = self.output.view(cols, rows)
+        reference = self.input.view(rows, cols).transpose(0, 1).contiguous()
+        max_err = (output_matrix - reference).abs().max().item()
+        if max_err > 1e-4:
+            return f"Transpose mismatch: max error {max_err}"
         return None
 
 def get_benchmark() -> Benchmark:

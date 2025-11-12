@@ -105,8 +105,8 @@ def test_mixed_precision(torch):
             print("WARNING: BF16 not supported on this GPU")
         
         # Test AMP
-        from torch.cuda.amp import autocast
-        with autocast():
+        from torch.amp import autocast
+        with autocast("cuda"):
             x = torch.randn(100, 100, device='cuda')
             y = torch.randn(100, 100, device='cuda')
             z = torch.matmul(x, y)
@@ -226,4 +226,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-

@@ -43,7 +43,11 @@ class BaselineQuantizationBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        self.input = None
+        self.host_batches: list[torch.Tensor] = []
+        self.batch_size = 4
+        self.sequence_length = 512
+        self.hidden_dim = 256
+        self.device = resolve_device()
     
     def setup(self) -> None:
         """Setup: Initialize model without quantization."""
@@ -52,15 +56,24 @@ class BaselineQuantizationBenchmark(Benchmark):
         # Quantization reduces precision (e.g., INT8, FP8) for performance/memory
         # This baseline does not use quantization
         
-        hidden_dim = 256
+        hidden_dim = self.hidden_dim
         self.model = nn.MultiheadAttention(
             embed_dim=hidden_dim,
             num_heads=8,
             batch_first=True
-        ).to(self.device).eval()
+        ).to(self.device).float().eval()
         
-        # Full precision (no quantization)
-        self.input = torch.randn(4, 128, hidden_dim, device=self.device, dtype=torch.float32)
+        num_micro_batches = 6
+        self.host_batches = [
+            torch.randn(
+                self.batch_size,
+                self.sequence_length,
+                hidden_dim,
+                device="cpu",
+                dtype=torch.float32,
+            ).pin_memory()
+            for _ in range(num_micro_batches)
+        ]
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -76,20 +89,16 @@ class BaselineQuantizationBenchmark(Benchmark):
 
         with nvtx_range("baseline_quantization", enable=enable_nvtx):
             with torch.no_grad():
-                # Baseline: Full precision (no quantization)
-                # Uses FP32 precision without quantization
-                # Quantization would reduce precision for performance/memory
-                output, _ = self.model(self.input, self.input, self.input)
-                
-                # Baseline: No quantization benefits
-                # Full precision (higher memory/compute cost)
-                _ = output.sum()
-
+                for host_batch in self.host_batches:
+                    device_batch = host_batch.to(self.device, non_blocking=False)
+                    output, _ = self.model(device_batch, device_batch, device_batch)
+                    _ = output.sum()
+    
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.model = None
-        self.input = None
+        self.host_batches = []
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -103,8 +112,8 @@ class BaselineQuantizationBenchmark(Benchmark):
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+        if not self.host_batches:
+            return "Host batches not initialized"
         return None
 
 

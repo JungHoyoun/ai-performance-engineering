@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 
 from common.python.benchmark_harness import Benchmark, BenchmarkConfig
-from ch18.workload_config import WORKLOAD, is_smoke_test
+from ch18.workload_config import WORKLOAD
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -29,15 +29,14 @@ class BaselineDisaggregatedBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.workload = WORKLOAD
-        self.smoke_test = is_smoke_test()
 
         self.hidden_dim = self.workload.attention_hidden_dim
         self.num_heads = self.workload.attention_num_heads
         self.batch_size = self.workload.attention_batch_size
-        self.prefill_seq = self.workload.seq_len(self.smoke_test)
-        self.decode_seq = self.workload.decode_len(self.smoke_test)
-        self.prefill_segments = self.workload.micro_batches_for_mode(self.smoke_test)
-        self.decode_steps = self.workload.micro_batches_for_mode(self.smoke_test) * 4
+        self.prefill_seq = self.workload.attention_seq_len
+        self.decode_seq = self.workload.decode_seq_len
+        self.prefill_segments = self.workload.micro_batches
+        self.decode_steps = self.workload.micro_batches * 4
 
         self.decoder: Optional[nn.TransformerDecoder] = None
         self.prefill_batches: list[torch.Tensor] = []

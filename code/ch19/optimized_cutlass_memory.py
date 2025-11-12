@@ -47,7 +47,6 @@ class OptimizedCutlassMemoryBenchmark(Benchmark):
         self.static_b = None
         self.static_out = None
         self.graph = None
-        self.capture_stream = None
         self.M, self.N, self.K = 1024, 1024, 1024
     
     def setup(self) -> None:
@@ -64,24 +63,26 @@ class OptimizedCutlassMemoryBenchmark(Benchmark):
         self.B = torch.randn(self.K, self.N, device=self.device, dtype=torch.float16)
         self.C = torch.empty(self.M, self.N, device=self.device, dtype=torch.float16)
 
-        if hasattr(torch.cuda, "CUDAGraph") and hasattr(torch.cuda, "graph"):
-            try:
-                self.graph = torch.cuda.CUDAGraph()
-                self.static_a = self.A.clone()
-                self.static_b = self.B.clone()
-                self.static_out = torch.empty_like(self.C)
-                self.capture_stream = torch.cuda.Stream()
-                torch.cuda.synchronize()
-                with torch.cuda.graph(self.graph, stream=self.capture_stream):
-                    self.static_out.copy_(torch.matmul(self.static_a, self.static_b))
-            except RuntimeError:
-                self.graph = None
-                self.static_a = None
-                self.static_b = None
-                self.static_out = None
-                self.capture_stream = None
-        else:
-            self.graph = None
+        if not (hasattr(torch.cuda, "CUDAGraph") and hasattr(torch.cuda, "graph")):
+            raise RuntimeError(
+                "SKIPPED: optimized_cutlass_memory requires CUDA graph capture "
+                "(CUDA 11.7+) to demonstrate CUTLASS-style persistent GEMMs."
+            )
+        try:
+            self.graph = torch.cuda.CUDAGraph()
+            self.static_a = self.A.clone()
+            self.static_b = self.B.clone()
+            self.static_out = torch.empty_like(self.C)
+            # Warm up cuBLAS handles outside capture.
+            torch.matmul(self.A, self.B)
+            torch.cuda.synchronize()
+            with torch.cuda.graph(self.graph):
+                self.static_out.copy_(torch.matmul(self.static_a, self.static_b))
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "SKIPPED: optimized_cutlass_memory failed to capture CUDA graph "
+                f"needed for persistent GEMM: {exc}"
+            ) from exc
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -95,15 +96,15 @@ class OptimizedCutlassMemoryBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
         with nvtx_range("optimized_cutlass_memory", enable=enable_nvtx):
-            if self.graph is not None:
-                # Refresh dynamic inputs and replay captured CUTLASS GEMM
-                self.static_a.copy_(self.A)
-                self.static_b.copy_(self.B)
-                self.graph.replay()
-                self.C.copy_(self.static_out)
-            else:
-                with torch.cuda.amp.autocast(dtype=torch.float16):
-                    self.C = torch.matmul(self.A, self.B)
+            if self.graph is None:
+                raise RuntimeError(
+                    "SKIPPED: optimized_cutlass_memory requires a captured CUDA graph."
+                )
+            # Refresh dynamic inputs and replay captured CUTLASS GEMM
+            self.static_a.copy_(self.A)
+            self.static_b.copy_(self.B)
+            self.graph.replay()
+            self.C.copy_(self.static_out)
             torch.cuda.synchronize()
 
     
@@ -116,7 +117,6 @@ class OptimizedCutlassMemoryBenchmark(Benchmark):
         self.static_b = None
         self.static_out = None
         self.graph = None
-        self.capture_stream = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:

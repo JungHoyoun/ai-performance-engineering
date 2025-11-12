@@ -25,7 +25,7 @@ from common.python.benchmark_harness import (
     BenchmarkConfig,
 )
 from common.python.compile_utils import enable_tf32
-from ch10.workload_config import WORKLOAD, is_smoke_test
+from ch10.workload_config import WORKLOAD
 
 
 def resolve_device() -> torch.device:
@@ -49,9 +49,8 @@ class BaselineTritonBenchmark(Benchmark):
         self.residuals = None
         self.output = None
         self.workload = WORKLOAD
-        self.smoke_test = is_smoke_test()
-        self.batch = self.workload.triton_batch_for_mode(self.smoke_test)
-        self.micro_batches = self.workload.triton_micro_batches_for_mode(self.smoke_test)
+        self.batch = self.workload.triton_batch_size
+        self.micro_batches = self.workload.triton_micro_batches
         self.hidden_dim = self.workload.hidden_dim
         self.ffn_dim = self.workload.ffn_dim
         self._checksum = 0.0

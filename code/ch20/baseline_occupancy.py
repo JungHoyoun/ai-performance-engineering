@@ -45,6 +45,7 @@ class BaselineOccupancyBenchmark(Benchmark):
         self.device = resolve_device()
         self.data = None
         self.N = 1_000_000
+        self.repeats = 16
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
@@ -72,10 +73,12 @@ class BaselineOccupancyBenchmark(Benchmark):
             # Causes low occupancy: too few threads per SM
             chunk_size = 1000  # Small chunks cause low occupancy
             
-            for i in range(0, self.N, chunk_size):
-                chunk = self.data[i:i+chunk_size]
-                # Small kernel launch - low occupancy
-                _ = chunk * 2.0
+            for _ in range(self.repeats):
+                for i in range(0, self.N, chunk_size):
+                    chunk = self.data[i:i+chunk_size]
+                    # Small kernel launch - low occupancy
+                    _ = chunk * 2.0
+            torch.cuda.synchronize()
             
             # Baseline: Low occupancy issues
             # - Too few threads per SM

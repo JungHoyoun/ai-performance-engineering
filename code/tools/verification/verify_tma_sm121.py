@@ -30,6 +30,12 @@ import triton.language as tl
 from triton.runtime.errors import PTXASError
 from typing import Any, Dict, List, Tuple
 
+from common.python.hardware_capabilities import (
+    detect_capabilities,
+    ensure_tma_box_supported,
+    format_capability_report,
+)
+
 # Import architecture configuration
 try:
     from arch_config import ArchitectureConfig, configure_optimizations
@@ -67,28 +73,20 @@ def check_gpu_info() -> Dict[str, Any]:
         "multi_processor_count": props.multi_processor_count,
     }
     
-    print(f"GPU: {info['name']}")
-    print(f"Compute Capability: {info['compute_capability']}")
-    print(f"Total Memory: {info['total_memory']:.2f} GB")
-    print(f"SM Count: {info['multi_processor_count']}")
-    
-    # Check TMA support (SM 9.0+ for Hopper, SM 10.0+ for Blackwell, SM 12.1 for GB10)
-    if info['major'] >= 12 or (info['major'] == 12 and info['minor'] >= 1):
-        print(f"TMA Support: YES (Grace-Blackwell GB10)")
-        info['tma_supported'] = True
-        info['arch'] = 'grace_blackwell'
-    elif info['major'] >= 10:
-        print(f"TMA Support: YES (Blackwell)")
-        info['tma_supported'] = True
-        info['arch'] = 'blackwell'
-    elif info['major'] >= 9:
-        print(f"TMA Support: YES (Hopper)")
-        info['tma_supported'] = True
-        info['arch'] = 'hopper'
+    cap = detect_capabilities()
+    if cap:
+        print(format_capability_report(cap))
+        info["tma_supported"] = cap.tma_supported
+        info["tma_ready"] = cap.tma_ready
+        info["capabilities"] = cap
     else:
-        print(f"ERROR: TMA Support: NO (requires SM 9.0+, found {info['compute_capability']})")
-        info['tma_supported'] = False
-        info['arch'] = 'other'
+        print(f"GPU: {info['name']}")
+        print(f"Compute Capability: {info['compute_capability']}")
+        print(f"Total Memory: {info['total_memory']:.2f} GB")
+        print(f"SM Count: {info['multi_processor_count']}")
+        info["tma_supported"] = False
+        info["tma_ready"] = False
+        info["capabilities"] = None
     
     return info
 
@@ -152,7 +150,18 @@ def test_triton_tma_basic() -> str:
         
         # Test with small data
         N = 1024
-        BLOCK_SIZE = 256
+        cap = detect_capabilities()
+        BLOCK_SIZE = min(256, getattr(getattr(cap, "tma_limits", None), "max_1d_elements", 256) or 256)
+        try:
+            ensure_tma_box_supported(
+                (BLOCK_SIZE,),
+                capability=cap,
+                description="verify_tma_sm121 basic copy",
+            )
+        except RuntimeError as exc:
+            print("WARNING: Triton TMA basic copy: SKIPPED")
+            print(f"   Reason: {exc}")
+            return "skip"
         
         x = torch.randn(N, device='cuda', dtype=torch.float32)
         y = torch.zeros_like(x)
@@ -192,6 +201,24 @@ def test_triton_tma_gemm() -> str:
     
     try:
         # Conservative configuration to avoid Triton 3.5 compiler bug
+        cap = detect_capabilities()
+        BLOCK_M, BLOCK_N = 64, 64
+        BLOCK_K = 32
+        limits = getattr(cap, "tma_limits", None)
+        if limits:
+            if limits.max_2d_width:
+                BLOCK_M = min(BLOCK_M, limits.max_2d_width)
+            if limits.max_2d_height:
+                BLOCK_N = min(BLOCK_N, limits.max_2d_height)
+            if limits.max_1d_elements:
+                BLOCK_K = min(BLOCK_K, limits.max_1d_elements)
+        try:
+            ensure_tma_box_supported((BLOCK_M, BLOCK_K), capability=cap, description="verify_tma_sm121 GEMM A tile")
+            ensure_tma_box_supported((BLOCK_K, BLOCK_N), capability=cap, description="verify_tma_sm121 GEMM B tile")
+        except RuntimeError as exc:
+            print("WARNING: Triton TMA GEMM: SKIPPED")
+            print(f"   Reason: {exc}")
+            return "skip"
         @triton.jit
         def tma_gemm_kernel(
             A_ptr, B_ptr, C_ptr,
@@ -242,7 +269,7 @@ def test_triton_tma_gemm() -> str:
         
         # Test with small matrices
         M, N, K = 512, 512, 512
-        BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 32  # Conservative config
+        # Block sizes were clamped earlier based on hardware limits
         
         A = torch.randn(M, K, device='cuda', dtype=torch.float32)
         B = torch.randn(K, N, device='cuda', dtype=torch.float32)
@@ -481,6 +508,11 @@ def main():
     
     if not gpu_info.get('tma_supported'):
         print("\nERROR: GPU does not support TMA")
+        return 1
+    
+    if not gpu_info.get('tma_ready'):
+        print("\nERROR: TMA hardware present but compiler/toolchain support is disabled. "
+              "Upgrade to a CUDA release that enables tensormap instructions for this architecture.")
         return 1
     
     # Check software versions

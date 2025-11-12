@@ -43,6 +43,7 @@ class BaselineCutlassMemoryBenchmark(Benchmark):
         self.n = 1024
         self.k = 1024
         self.num_steps = max(8, WORKLOAD.performance_microbatches // 4)
+        self.dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
     def setup(self) -> None:
         """Setup: Initialize matrices."""
@@ -50,8 +51,8 @@ class BaselineCutlassMemoryBenchmark(Benchmark):
         self.A_batches = []
         self.B_batches = []
         for _ in range(self.num_steps):
-            self.A_batches.append(torch.randn(self.m, self.k, device=self.device, dtype=torch.float32))
-            self.B_batches.append(torch.randn(self.k, self.n, device=self.device, dtype=torch.float32))
+            self.A_batches.append(torch.randn(self.m, self.k, device=self.device, dtype=self.dtype))
+            self.B_batches.append(torch.randn(self.k, self.n, device=self.device, dtype=self.dtype))
         torch.cuda.synchronize()
 
     def benchmark_fn(self) -> None:

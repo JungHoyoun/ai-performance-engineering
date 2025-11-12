@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 
 from common.python.benchmark_harness import Benchmark, BenchmarkConfig
-from ch18.workload_config import WORKLOAD, is_smoke_test
+from ch18.workload_config import WORKLOAD
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -29,7 +29,6 @@ class OptimizedDistributedBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.workload = WORKLOAD
-        self.smoke_test = is_smoke_test()
 
         self.hidden_dim = self.workload.attention_hidden_dim
         self.global_batch = self.workload.distributed_global_batch
@@ -69,7 +68,7 @@ class OptimizedDistributedBenchmark(Benchmark):
         assert self.comm_stream is not None
 
         with nvtx_range("optimized_distributed", enable=enable_nvtx):
-            with torch.cuda.amp.autocast(dtype=torch.float16):
+            with torch.autocast("cuda", dtype=torch.float16):
                 outputs = self.model(self.inputs)
 
             shards = outputs.view(self.ranks, self.per_rank, -1)

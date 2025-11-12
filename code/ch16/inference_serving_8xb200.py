@@ -60,6 +60,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.python.symmetric_memory_patch import (
     ensure_symmetric_memory_api as _ensure_symmetric_memory_api,
 )
+from common.python.compile_utils import compile_callable, compile_model
 
 _ensure_symmetric_memory_api()
 
@@ -133,33 +134,21 @@ def _flex_attention_supported(
 def _call_flex_attention_scaled(query, key, value, scale):
     global _FLEX_ATTENTION_SCALED
     if _FLEX_ATTENTION_SCALED == "uninitialized":
-        _FLEX_ATTENTION_SCALED = None
-        if flex_attention is not None and hasattr(torch, "compile"):
-            def _flex_attention_scaled_impl(q, k, v, s):
-                return flex_attention(q, k, v, scale=s)
+        if flex_attention is None:
+            raise RuntimeError("SKIPPED: FlexAttention is unavailable on this runtime.")
 
-            try:
-                _FLEX_ATTENTION_SCALED = torch.compile(
-                    _flex_attention_scaled_impl,
-                    mode="reduce-overhead",
-                    fullgraph=True,
-                    dynamic=True,
-                )
-            except Exception:  # pragma: no cover - fallback to eager flex
-                _FLEX_ATTENTION_SCALED = flex_attention
-        elif flex_attention is not None:
-            _FLEX_ATTENTION_SCALED = flex_attention
+        def _flex_attention_scaled_impl(q, k, v, s):
+            return flex_attention(q, k, v, scale=s)
 
-        if _FLEX_ATTENTION_SCALED is flex_attention and hasattr(
-            flex_attention, "_FLEX_ATTENTION_DISABLE_COMPILE_DEBUG"
-        ):
-            flex_attention._FLEX_ATTENTION_DISABLE_COMPILE_DEBUG = True
+        _FLEX_ATTENTION_SCALED = compile_callable(
+            _flex_attention_scaled_impl,
+            mode="reduce-overhead",
+            fullgraph=True,
+            dynamic=True,
+        )
 
     if _FLEX_ATTENTION_SCALED is None:
         raise RuntimeError("FlexAttention unavailable")
-
-    if _FLEX_ATTENTION_SCALED is flex_attention:
-        return flex_attention(query, key, value, scale=scale)
 
     return _FLEX_ATTENTION_SCALED(query, key, value, scale)
 
@@ -1247,22 +1236,18 @@ class InferenceServer8GPU:
         self._prefill_value_buffer: Optional[torch.Tensor] = None
 
         # Compile stable submodules (MLPs and head) when torch.compile is available
-        if self._enable_compile and hasattr(torch, "compile"):
-            compiled_modules: List[Tuple[str, Any, nn.Module]] = []
-            try:
-                for layer in getattr(self.model, "layers", []):
-                    original_mlp = layer.mlp
-                    layer.mlp = torch.compile(original_mlp, dynamic=False, mode=self._compile_mode)
-                    compiled_modules.append(("mlp", layer, original_mlp))
-                original_head = self.model.lm_head
-                self.model.lm_head = torch.compile(original_head, dynamic=False, mode=self._compile_mode)
-                compiled_modules.append(("head", self.model, original_head))
-            except (AttributeError, RuntimeError, TypeError, ValueError):
-                for tag, obj, original in compiled_modules:
-                    if tag == "mlp":
-                        obj.mlp = original
-                    elif tag == "head":
-                        obj.lm_head = original
+        if self._enable_compile:
+            for layer in getattr(self.model, "layers", []):
+                layer.mlp = compile_model(
+                    layer.mlp,
+                    mode=self._compile_mode,
+                    dynamic=False,
+                )
+            self.model.lm_head = compile_model(
+                self.model.lm_head,
+                mode=self._compile_mode,
+                dynamic=False,
+            )
         self.model.eval()
         if self.device.type == "cuda":
             self._setup_prefill_graph()

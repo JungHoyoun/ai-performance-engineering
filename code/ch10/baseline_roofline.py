@@ -24,7 +24,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
-from ch10.workload_config import WORKLOAD, is_smoke_test
+from ch10.workload_config import WORKLOAD
 
 
 def resolve_device() -> torch.device:
@@ -46,11 +46,10 @@ class BaselineRooflineBenchmark(Benchmark):
         self.model = None
         self.inputs_host = None
         self.workload = WORKLOAD
-        self.smoke_test = is_smoke_test()
-        self.batch = self.workload.roofline_batch_for_mode(self.smoke_test)
-        self.micro_batches = self.workload.roofline_micro_batches_for_mode(self.smoke_test)
-        self.hidden_dim = self.workload.roofline_hidden_dim_for_mode(self.smoke_test)
-        self.ffn_dim = self.workload.roofline_ffn_dim_for_mode(self.smoke_test)
+        self.batch = self.workload.roofline_batch_size
+        self.micro_batches = self.workload.roofline_micro_batches
+        self.hidden_dim = self.workload.roofline_hidden_dim
+        self.ffn_dim = self.workload.roofline_ffn_dim
         self._checksum = 0.0
     
     def setup(self) -> None:

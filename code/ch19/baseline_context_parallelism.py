@@ -44,7 +44,8 @@ class BaselineContextParallelismBenchmark(Benchmark):
         self.device = resolve_device()
         self.model = None
         self.input_sequence = None
-        self.sequence_length = 4096  # Long sequence to demonstrate context parallelism benefit
+        self.sequence_length = 8192  # Longer sequence to demonstrate context parallelism benefit
+        self.repeats = 8
     
     def setup(self) -> None:
         """Setup: Initialize model and long input sequence."""
@@ -76,7 +77,11 @@ class BaselineContextParallelismBenchmark(Benchmark):
         # No context parallelism - all tokens processed on one device
         with nvtx_range("baseline_context_parallelism", enable=enable_nvtx):
             with torch.no_grad():
-                output = self.model(self.input_sequence)
+                for _ in range(self.repeats):
+                    activations = self.input_sequence
+                    for layer in self.model:
+                        activations = layer(activations)
+                        torch.cuda.synchronize()
         torch.cuda.synchronize()
     
     def teardown(self) -> None:
@@ -115,4 +120,3 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(result)
-

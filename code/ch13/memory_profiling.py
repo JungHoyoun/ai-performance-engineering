@@ -202,7 +202,7 @@ def demonstrate_memory_optimization():
             torch.cuda.reset_peak_memory_stats()
 
         optimizer.zero_grad()
-        autocast_ctx = torch.cuda.amp.autocast() if cuda_ok else nullcontext()
+        autocast_ctx = torch.autocast("cuda") if cuda_ok else nullcontext()
 
         with autocast_ctx:
             output = model(x)

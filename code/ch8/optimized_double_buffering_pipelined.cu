@@ -21,14 +21,14 @@ int main() {
     float* d_input = nullptr;
     float* d_output = nullptr;
     cudaMalloc(&d_input, elements * sizeof(float));
-    cudaMalloc(&d_output, (elements / kDoubleBufferTile) * sizeof(float));
+    cudaMalloc(&d_output, elements * sizeof(float));
     cudaMemcpy(d_input, host.data(), elements * sizeof(float), cudaMemcpyHostToDevice);
 
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
-    const size_t shared_bytes = kDoubleBufferBlock * 2 * sizeof(float);
+    const size_t shared_bytes = kDoubleBufferBlock * kValuesPerThread * kPipelineStages * sizeof(float);
 
     for (int i = 0; i < 5; ++i) {
         double_buffer_optimized_kernel<<<double_buffer_grid(elements), kDoubleBufferBlock, shared_bytes>>>(d_input, d_output, elements);

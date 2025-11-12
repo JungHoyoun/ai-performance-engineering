@@ -98,7 +98,7 @@ class OptimizedPipelineParallelismBenchmark(Benchmark):
         stage_devices = [next(stage.parameters()).device for stage in self.pipeline_stages]
 
         with nvtx_range("optimized_pipeline_parallelism", enable=enable_nvtx):
-            with torch.no_grad(), torch.cuda.amp.autocast(dtype=torch.bfloat16):
+            with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
                 for micro_idx in range(self.micro_batches + num_stages - 1):
                     for stage_idx, stage in enumerate(self.pipeline_stages):
                         chunk_idx = micro_idx - stage_idx

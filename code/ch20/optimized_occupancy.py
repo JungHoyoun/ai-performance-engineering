@@ -45,6 +45,7 @@ class OptimizedOccupancyBenchmark(Benchmark):
         self.device = resolve_device()
         self.data = None
         self.N = 1_000_000
+        self.repeats = 16
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
@@ -78,7 +79,9 @@ class OptimizedOccupancyBenchmark(Benchmark):
             
             # Single large kernel launch - high occupancy
             # Processes all data at once, maximizing parallelism
-            _ = self.data * 2.0
+            for _ in range(self.repeats):
+                _ = self.data * 2.0
+            torch.cuda.synchronize()
             
             # Optimization: High occupancy benefits
             # - Many threads per SM (high occupancy)

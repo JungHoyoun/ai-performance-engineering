@@ -43,7 +43,7 @@ from common.python.benchmark_harness import (
     BenchmarkHarness,
     BenchmarkMode,
 )
-from ch10.workload_config import WORKLOAD, is_smoke_test
+from ch10.workload_config import WORKLOAD
 
 
 def resolve_device() -> torch.device:
@@ -69,10 +69,9 @@ class OptimizedWarpSpecializationPipelineBenchmark(Benchmark):
         self.use_triton_warp_spec = TRITON_WARP_SPEC_AVAILABLE
         self.use_triton = TRITON_AVAILABLE
         self.workload = WORKLOAD
-        self.smoke_test = is_smoke_test()
-        self.micro_batches = self.workload.pipeline_micro_batches_for_mode(self.smoke_test)
-        self.chunk_tokens = self.workload.pipeline_chunk_tokens_for_mode(self.smoke_test)
-        self.hidden_dim = self.workload.pipeline_hidden_dim_for_mode(self.smoke_test)
+        self.micro_batches = self.workload.pipeline_micro_batches
+        self.chunk_tokens = self.workload.pipeline_chunk_tokens
+        self.hidden_dim = self.workload.pipeline_hidden_dim
         self._checksum = 0.0
         self.producer_stream = torch.cuda.Stream()
         self.compute_stream = torch.cuda.Stream()

@@ -19,10 +19,34 @@ _VERBOSE = os.environ.get("VERBOSE_EXPERIMENTAL_FEATURES", "0") == "1"
 _TRITON_ARCH_PATCHED = False
 
 
+def _canonicalize_triton_arch(arch: str) -> str:
+    token = arch.strip()
+    lowered = token.lower()
+    if not lowered.startswith("sm"):
+        return token
+    suffix = lowered[2:]
+    if suffix.startswith("_"):
+        suffix = suffix[1:]
+    if suffix.endswith("a"):
+        suffix = suffix[:-1]
+    if suffix == "121":
+        suffix = "120"
+    return f"sm_{suffix}"
+
+
 def _clamp_triton_codegen_arch() -> None:
     """Force Triton to target sm_120 on GB10 until CUDA 13.1 adds sm_121."""
-    if "TRITON_CODEGEN_ARCH" in os.environ:
-        return
+    env_arch = os.environ.get("TRITON_CODEGEN_ARCH")
+    if env_arch:
+        sanitized = _canonicalize_triton_arch(env_arch)
+        if sanitized != env_arch:
+            os.environ["TRITON_CODEGEN_ARCH"] = sanitized
+            _log(f"INFO: Triton codegen arch normalized from {env_arch} to {sanitized}")
+        if sanitized != "sm_120":
+            # Allow users to override manually if they really want something else.
+            return
+    else:
+        sanitized = None
     if not torch.cuda.is_available():
         return
     major, _ = torch.cuda.get_device_capability()

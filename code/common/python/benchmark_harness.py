@@ -123,6 +123,14 @@ except ImportError:
     import logging
     logger = logging.getLogger(__name__)
 
+from common.python.gpu_memory_logger import (
+    GpuMemoryLogger,
+    resolve_gpu_log_interval,
+    resolve_gpu_log_path,
+    should_enable_gpu_memory_logging,
+)
+from common.python.gpu_telemetry import query_gpu_telemetry
+
 
 class BenchmarkMode(Enum):
     """Benchmarking mode selection."""
@@ -198,6 +206,9 @@ class BenchmarkConfig:
     setup_timeout_seconds: Optional[int] = field(default_factory=lambda: _get_default_value("setup_timeout_seconds", 30))
     warmup_timeout_seconds: Optional[int] = field(default_factory=lambda: _get_default_value("warmup_timeout_seconds", None))
     measurement_timeout_seconds: int = field(default_factory=lambda: _get_default_value("measurement_timeout_seconds", 15))
+    enable_gpu_memory_logging: bool = field(default_factory=lambda: _get_default_value("enable_gpu_memory_logging", False))
+    gpu_memory_log_interval_seconds: float = field(default_factory=lambda: _get_default_value("gpu_memory_log_interval_seconds", 5.0))
+    gpu_memory_log_path: Optional[str] = field(default_factory=lambda: _get_default_value("gpu_memory_log_path", None))
     profiling_timeout_seconds: Optional[int] = field(default_factory=lambda: _get_default_value("profiling_timeout_seconds", None))
 
 
@@ -717,11 +728,30 @@ class BenchmarkHarness:
         if config.percentiles is None or not isinstance(config.percentiles, list):
             config.percentiles = [25, 50, 75, 99]
         
-        # Use subprocess isolation if enabled (default: True for production-grade harness)
-        if config.execution_mode == ExecutionMode.SUBPROCESS:
-            return self._benchmark_with_subprocess(benchmark, config)
-        else:
+        gpu_mem_logger: Optional[GpuMemoryLogger] = None
+        if should_enable_gpu_memory_logging(getattr(config, "enable_gpu_memory_logging", False)):
+            log_interval = resolve_gpu_log_interval(getattr(config, "gpu_memory_log_interval_seconds", 5.0))
+            log_path = resolve_gpu_log_path(getattr(config, "gpu_memory_log_path", None))
+            gpu_mem_logger = GpuMemoryLogger(self.device, interval=log_interval, log_path=log_path)
+            if gpu_mem_logger.start():
+                if LOGGER_AVAILABLE:
+                    logger.info(
+                        "GPU memory logging enabled: %s (interval=%.2fs)",
+                        log_path,
+                        log_interval,
+                    )
+            else:
+                gpu_mem_logger = None
+
+        try:
+            if config.execution_mode == ExecutionMode.SUBPROCESS:
+                return self._benchmark_with_subprocess(benchmark, config)
             return self._benchmark_with_threading(benchmark, config)
+        finally:
+            if gpu_mem_logger is not None:
+                log_file = gpu_mem_logger.stop()
+                if LOGGER_AVAILABLE:
+                    logger.info("GPU memory log saved to %s", log_file)
     
     def benchmark_with_manifest(
         self, 
@@ -2014,6 +2044,11 @@ class BenchmarkHarness:
             schemaVersion="1.0",
         )
         
+        device_index = None
+        if torch.cuda.is_available():
+            device_index = self.device.index if getattr(self.device, "index", None) is not None else torch.cuda.current_device()
+        gpu_metrics = query_gpu_telemetry(device_index=device_index)
+
         return PydanticBenchmarkResult(
             timing=timing,
             inference_timing=None,
@@ -2029,6 +2064,7 @@ class BenchmarkHarness:
             timeout_stage=None,
             timeout_duration_seconds=None,
             timeout_limit_seconds=None,
+            gpu_metrics=gpu_metrics,
             schemaVersion="1.0",
         )
 

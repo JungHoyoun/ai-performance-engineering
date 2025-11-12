@@ -12,6 +12,7 @@ import pytest
 import torch
 import torch._dynamo
 import torch._inductor.config as inductor_config
+from common.python.compile_utils import compile_callable
 
 if not torch.cuda.is_available():
     pytest.skip("CUDA device required for Triton TMA validation", allow_module_level=True)
@@ -37,34 +38,30 @@ print()
 print("Test 1: Simple matmul with torch.compile + Triton backend")
 print("-" * 80)
 
+
 def matmul(x, y):
     return torch.matmul(x, y)
 
-try:
-    # Compile with Triton backend
-    compiled_matmul = torch.compile(matmul, backend="inductor", mode="max-autotune")
-    
-    # Test
-    x = torch.randn(512, 512, device='cuda', dtype=torch.float16)
-    y = torch.randn(512, 512, device='cuda', dtype=torch.float16)
-    
-    # First run compiles
-    result = compiled_matmul(x, y)
-    torch.cuda.synchronize()
-    
-    # Check correctness
-    expected = torch.matmul(x, y)
-    if torch.allclose(result, expected, rtol=1e-3, atol=1e-3):
-        print("[OK] torch.compile with Triton backend WORKS!")
-        print(f"   Result shape: {result.shape}")
-    else:
-        max_diff = (result - expected).abs().max().item()
-        print(f"WARNING: Result mismatch: max diff = {max_diff}")
-        
-except Exception as e:
-    print(f"ERROR: FAILED: {e}")
-    import traceback
-    traceback.print_exc()
+
+# Compile with Triton backend
+compiled_matmul = compile_callable(matmul, backend="inductor", mode="max-autotune")
+
+# Test
+x = torch.randn(512, 512, device='cuda', dtype=torch.float16)
+y = torch.randn(512, 512, device='cuda', dtype=torch.float16)
+
+# First run compiles
+result = compiled_matmul(x, y)
+torch.cuda.synchronize()
+
+# Check correctness
+expected = torch.matmul(x, y)
+if torch.allclose(result, expected, rtol=1e-3, atol=1e-3):
+    print("[OK] torch.compile with Triton backend WORKS!")
+    print(f"   Result shape: {result.shape}")
+else:
+    max_diff = (result - expected).abs().max().item()
+    pytest.fail(f"Result mismatch: max diff = {max_diff}")
 
 print()
 

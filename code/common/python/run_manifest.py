@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, TypedDict
 
 import torch
+from common.python.gpu_telemetry import query_gpu_telemetry
 
 try:
     import triton
@@ -47,6 +48,12 @@ class GpuStateDict(TypedDict):
     memory_clock_mhz: Optional[int]
     persistence_mode: Optional[bool]
     power_limit_w: Optional[float]
+    power_draw_w: Optional[float]
+    temperature_gpu_c: Optional[float]
+    temperature_memory_c: Optional[float]
+    fan_speed_pct: Optional[float]
+    utilization_gpu_pct: Optional[float]
+    utilization_memory_pct: Optional[float]
 
 
 def get_git_info() -> GitStatusDict:
@@ -181,42 +188,34 @@ def get_gpu_state() -> GpuStateDict:
         "memory_clock_mhz": None,
         "persistence_mode": None,
         "power_limit_w": None,
+        "power_draw_w": None,
+        "temperature_gpu_c": None,
+        "temperature_memory_c": None,
+        "fan_speed_pct": None,
+        "utilization_gpu_pct": None,
+        "utilization_memory_pct": None,
     }
     
     try:
         if torch.cuda.is_available():
-            # Get GPU clock
-            result = subprocess.run(
-                ["nvidia-smi", "--query-gpu=clocks.current.graphics", "--format=csv,noheader"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode == 0:
-                clocks = result.stdout.strip().split("\n")
-                if clocks and clocks[0]:
-                    # Parse "1234 MHz" format
-                    clock_str = clocks[0].strip().replace(" MHz", "")
+            telemetry = query_gpu_telemetry()
+            if telemetry:
+                if telemetry.get("graphics_clock_mhz") is not None:
                     try:
-                        gpu_state["gpu_clock_mhz"] = int(clock_str)
-                    except ValueError:
+                        gpu_state["gpu_clock_mhz"] = int(telemetry["graphics_clock_mhz"])
+                    except (TypeError, ValueError):
                         pass
-            
-            # Get memory clock
-            result = subprocess.run(
-                ["nvidia-smi", "--query-gpu=clocks.current.memory", "--format=csv,noheader"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode == 0:
-                clocks = result.stdout.strip().split("\n")
-                if clocks and clocks[0]:
-                    clock_str = clocks[0].strip().replace(" MHz", "")
+                if telemetry.get("memory_clock_mhz") is not None:
                     try:
-                        gpu_state["memory_clock_mhz"] = int(clock_str)
-                    except ValueError:
+                        gpu_state["memory_clock_mhz"] = int(telemetry["memory_clock_mhz"])
+                    except (TypeError, ValueError):
                         pass
+                gpu_state["power_draw_w"] = telemetry.get("power_draw_w")
+                gpu_state["temperature_gpu_c"] = telemetry.get("temperature_gpu_c")
+                gpu_state["temperature_memory_c"] = telemetry.get("temperature_memory_c")
+                gpu_state["fan_speed_pct"] = telemetry.get("fan_speed_pct")
+                gpu_state["utilization_gpu_pct"] = telemetry.get("utilization_gpu_pct")
+                gpu_state["utilization_memory_pct"] = telemetry.get("utilization_memory_pct")
             
             # Get persistence mode
             result = subprocess.run(
@@ -297,6 +296,12 @@ class HardwareInfo(BaseModel):
     memory_clock_mhz: Optional[int] = Field(None, description="Memory clock frequency in MHz")
     persistence_mode: Optional[bool] = Field(None, description="GPU persistence mode enabled")
     power_limit_w: Optional[float] = Field(None, description="GPU power limit in watts")
+    power_draw_w: Optional[float] = Field(None, description="Current GPU power draw in watts")
+    temperature_gpu_c: Optional[float] = Field(None, description="GPU temperature in Celsius")
+    temperature_memory_c: Optional[float] = Field(None, description="HBM temperature in Celsius")
+    fan_speed_pct: Optional[float] = Field(None, description="GPU fan speed percentage")
+    utilization_gpu_pct: Optional[float] = Field(None, description="GPU SM utilization percentage")
+    utilization_memory_pct: Optional[float] = Field(None, description="GPU memory controller utilization percentage")
     
     schemaVersion: str = Field(SCHEMA_VERSION, description="Schema version for forward compatibility")
 
@@ -402,6 +407,12 @@ class RunManifest(BaseModel):
             memory_clock_mhz=gpu_state.get("memory_clock_mhz"),
             persistence_mode=gpu_state.get("persistence_mode"),
             power_limit_w=gpu_state.get("power_limit_w"),
+            power_draw_w=gpu_state.get("power_draw_w"),
+            temperature_gpu_c=gpu_state.get("temperature_gpu_c"),
+            temperature_memory_c=gpu_state.get("temperature_memory_c"),
+            fan_speed_pct=gpu_state.get("fan_speed_pct"),
+            utilization_gpu_pct=gpu_state.get("utilization_gpu_pct"),
+            utilization_memory_pct=gpu_state.get("utilization_memory_pct"),
             schemaVersion=SCHEMA_VERSION,
         )
         

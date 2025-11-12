@@ -31,113 +31,72 @@ import psutil
 import torch
 import torch.cuda.nvtx as nvtx
 
-BENCHMARK_QUICK = os.environ.get("BENCHMARK_QUICK", "0") == "1"
+from common.python.hardware_capabilities import (
+    detect_capabilities,
+    format_capability_report,
+)
 
 
 def get_architecture() -> str:
     """Detect and return the current GPU architecture."""
-    if not torch.cuda.is_available():
+    cap = detect_capabilities()
+    if cap is None:
         return "cpu"
-
-    device_props = torch.cuda.get_device_properties(0)
-    compute_capability = f"{device_props.major}.{device_props.minor}"
-
-    if compute_capability == "10.0":
-        return "blackwell"
-
-    if device_props.major == 12:
-        return "grace_blackwell"
-
-    return "other"
+    return cap.architecture
 
 
 def get_architecture_info() -> Dict[str, Any]:
     """Get detailed architecture information."""
-    arch = get_architecture()
-    if arch == "blackwell":
+    cap = detect_capabilities()
+    if cap is None:
         return {
-            "name": "Blackwell B200/B300",
-            "compute_capability": "10.0",
-            "sm_version": "sm_100",
-            "memory_bandwidth": "up to ~8 TB/s",
-            "tensor_cores": "5th Gen",
-            "features": ["HBM3e", "TMA", "NVLink-C2C"],
-        }
-    if arch == "grace_blackwell":
-        return {
-            "name": "Grace-Blackwell GB10",
-            "compute_capability": "12.x",
-            "sm_version": "sm_121",
+            "name": "CPU / Unknown",
+            "compute_capability": "N/A",
+            "sm_version": "N/A",
             "memory_bandwidth": "Unknown",
-            "tensor_cores": "Next Gen",
-            "features": ["Grace-Blackwell coherence fabric"],
+            "tensor_cores": "Unknown",
+            "features": [],
         }
-
     return {
-        "name": "Other",
-        "compute_capability": "Unknown",
-        "sm_version": "Unknown",
-        "memory_bandwidth": "Unknown",
-        "tensor_cores": "Unknown",
-        "features": [],
+        "name": cap.name,
+        "compute_capability": cap.compute_capability,
+        "sm_version": cap.sm_version,
+        "memory_bandwidth": f"{cap.memory_bandwidth_tbps} TB/s" if cap.memory_bandwidth_tbps else "Unknown",
+        "tensor_cores": cap.tensor_cores,
+        "features": cap.features,
     }
 
 
 def get_gpu_info() -> Dict[str, Any]:
     """Get comprehensive GPU information."""
-    if not torch.cuda.is_available():
+    cap = detect_capabilities()
+    if cap is None:
         return {"error": "CUDA not available"}
 
-    device_props = torch.cuda.get_device_properties(0)
-    compute_capability = f"{device_props.major}.{device_props.minor}"
-
-    major = device_props.major
-    architecture = "Unsupported"
-    memory_bandwidth_tbps = None
-    tensor_cores = "Unknown"
-    hbm3e_memory = False
-    tma_support = False
-    nvlink_c2c = False
-    max_unified_memory_tb = None
-    sm_version = "sm_unknown"
-
-    if major == 10:
-        architecture = "Blackwell B200/B300"
-        memory_bandwidth_tbps = 8.0
-        tensor_cores = "5th Generation"
-        hbm3e_memory = True
-        tma_support = True
-        nvlink_c2c = True
-        max_unified_memory_tb = 30
-        sm_version = "sm_100"
-    elif major == 12:
-        architecture = "Grace-Blackwell GB10"
-        tensor_cores = "Next Generation"
-        tma_support = True
-        nvlink_c2c = True
-        sm_version = "sm_121"
-
+    l2_bytes = (cap.l2_cache_kb or 0) * 1024
+    bandwidth_gbps = cap.memory_bandwidth_tbps * 1000 if cap.memory_bandwidth_tbps else None
     return {
-        "name": device_props.name,
-        "compute_capability": compute_capability,
-        "total_memory_gb": device_props.total_memory / (1024 ** 3),
-        "memory_bandwidth_gbps": (memory_bandwidth_tbps * 1000) if memory_bandwidth_tbps else None,
-        "max_threads_per_block": getattr(device_props, 'max_threads_per_block', 1024),
-        "max_threads_per_sm": device_props.max_threads_per_multi_processor,
-        "num_sms": device_props.multi_processor_count,
-        "warp_size": device_props.warp_size,
-        "max_shared_memory_per_block": device_props.shared_memory_per_block,
-        "max_shared_memory_per_sm": device_props.shared_memory_per_multiprocessor,
-        "l2_cache_size": device_props.L2_cache_size,
-        "architecture": architecture,
-        "sm_version": sm_version,
-        "hbm3e_memory": hbm3e_memory,
-        "memory_bandwidth_tbps": memory_bandwidth_tbps,
-        "tma_support": tma_support,
-        "nvlink_c2c": nvlink_c2c,
-        "tensor_cores": tensor_cores,
-        "unified_memory": True,
-        "max_unified_memory_tb": max_unified_memory_tb,
+        "name": cap.device_name,
+        "compute_capability": cap.compute_capability,
+        "total_memory_gb": cap.total_memory_gb,
+        "memory_bandwidth_gbps": bandwidth_gbps,
+        "max_threads_per_block": cap.max_threads_per_block,
+        "max_threads_per_sm": cap.max_threads_per_sm,
+        "num_sms": cap.num_sms,
+        "warp_size": cap.warp_size,
+        "max_shared_memory_per_block": cap.max_shared_mem_per_block,
+        "max_shared_memory_per_sm": cap.max_shared_mem_per_sm,
+        "l2_cache_size": l2_bytes,
+        "architecture": cap.name,
+        "sm_version": cap.sm_version,
+        "hbm3e_memory": "HBM3e" in cap.features,
+        "memory_bandwidth_tbps": cap.memory_bandwidth_tbps,
+        "tma_support": cap.tma_ready,
+        "nvlink_c2c": cap.nvlink_c2c,
+        "tensor_cores": cap.tensor_cores,
+        "unified_memory": cap.max_unified_memory_tb is not None,
+        "max_unified_memory_tb": cap.max_unified_memory_tb,
+        "raw": cap.to_dict(),
     }
 
 
@@ -187,43 +146,40 @@ def demonstrate_blackwell_features() -> None:
     """Demonstrate detected GPU architecture features."""
     print("\n=== Blackwell/Grace-Blackwell Features Demonstration ===\n")
 
-    if not torch.cuda.is_available():
+    cap = detect_capabilities()
+    if cap is None:
         print("CUDA not available, skipping Blackwell features")
         return
 
-    gpu_info = get_gpu_info()
-
-    architecture = gpu_info.get("architecture")
-    if architecture == "Blackwell B200/B300":
-        print(" This is a Blackwell B200/B300 GPU")
-        print(f" Compute Capability: {gpu_info['compute_capability']} (SM100)")
-        print(f" Memory: {gpu_info['total_memory_gb']:.1f} GB")
-        print(f" Memory Bandwidth: {gpu_info['memory_bandwidth_tbps']} TB/s")
-        print(" 5th Generation Tensor Cores")
+    if cap.architecture in {"blackwell", "blackwell_ultra"}:
+        print(f" This is a {cap.name} GPU")
+        print(f" Compute Capability: {cap.compute_capability} ({cap.sm_version})")
+        print(f" Memory: {cap.total_memory_gb:.1f} GB")
+        if cap.memory_bandwidth_tbps:
+            print(f" Memory Bandwidth: {cap.memory_bandwidth_tbps:.2f} TB/s")
+        print(f" Tensor Cores: {cap.tensor_cores}")
         print(" TMA (Tensor Memory Accelerator)")
-        print(" NVLink-C2C (Grace CPU ↔ Blackwell GPU coherent link)")
-        print(" Unified Memory Architecture")
-        print(f" Max Unified Memory: {gpu_info['max_unified_memory_tb']} TB")
-        print(" Grace LPDDR5X bandwidth: single-Grace provides up to ~500 GB/s")
-        print(" Dual-Grace \"Grace CPU Superchip\" reaches ~1 TB/s (not part of GB200)")
-    elif architecture == "Grace-Blackwell GB10":
-        print(" This is a Grace-Blackwell GB10 GPU")
-        print(f" Compute Capability: {gpu_info['compute_capability']} ({gpu_info.get('sm_version', 'unknown SM')})")
-        print(f" Memory: {gpu_info['total_memory_gb']:.1f} GB")
-        bandwidth = gpu_info.get("memory_bandwidth_gbps")
+        if cap.nvlink_c2c:
+            print(" NVLink-C2C (Grace CPU ↔ Blackwell GPU coherent link)")
+        if cap.max_unified_memory_tb:
+            print(f" Unified Memory Budget: {cap.max_unified_memory_tb} TB")
+    elif cap.architecture == "grace_blackwell":
+        print(f" This is a Grace-Blackwell GPU ({cap.name})")
+        print(f" Compute Capability: {cap.compute_capability} ({cap.sm_version})")
+        print(f" Memory: {cap.total_memory_gb:.1f} GB")
+        bandwidth = cap.memory_bandwidth_tbps * 1000 if cap.memory_bandwidth_tbps else None
         bandwidth_str = f"{bandwidth:.1f} GB/s" if bandwidth else "Unknown"
         print(f" Memory Bandwidth: {bandwidth_str}")
-        print(f" Tensor Cores: {gpu_info['tensor_cores']}")
-        if gpu_info.get("nvlink_c2c"):
+        print(f" Tensor Cores: {cap.tensor_cores}")
+        if cap.nvlink_c2c:
             print(" NVLink-C2C fabric available")
         print(" Stream-ordered memory APIs supported")
+        if not cap.tma_compiler_supported:
+            print(" ⚠  TMA hardware present but compiler support is disabled (see README.md caveats).")
     else:
-        print("This is not a Blackwell B200/B300 GPU")
-        print(f"GPU: {gpu_info['name']}")
-        print(f"Compute Capability: {gpu_info['compute_capability']}")
-        bandwidth = gpu_info.get("memory_bandwidth_gbps")
-        bandwidth_str = f"{bandwidth:.1f} GB/s" if bandwidth else "Unknown"
-        print(f"Memory Bandwidth: {bandwidth_str}")
+        print("This is not a Blackwell/Grace-Blackwell GPU")
+        print(f" GPU: {cap.device_name}")
+        print(f" Compute Capability: {cap.compute_capability}")
 
 
 def benchmark_memory_bandwidth() -> None:
@@ -234,7 +190,7 @@ def benchmark_memory_bandwidth() -> None:
 
     print("\n=== Memory Bandwidth Benchmark ===")
 
-    copy_sizes_gb = [2] if BENCHMARK_QUICK else [2, 4, 8]
+    copy_sizes_gb = [2, 4]
     for size_gb in copy_sizes_gb:
         size_bytes = int(size_gb * (1024 ** 3))
         num_elements = size_bytes // 2  # float16
@@ -244,7 +200,7 @@ def benchmark_memory_bandwidth() -> None:
 
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
-        iterations = 5 if BENCHMARK_QUICK else 50
+        iterations = 10
 
         start.record()
         for _ in range(iterations):
@@ -256,14 +212,14 @@ def benchmark_memory_bandwidth() -> None:
         bandwidth_gbps = (size_bytes * iterations / elapsed_ms) / 1e6
         print(f"Copy {size_gb:2d} GB: {bandwidth_gbps / 1024:.2f} TB/s")
 
-    sizes = [1024, 4096] if BENCHMARK_QUICK else [1024, 2048, 4096, 8192, 16384]
+    sizes = [1024, 2048, 4096]
 
     for size in sizes:
         try:
             a = torch.randn(size, size, device="cuda")
             b = torch.randn(size, size, device="cuda")
 
-            warmup_iters = 2 if BENCHMARK_QUICK else 5
+            warmup_iters = 2
             for _ in range(warmup_iters):
                 _ = torch.mm(a, b)
 
@@ -271,7 +227,7 @@ def benchmark_memory_bandwidth() -> None:
             start_time = time.time()
 
             with nvtx.range(f"gemm_{size}"):
-                active_iters = 3 if BENCHMARK_QUICK else 10
+                active_iters = 5
                 for _ in range(active_iters):
                     _ = torch.mm(a, b)
 
@@ -313,7 +269,7 @@ def benchmark_tensor_operations() -> None:
 
     for op_name, op_func in ops:
         try:
-            warmup_iters = 1 if BENCHMARK_QUICK else 2
+            warmup_iters = 1
             for _ in range(warmup_iters):
                 op_func(a, b)
 
@@ -321,7 +277,7 @@ def benchmark_tensor_operations() -> None:
             start_time = time.time()
 
             with nvtx.range(f"tensor_op_{op_name.lower().replace(' ', '_')}"):
-                active_iters = 3 if BENCHMARK_QUICK else 10
+                active_iters = 5
                 for _ in range(active_iters):
                     op_func(a, b)
 
@@ -356,7 +312,8 @@ def demonstrate_memory_hierarchy() -> None:
     print("\nMemory Specifications:")
     print(f"• Shared Memory per Block: {gpu_info['max_shared_memory_per_block'] / 1024:.1f} KB")
     print(f"• Shared Memory per SM: {gpu_info['max_shared_memory_per_sm'] / 1024:.1f} KB")
-    print(f"• L2 Cache Size: {gpu_info['l2_cache_size'] / 1024:.1f} KB")
+    l2_cache = gpu_info.get("l2_cache_size") or 0
+    print(f"• L2 Cache Size: {l2_cache / 1024:.1f} KB")
     print(f"• Global Memory: {gpu_info['total_memory_gb']:.1f} GB")
 
     if gpu_info.get("hbm3e_memory"):

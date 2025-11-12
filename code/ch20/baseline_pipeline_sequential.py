@@ -64,6 +64,7 @@ class BaselinePipelineSequentialBenchmark(Benchmark):
         self.batch_size = 256
         self.hidden_dim = 1024
         self.num_stages = 4
+        self.repeats = 4
     
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         """Describe workload units processed per iteration."""
@@ -104,15 +105,16 @@ class BaselinePipelineSequentialBenchmark(Benchmark):
 
         with nvtx_range("baseline_pipeline_sequential", enable=enable_nvtx):
             # Sequential execution: each stage waits for previous
-            x = self.inputs
-            for stage in self.stages:
-                x = stage(x)  # Wait for completion before next stage
-                torch.cuda.synchronize()
-                # Naive pipeline: copy activations back to host between stages at FP32 precision
-                host_buffer = x.detach().float().to("cpu", non_blocking=False)
-                torch.cuda.synchronize()
-                x = host_buffer.to(self.device, non_blocking=False).half()
-                torch.cuda.synchronize()
+            for _ in range(self.repeats):
+                x = self.inputs
+                for stage in self.stages:
+                    x = stage(x)  # Wait for completion before next stage
+                    torch.cuda.synchronize()
+                    # Naive pipeline: copy activations back to host between stages at FP32 precision
+                    host_buffer = x.detach().float().to("cpu", non_blocking=False)
+                    torch.cuda.synchronize()
+                    x = host_buffer.to(self.device, non_blocking=False).half()
+                    torch.cuda.synchronize()
 
     
     def teardown(self) -> None:

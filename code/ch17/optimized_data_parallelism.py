@@ -20,7 +20,7 @@ import torch.nn as nn
 from typing import Optional, List
 
 from ch15.baseline_data_parallelism import _build_mlp
-from common.python.compile_utils import enable_tf32
+from common.python.compile_utils import enable_tf32, compile_model
 from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
@@ -68,11 +68,11 @@ class OptimizedDataParallelismBenchmark(Benchmark):
         )
 
         model = _build_mlp(self.hidden_dim).to(self.device, dtype=torch.bfloat16).eval()
-        try:
-            model = torch.compile(model, mode="reduce-overhead")
-            self.compiled = True
-        except Exception:
-            self.compiled = False
+        model = compile_model(
+            model,
+            mode="reduce-overhead",
+        )
+        self.compiled = True
         self.model = model
 
         sm_count = torch.cuda.get_device_properties(_device_index(self.device)).multi_processor_count
@@ -87,7 +87,7 @@ class OptimizedDataParallelismBenchmark(Benchmark):
             raise RuntimeError("Model not initialized")
         shard_inputs = torch.chunk(micro_batch, self.virtual_shards, dim=0)
         current_stream = torch.cuda.current_stream()
-        with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+        with torch.autocast("cuda", dtype=torch.bfloat16):
             for stream, shard in zip(self.streams, shard_inputs):
                 if shard.numel() == 0:
                     continue

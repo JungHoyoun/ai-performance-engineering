@@ -16,13 +16,17 @@ if str(repo_root) not in sys.path:
 
 import torch
 import torch.nn as nn
-
 from typing import Optional
 
 from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+
+BATCH_SIZE = 512
+INPUT_DIM = 2048
+HIDDEN_DIM = 2048
+REPETITIONS = 8
 
 
 def resolve_device() -> torch.device:
@@ -38,25 +42,40 @@ class BaselineMemoryBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        self.input_data = None
-        self.batch_size = 8
+        self.batch_size = BATCH_SIZE
+        self.input_dim = INPUT_DIM
+        self.repetitions = REPETITIONS
+        self.host_batches: list[torch.Tensor] = []
+        self._prev_threads: Optional[int] = None
+        self._prev_interop_threads: Optional[int] = None
     
     def setup(self) -> None:
         """Setup: Initialize model with standard memory allocation."""
         torch.manual_seed(42)
+        self._prev_threads = torch.get_num_threads()
+        self._prev_interop_threads = torch.get_num_interop_threads()
+        torch.set_num_threads(1)
+        torch.set_num_interop_threads(1)
         # Baseline: Standard GPU memory allocation
         # Memory optimization techniques include custom allocators, memory pooling, etc.
         # This baseline uses standard PyTorch memory allocation
         self.model = nn.Sequential(
-            nn.Linear(256, 512),
-            nn.ReLU(),
-            nn.Linear(512, 512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
+            nn.Linear(self.input_dim, HIDDEN_DIM),
+            nn.GELU(),
+            nn.Linear(HIDDEN_DIM, HIDDEN_DIM),
+            nn.GELU(),
+            nn.Linear(HIDDEN_DIM, self.input_dim),
         ).to(self.device).eval()
-        
-        # Standard memory allocation
-        self.input_data = torch.randn(self.batch_size, 256, device=self.device)
+        self.host_batches = [
+            torch.randint(
+                0,
+                256,
+                (self.batch_size, self.input_dim),
+                device="cpu",
+                dtype=torch.uint8,
+            )
+            for _ in range(self.repetitions)
+        ]
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -70,20 +89,32 @@ class BaselineMemoryBenchmark(Benchmark):
         # No memory optimization - uses default PyTorch allocator
         with nvtx_range("baseline_memory", enable=enable_nvtx):
             with torch.no_grad():
-                output = self.model(self.input_data)
+                # Naive path: CPU transforms + synchronous host->device transfer.
+                for compressed in self.host_batches:
+                    host_batch = compressed.to(dtype=torch.float32)
+                    host_batch.mul_(1.0 / 255.0)
+                    host_batch.add_(-0.5)
+                    host_batch.mul_(2.0)
+                    host_batch.tanh_()
+                    device_batch = host_batch.to(self.device, non_blocking=False)
+                    _ = self.model(device_batch)
         torch.cuda.synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.model = None
-        self.input_data = None
+        self.host_batches = []
+        if self._prev_threads is not None:
+            torch.set_num_threads(self._prev_threads)
+        if self._prev_interop_threads is not None:
+            torch.set_num_interop_threads(self._prev_interop_threads)
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=20,
-            warmup=3,
+            iterations=200,
+            warmup=10,
         )
     
     def validate_result(self) -> Optional[str]:
@@ -108,4 +139,3 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(result)
-

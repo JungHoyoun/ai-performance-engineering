@@ -24,7 +24,7 @@ from common.python.benchmark_harness import (
     BenchmarkHarness,
     BenchmarkMode,
 )
-from ch10.workload_config import WORKLOAD, is_smoke_test
+from ch10.workload_config import WORKLOAD
 
 
 def resolve_device() -> torch.device:
@@ -42,10 +42,9 @@ class BaselineWarpSpecializationPipelineBenchmark(Benchmark):
         self.model = None
         self.inputs_host = None
         self.workload = WORKLOAD
-        self.smoke_test = is_smoke_test()
-        self.micro_batches = self.workload.pipeline_micro_batches_for_mode(self.smoke_test)
-        self.chunk_tokens = self.workload.pipeline_chunk_tokens_for_mode(self.smoke_test)
-        self.hidden_dim = self.workload.pipeline_hidden_dim_for_mode(self.smoke_test)
+        self.micro_batches = self.workload.pipeline_micro_batches
+        self.chunk_tokens = self.workload.pipeline_chunk_tokens
+        self.hidden_dim = self.workload.pipeline_hidden_dim
         self._checksum = 0.0
     
     def setup(self) -> None:

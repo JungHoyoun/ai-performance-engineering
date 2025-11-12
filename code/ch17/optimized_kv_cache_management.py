@@ -48,6 +48,7 @@ class OptimizedKVCacheManagementBenchmark(Benchmark):
 
         self.inputs = None
         self.kv_cache = None
+        self.cache_window = 8
     
     def setup(self) -> None:
         """Setup: Initialize model with KV cache management."""
@@ -76,8 +77,8 @@ class OptimizedKVCacheManagementBenchmark(Benchmark):
         batch_size = 4
         max_seq_len = 32
         self.kv_cache = {
-            'k': torch.zeros(batch_size, max_seq_len, num_heads, head_dim, device=self.device),
-            'v': torch.zeros(batch_size, max_seq_len, num_heads, head_dim, device=self.device),
+            'k': torch.zeros(batch_size, num_heads, max_seq_len, head_dim, device=self.device),
+            'v': torch.zeros(batch_size, num_heads, max_seq_len, head_dim, device=self.device),
         }
         
         # Simulate autoregressive generation
@@ -106,11 +107,14 @@ class OptimizedKVCacheManagementBenchmark(Benchmark):
                     head_dim = self.model.embed_dim // num_heads
                     qkv = qkv.reshape(batch_size, seq_len, 3, num_heads, head_dim)
                     q, k, v = qkv.unbind(dim=2)
-                    self.kv_cache["k"][:, step : step + 1, :, :] = k[:, :1]
-                    self.kv_cache["v"][:, step : step + 1, :, :] = v[:, :1]
+                    k_heads = k[:, :1].permute(0, 2, 1, 3).contiguous()
+                    v_heads = v[:, :1].permute(0, 2, 1, 3).contiguous()
+                    self.kv_cache["k"][:, :, step : step + 1, :] = k_heads
+                    self.kv_cache["v"][:, :, step : step + 1, :] = v_heads
 
-                    k_all = self.kv_cache["k"][:, : step + 1, :, :].permute(0, 2, 1, 3).contiguous()
-                    v_all = self.kv_cache["v"][:, : step + 1, :, :].permute(0, 2, 1, 3).contiguous()
+                    window_start = max(0, step + 1 - self.cache_window)
+                    k_all = self.kv_cache["k"][:, :, window_start : step + 1, :]
+                    v_all = self.kv_cache["v"][:, :, window_start : step + 1, :]
                     q_heads = q.permute(0, 2, 1, 3).contiguous()
                     _ = torch.nn.functional.scaled_dot_product_attention(
                         q_heads, k_all, v_all, is_causal=False

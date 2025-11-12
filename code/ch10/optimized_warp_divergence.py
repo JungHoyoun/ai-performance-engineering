@@ -12,15 +12,21 @@ if str(repo_root) not in sys.path:
 
 import torch
 
-from common.python.compile_utils import enable_tf32
+from common.python.compile_utils import compile_callable, enable_tf32
+from common.python.inductor_guard import (
+    InductorCudagraphState,
+    disable_inductor_cudagraph_features,
+    restore_inductor_cudagraph_features,
+)
 from common.python.benchmark_harness import Benchmark, BenchmarkConfig
-from ch10.workload_config import WORKLOAD, is_smoke_test
+from ch10.workload_config import WORKLOAD
 
-try:
-    TORCH_COMPILE_AVAILABLE = hasattr(torch, "compile")
-except Exception:
-    TORCH_COMPILE_AVAILABLE = False
+_MARK_CUDAGRAPH_STEP = getattr(torch.compiler, "cudagraph_mark_step_begin", None)
 
+
+def _mark_cudagraph_step() -> None:
+    if callable(_MARK_CUDAGRAPH_STEP):
+        _MARK_CUDAGRAPH_STEP()
 
 def resolve_device() -> torch.device:
     if not torch.cuda.is_available():
@@ -55,9 +61,8 @@ class OptimizedWarpDivergenceBenchmark(Benchmark):
     def __init__(self) -> None:
         self.device = resolve_device()
         self.workload = WORKLOAD
-        self.smoke_test = is_smoke_test()
-        self.N = self.workload.warp_elements_for_mode(self.smoke_test)
-        self.branch_iterations = self.workload.warp_branch_iterations_for_mode()
+        self.N = self.workload.warp_elements
+        self.branch_iterations = self.workload.warp_branch_iterations
         self.input: Optional[torch.Tensor] = None
         self.routing_logits: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
@@ -65,6 +70,7 @@ class OptimizedWarpDivergenceBenchmark(Benchmark):
         self._compiled_step: Optional[Callable[[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]] = None
         self._branchless_fn: Optional[Callable[[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]] = None
         self._checksum = 0.0
+        self._inductor_state: InductorCudagraphState = None
 
     def setup(self) -> None:
         torch.manual_seed(42)
@@ -84,16 +90,14 @@ class OptimizedWarpDivergenceBenchmark(Benchmark):
             return _branchless_kernel(chunk, logits, self.branch_iterations)
 
         self._branchless_fn = branchless_fn
-        self._compiled_step = self._maybe_compile(branchless_fn)
+        if self._inductor_state is None:
+            self._inductor_state = disable_inductor_cudagraph_features()
+        self._compiled_step = compile_callable(
+            branchless_fn,
+            fullgraph=True,
+            mode="reduce-overhead",
+        )
         torch.cuda.synchronize()
-
-    def _maybe_compile(self, fn: Callable[[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]):
-        if not TORCH_COMPILE_AVAILABLE:
-            return None
-        try:
-            return torch.compile(fn, fullgraph=True)
-        except Exception:
-            return None
 
     def benchmark_fn(self) -> None:
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
@@ -103,7 +107,7 @@ class OptimizedWarpDivergenceBenchmark(Benchmark):
 
         with nvtx_range("optimized_warp_divergence", enable=enable_nvtx):
             assert self.input is not None and self.routing_logits is not None
-            step_fn = self._compiled_step or self._branchless_fn
+            step_fn = self._compiled_step
             assert step_fn is not None
 
             chunks = torch.chunk(self.input, len(self.streams))
@@ -115,7 +119,10 @@ class OptimizedWarpDivergenceBenchmark(Benchmark):
                 with torch.cuda.stream(stream):
                     chunk_contig = chunk.contiguous()
                     logits_contig = logits_chunk.contiguous()
-                    updated_chunks[idx], updated_logits[idx] = step_fn(chunk_contig, logits_contig)
+                    _mark_cudagraph_step()
+                    out_chunk, out_logits = step_fn(chunk_contig, logits_contig)
+                    updated_chunks[idx] = out_chunk.clone()
+                    updated_logits[idx] = out_logits.clone()
 
             torch.cuda.synchronize()
             self.output = torch.cat(updated_chunks, dim=0)
@@ -127,6 +134,8 @@ class OptimizedWarpDivergenceBenchmark(Benchmark):
         self.output = None
         self.routing_logits = None
         self.streams = []
+        restore_inductor_cudagraph_features(self._inductor_state)
+        self._inductor_state = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:

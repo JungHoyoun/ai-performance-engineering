@@ -66,6 +66,7 @@ class OptimizedPipelineOverlapBenchmark(Benchmark):
         self.hidden_dim = 1024
         self.num_stages = 4
         self.num_micro_batches = 8
+        self.repeats = 4
     
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         """Describe workload units processed per iteration."""
@@ -109,7 +110,8 @@ class OptimizedPipelineOverlapBenchmark(Benchmark):
         with nvtx_range("pipeline_sequential", enable=enable_nvtx):
             micro_batches = list(self.inputs.chunk(self.num_micro_batches))
             with torch.no_grad():
-                self._run_pipeline(micro_batches)
+                for _ in range(self.repeats):
+                    self._run_pipeline(micro_batches)
             torch.cuda.synchronize()
 
     def _run_pipeline(self, micro_batches: list[torch.Tensor]) -> None:

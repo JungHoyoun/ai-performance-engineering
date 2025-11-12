@@ -17,9 +17,9 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
-from typing import Optional
+from typing import Optional, List
 
-from common.python.compile_utils import enable_tf32
+from common.python.compile_utils import enable_tf32, compile_model
 from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
@@ -38,10 +38,11 @@ class OptimizedContextParallelismBenchmark(Benchmark):
     
     def __init__(self):
         self.device = resolve_device()
-        self.models = None
-        self.input_sequence = None
-        self.sequence_length = 8192  # Long sequence to demonstrate context parallelism benefit
-        self.num_gpus = min(4, torch.cuda.device_count()) if torch.cuda.is_available() else 1
+        self.models: Optional[List[nn.Module]] = None
+        self.sequence_chunks: Optional[List[torch.Tensor]] = None
+        self.sequence_length = 8192
+        self.num_context_shards = min(4, max(1, self.sequence_length // 2048))
+        self.streams: List[torch.cuda.Stream] = []
     
     def setup(self) -> None:
         """Setup: Initialize models and split sequence for context parallelism."""
@@ -52,33 +53,26 @@ class OptimizedContextParallelismBenchmark(Benchmark):
             enable_tf32()
         
         torch.manual_seed(42)
-        # Optimization: Context parallelism splits long sequences across GPUs
-        # Each GPU processes a different portion of the sequence in parallel
-        # This enables parallel processing of long contexts that don't fit efficiently on one GPU
         self.models = []
-        for gpu_id in range(self.num_gpus):
-            model = nn.Sequential(
-                nn.Linear(256, 512),
-                nn.ReLU(),
-                nn.Linear(512, 512),
-                nn.ReLU(),
-                nn.Linear(512, 256),
-            ).to(torch.device(f"cuda:{gpu_id}")).eval()
-            self.models.append(model)
+        self.streams = [torch.cuda.Stream() for _ in range(self.num_context_shards)]
+        for _ in range(self.num_context_shards):
+            shard = nn.Sequential(
+                nn.Linear(256, 512, bias=False),
+                nn.GELU(),
+                nn.Linear(512, 512, bias=False),
+                nn.GELU(),
+                nn.Linear(512, 256, bias=False),
+            ).to(self.device, dtype=torch.bfloat16).eval()
+            shard = compile_model(shard, mode="reduce-overhead")
+            self.models.append(shard)
         
-        # Long sequence that benefits from context parallelism
-        # Split sequence across GPUs for parallel processing
-        self.input_sequence = torch.randn(self.sequence_length, 256, device=self.device)
-        
-        # Split sequence into chunks for each GPU
-        tokens_per_gpu = self.sequence_length // self.num_gpus
-        self.sequence_chunks = []
-        for gpu_id in range(self.num_gpus):
-            start_idx = gpu_id * tokens_per_gpu
-            end_idx = start_idx + tokens_per_gpu if gpu_id < self.num_gpus - 1 else self.sequence_length
-            chunk = self.input_sequence[start_idx:end_idx].to(torch.device(f"cuda:{gpu_id}"))
-            self.sequence_chunks.append(chunk)
-        
+        full_sequence = torch.randn(
+            self.sequence_length,
+            256,
+            device=self.device,
+            dtype=torch.bfloat16,
+        )
+        self.sequence_chunks = list(torch.chunk(full_sequence, self.num_context_shards))
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -90,16 +84,19 @@ class OptimizedContextParallelismBenchmark(Benchmark):
         
         # Optimization: Process sequence chunks in parallel across GPUs
         # Context parallelism enables parallel processing of long sequences
+        if self.models is None or self.sequence_chunks is None:
+            raise RuntimeError("Context shards not initialized")
+
         with nvtx_range("optimized_context_parallelism", enable=enable_nvtx):
             with torch.no_grad():
-                outputs = []
-                for gpu_id, (model, chunk) in enumerate(zip(self.models, self.sequence_chunks)):
-                    output = model(chunk)
-                    outputs.append(output)
-        
-        # Synchronize all GPUs
-        for gpu_id in range(self.num_gpus):
-            torch.cuda.synchronize(torch.device(f"cuda:{gpu_id}"))
+                outputs = [None] * len(self.models)
+                for idx, (model, chunk, stream) in enumerate(zip(self.models, self.sequence_chunks, self.streams)):
+                    next_chunk = chunk.roll(shifts=idx, dims=0)
+                    with torch.cuda.stream(stream):
+                        outputs[idx] = model(next_chunk)
+                for stream in self.streams:
+                    stream.synchronize()
+        torch.cuda.synchronize(self.device)
     
     def teardown(self) -> None:
         """Cleanup: Clear CUDA cache."""
@@ -146,4 +143,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -1,16 +1,16 @@
 """
-Safe torch.compile wrapper with timeout and graceful fallback.
+Safe torch.compile wrapper with timeout and explicit SKIP semantics.
 
 This module provides a robust wrapper around torch.compile that:
 1. Detects large models (>40B parameters) and warns about potential hangs
 2. Provides timeout support for compilation (prevents indefinite hangs)
-3. Gracefully falls back to eager mode if compilation fails or times out
-4. Provides clear diagnostics about why compilation was skipped
+3. Raises clear SKIPPED errors whenever compilation cannot proceed
+4. Provides diagnostics about why compilation was skipped
 
 Usage:
     from common.torch_compile_safe import safe_compile
     
-    # Simple usage with automatic fallback
+    # Simple usage
     model_compiled = safe_compile(model, mode='max-autotune')
     
     # With explicit timeout (seconds)
@@ -135,10 +135,10 @@ def safe_compile(
         **kwargs: Additional arguments passed to torch.compile
     
     Returns:
-        Compiled model, or original model if compilation fails/skipped
+        Compiled model.
     
     Raises:
-        CompilationTimeoutError: If compilation exceeds timeout
+        RuntimeError: If torch.compile is unavailable, skipped, or fails.
     """
     if timeout is None:
         timeout = DEFAULT_COMPILE_TIMEOUT
@@ -147,21 +147,17 @@ def safe_compile(
     is_large = is_large_model(model)
     
     if skip_if_large and is_large:
-        if warn_on_skip:
-            param_count = count_parameters(model)
-            print(
-                f"Skipping torch.compile for large model "
-                f"({param_count / 1e9:.1f}B parameters). "
-                f"Compilation hangs are common for models >40B."
-            )
-        return model
+        param_count = count_parameters(model)
+        raise RuntimeError(
+            f"SKIPPED: torch.compile disabled for large model "
+            f"({param_count / 1e9:.1f}B parameters)."
+        )
     
     if is_large and warn_on_skip:
         param_count = count_parameters(model)
         print(
-            f"Warning: Compiling large model ({param_count / 1e9:.1f}B parameters). "
-            f"This may take {timeout // 60} minutes or hang indefinitely. "
-            f"Consider using eager mode or --skip-compile flag."
+            f"[torch.compile] Compiling large model ({param_count / 1e9:.1f}B parameters); "
+            "timeouts are likely."
         )
     
     def compile_target() -> nn.Module:
@@ -188,31 +184,14 @@ def safe_compile(
         return compiled
         
     except CompilationTimeoutError as e:
-        if warn_on_skip:
-            print(f"{e}")
-            print("   Falling back to eager mode.")
-        return model
+        raise RuntimeError(
+            f"SKIPPED: torch.compile timed out after {timeout}s ({e})."
+        ) from e
         
     except Exception as e:
-        error_msg = str(e)
-        
-        # Check for known failure modes
-        if "out of memory" in error_msg.lower():
-            if warn_on_skip:
-                print(f"Compilation failed: OOM. Falling back to eager mode.")
-        elif "duplicate template name" in error_msg.lower():
-            if warn_on_skip:
-                print(
-                    f"Compilation skipped: Known PyTorch issue "
-                    f"(duplicate kernel template name). "
-                    f"Falling back to eager mode."
-                )
-        else:
-            if warn_on_skip:
-                print(f"Compilation failed: {error_msg}")
-                print("   Falling back to eager mode.")
-        
-        return model
+        raise RuntimeError(
+            f"SKIPPED: torch.compile failed during safe_compile: {e}"
+        ) from e
 
 
 def should_use_compile(
@@ -297,7 +276,7 @@ def compile_layer(
         **kwargs: Additional torch.compile arguments
     
     Returns:
-        Compiled layer, or original if compilation fails
+        Compiled layer.
     """
     try:
         def compile_target() -> nn.Module:
@@ -305,9 +284,10 @@ def compile_layer(
             return cast(nn.Module, compiled_layer)
         
         return _compile_with_timeout(compile_target, timeout)
-    except Exception:
-        # Silently fall back to eager for this layer
-        return layer
+    except Exception as exc:
+        raise RuntimeError(
+            f"SKIPPED: torch.compile failed for layer ({layer.__class__.__name__}): {exc}"
+        ) from exc
 
 
 def partial_compile(
@@ -363,12 +343,9 @@ def partial_compile(
     layers = detect_transformer_layers(model)
     
     if layers is None:
-        if verbose:
-            print(
-                "Could not detect transformer layers automatically. "
-                "Falling back to eager mode for large model."
-            )
-        return model
+        raise RuntimeError(
+            "SKIPPED: unable to detect transformer layers for partial compilation."
+        )
     
     # Determine which layers to compile
     if layer_indices is None:
@@ -387,9 +364,6 @@ def partial_compile(
         print(f"   (Mode: {mode}, Timeout per layer: {timeout_per_layer}s)")
     
     # Compile each layer individually
-    compiled_count = 0
-    failed_count = 0
-    
     for idx in layer_indices:
         if idx >= len(layers):
             continue
@@ -397,35 +371,15 @@ def partial_compile(
         if verbose:
             print(f"   Layer {idx}...", end=" ", flush=True)
         
-        try:
-            compiled_layer = compile_layer(
-                layers[idx],
-                mode=mode,
-                timeout=timeout_per_layer,
-                **kwargs
-            )
-            
-            # Check if compilation actually happened
-            # (compile_layer returns original on failure)
-            if compiled_layer is not layers[idx]:
-                layers[idx] = compiled_layer
-                compiled_count += 1
-                if verbose:
-                    print("OK")
-            else:
-                failed_count += 1
-                if verbose:
-                    print("(fallback to eager)")
-        except Exception as e:
-            failed_count += 1
-            if verbose:
-                print(f"({str(e)[:50]})")
-    
-    if verbose:
-        print(f"\nPartial compilation complete:")
-        print(f"   - Compiled: {compiled_count} layers")
-        print(f"   - Failed/skipped: {failed_count} layers")
-        print(f"   - Total: {len(layers)} layers in model")
+        compiled_layer = compile_layer(
+            layers[idx],
+            mode=mode,
+            timeout=timeout_per_layer,
+            **kwargs
+        )
+        layers[idx] = compiled_layer
+        if verbose:
+            print("OK")
     
     return model
 
@@ -480,5 +434,6 @@ def smart_compile(
         return partial_compile(model, max_layers=20, mode=mode, **kwargs)
     
     else:
-        print("Strategy: Eager mode (very large model, compilation likely to hang)")
-        return model
+        raise RuntimeError(
+            f"SKIPPED: Model too large for smart_compile ({param_count_b:.1f}B params)."
+        )

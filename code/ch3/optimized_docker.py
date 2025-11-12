@@ -95,7 +95,7 @@ class OptimizedDockerBenchmark(Benchmark):
 
         inputs, targets = self.prefetcher.next()
         with nvtx_range("optimized_docker", enable=enable_nvtx):
-            with torch.cuda.amp.autocast(dtype=torch.float16):
+            with torch.autocast("cuda", dtype=torch.float16):
                 out = self.model(inputs)
                 loss = torch.nn.functional.mse_loss(out, targets)
             self.optimizer.zero_grad(set_to_none=True)

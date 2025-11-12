@@ -59,10 +59,7 @@ class OptimizedPerformanceBatchBenchmark(Benchmark):
     def setup(self) -> None:
         """Setup: initialize model and data with larger batch."""
         
-        try:
-            from common.python.compile_utils import compile_model
-        except ImportError:
-            compile_model = lambda m, **kwargs: m
+        from common.python.compile_utils import compile_model
         
         self.model = torch.nn.Sequential(
             torch.nn.Linear(256, 256),
@@ -71,25 +68,19 @@ class OptimizedPerformanceBatchBenchmark(Benchmark):
         )
         
         if self.device.type == "cuda":
+            # Optimization: Use FP16 for faster computation
             try:
-                # Optimization: Use FP16 for faster computation - this is the key optimization
-                # FP16 provides 2x theoretical speedup on modern GPUs
-                # Convert to FP16 before moving to device for efficiency
-                try:
-                    self.model = self.model.half()
-                    dtype = torch.float16
-                except Exception:
-                    dtype = torch.float32
-                
-                self.model = self.model.to(self.device)
-                # Optimization: Compile model for kernel fusion (same as baseline)
-                # FP16 + compilation provides best performance
-                self.model = compile_model(self.model, mode="reduce-overhead", fullgraph=False, dynamic=False)
-            except Exception as exc:
-                print(f"WARNING: GPU initialization failed: {exc}. Falling back to CPU.")
-                self.device = torch.device("cpu")
-                self.model = self.model.cpu()
+                self.model = self.model.half()
+                dtype = torch.float16
+            except Exception:
                 dtype = torch.float32
+            self.model = self.model.to(self.device)
+            self.model = compile_model(
+                self.model,
+                mode="reduce-overhead",
+                fullgraph=False,
+                dynamic=False,
+            )
         else:
             self.model = self.model.to(self.device)
             dtype = torch.float32

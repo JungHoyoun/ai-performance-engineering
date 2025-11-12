@@ -63,6 +63,7 @@ class BaselineTrainingSingleBenchmark(Benchmark):
         self.criterion = None
         self.batch_size = 8  # Limited by single GPU memory
         self.hidden_dim = 4096
+        self.train_steps = 4
     
     def setup(self) -> None:
         """Setup: Initialize model and data."""
@@ -93,11 +94,13 @@ class BaselineTrainingSingleBenchmark(Benchmark):
 
 
         with nvtx_range("training", enable=enable_nvtx):
-            self.optimizer.zero_grad()
-            outputs = self.model(self.inputs)
-            loss = self.criterion(outputs, self.targets)
-            loss.backward()
-            self.optimizer.step()
+            for _ in range(self.train_steps):
+                self.optimizer.zero_grad()
+                outputs = self.model(self.inputs)
+                loss = self.criterion(outputs, self.targets)
+                loss.backward()
+                self.optimizer.step()
+            torch.cuda.synchronize()
 
     
     def teardown(self) -> None:

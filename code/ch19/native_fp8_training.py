@@ -11,6 +11,7 @@ CUDA 13 + PyTorch 2.9:
 from __future__ import annotations
 
 from common.python import compile_utils as _compile_utils_patch  # noqa: F401
+from common.python.compile_utils import compile_model
 import contextlib
 import os
 import sys
@@ -23,6 +24,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from ch19.arch_config import TORCH_COMPILE_KW
 
 
 
@@ -212,30 +214,18 @@ def demonstrate_fp8_compile() -> None:
 
     device = torch.device("cuda")
     model = FP8MLP(2048, 8192, 2048, num_layers=4, use_fp8=True).to(device)
-    try:
-        compiled = torch.compile(model, **TORCH_COMPILE_KW)
-    except Exception as exc:  # pragma: no cover - torch.compile availability varies
-        print(f"[skip] torch.compile could not optimize FP8 model: {exc}")
-        return
+    compiled = compile_model(model, **TORCH_COMPILE_KW)
 
     sample = torch.randn(32, 512, 2048, device=device)
-    try:
-        for _ in range(4):
-            compiled(sample)
-    except Exception as exc:
-        print(f"[skip] FP8 compiled warmup failed: {exc}")
-        return
+    for _ in range(4):
+        compiled(sample)
 
     torch.cuda.synchronize()
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
     start.record()
-    try:
-        for _ in range(20):
-            compiled(sample)
-    except Exception as exc:
-        print(f"[skip] FP8 compiled benchmark failed: {exc}")
-        return
+    for _ in range(20):
+        compiled(sample)
     end.record()
     torch.cuda.synchronize()
     print(f"FP8 + torch.compile throughput: {start.elapsed_time(end)/20.0:6.2f} ms/iter")

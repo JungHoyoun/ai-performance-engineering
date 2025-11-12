@@ -45,6 +45,7 @@ class BaselineSharedMemoryBenchmark(Benchmark):
         self.output = None
         self.N = 1 << 20
         self._extension = None
+        self._num_heads = 32  # Each head repeats the naive kernel without cache reuse
 
     def setup(self) -> None:
         """Setup: Initialize data in global memory."""
@@ -66,7 +67,10 @@ class BaselineSharedMemoryBenchmark(Benchmark):
             raise RuntimeError("Shared-memory baseline not initialized")
 
         with nvtx_range("baseline_shared_memory", enable=enable_nvtx):
-            self._extension.bank_conflicts(self.output, self.input)
+            with torch.no_grad():
+                # Baseline processes each attention head separately, forcing repeated global-memory reads.
+                for _ in range(self._num_heads):
+                    self._extension.bank_conflicts(self.output, self.input)
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

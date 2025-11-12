@@ -60,7 +60,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from common.python.compile_utils import enable_tf32
+from common.python.compile_utils import enable_tf32, compile_model
 
 CURRENT_DEVICE_FLAVOR = "unknown"
 
@@ -580,29 +580,19 @@ def main():
     print("\n" + "=" * 80)
     print("BENCHMARK 2: torch.compile (optimized)")
     print("=" * 80)
-    model_compiled = None
-    compiled_time = eager_time
-    compiled_throughput = eager_throughput
-    try:
-        if not hasattr(torch, "compile"):
-            raise RuntimeError("torch.compile is unavailable in this PyTorch build.")
-        model_compiled = torch.compile(
-            model,
-            mode='reduce-overhead',
-            fullgraph=True,
-            dynamic=False,
-        )
-        compiled_time, compiled_throughput = benchmark_inference(
-            model_compiled,
-            input_ids,
-            "Compiled Mode",
-            num_warmup=compile_warmup,
-            num_iters=compile_iters,
-        )
-    except Exception as exc:
-        print(f"\n[Warning] torch.compile benchmark failed ({exc.__class__.__name__}): {exc}")
-        print("Falling back to eager metrics for speedup calculations.")
-        model_compiled = None
+    model_compiled = compile_model(
+        model,
+        mode="reduce-overhead",
+        fullgraph=True,
+        dynamic=False,
+    )
+    compiled_time, compiled_throughput = benchmark_inference(
+        model_compiled,
+        input_ids,
+        "Compiled Mode",
+        num_warmup=compile_warmup,
+        num_iters=compile_iters,
+    )
     
     fp8_eager_time = fp8_eager_throughput = None
     fp8_compiled_time = fp8_compiled_throughput = None
@@ -632,9 +622,9 @@ def main():
         print("\n" + "=" * 80)
         print("BENCHMARK 4: FP8 Weights + torch.compile")
         print("=" * 80)
-        fp8_model_compiled = torch.compile(
+        fp8_model_compiled = compile_model(
             fp8_model,
-            mode='reduce-overhead',
+            mode="reduce-overhead",
             fullgraph=True,
             dynamic=False,
         )

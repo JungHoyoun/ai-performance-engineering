@@ -18,6 +18,7 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
+from collections.abc import Iterator
 
 
 from typing import Optional
@@ -43,16 +44,19 @@ class SyntheticDataset(Dataset):
     def __init__(self, num_samples: int = 1000, feature_dim: int = 1024):
         self.num_samples = num_samples
         self.feature_dim = feature_dim
-        # Generate data upfront (simulating disk I/O)
-        self.data = torch.randn(num_samples, feature_dim)
+        base = torch.randn(num_samples, feature_dim)
+        self.data = base
         self.labels = torch.randint(0, 10, (num_samples,))
     
     def __len__(self) -> int:
         return self.num_samples
     
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
-        # Simulate some processing overhead
-        return self.data[idx], self.labels[idx]
+        sample = self.data[idx]
+        # Simulate realistic CPU-side augmentations (vector math only, no sleeps).
+        enriched = torch.tanh(sample * 1.1) + torch.sin(sample * 0.5)
+        normalized = enriched - enriched.mean()
+        return normalized, self.labels[idx]
 
 
 class SimpleModel(nn.Module):
@@ -82,6 +86,7 @@ class BaselineDataloaderDefaultBenchmark(Benchmark):
         self.dataset_size = 500
         self.batch_size = 32
         self.feature_dim = 1024
+        self._data_iter: Optional[Iterator] = None
     
     def setup(self) -> None:
         """Setup: Initialize model and default DataLoader."""
@@ -102,12 +107,11 @@ class BaselineDataloaderDefaultBenchmark(Benchmark):
             prefetch_factor=None,  # No prefetching (baseline)
         )
         
-        # Warmup
-        for i, (data, labels) in enumerate(self.dataloader):
-            if i >= 2:
-                break
-            data = data.to(self.device)
-            labels = labels.to(self.device)
+        self._data_iter = iter(self.dataloader)
+
+        # Warmup a couple of batches
+        for _ in range(2):
+            data, labels = self._next_batch()
             _ = self.model(data)
         torch.cuda.synchronize()
     
@@ -124,9 +128,7 @@ class BaselineDataloaderDefaultBenchmark(Benchmark):
 
         with nvtx_range("baseline_dataloader_default", enable=enable_nvtx):
             # Process one batch (default DataLoader: CPU-GPU sync overhead)
-            data, labels = next(iter(self.dataloader))
-            data = data.to(self.device)  # Synchronous transfer
-            labels = labels.to(self.device)
+            data, labels = self._next_batch()
             
             self.optimizer.zero_grad()
             outputs = self.model(data)
@@ -139,6 +141,16 @@ class BaselineDataloaderDefaultBenchmark(Benchmark):
         """Cleanup."""
         del self.model, self.dataloader, self.optimizer, self.criterion
         torch.cuda.empty_cache()
+    
+    def _next_batch(self) -> tuple[torch.Tensor, torch.Tensor]:
+        if self._data_iter is None:
+            self._data_iter = iter(self.dataloader)
+        try:
+            data, labels = next(self._data_iter)
+        except StopIteration:
+            self._data_iter = iter(self.dataloader)
+            data, labels = next(self._data_iter)
+        return data.to(self.device), labels.to(self.device)
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -169,4 +181,3 @@ if __name__ == "__main__":
     )
     result = harness.benchmark(benchmark)
     print(f"\nBaseline Default DataLoader: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-

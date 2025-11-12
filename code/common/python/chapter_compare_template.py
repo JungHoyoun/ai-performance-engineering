@@ -225,27 +225,100 @@ def profile_template(
             metrics[f"{prefix}_goodput"] = goodput
             chapter_goodputs.append(goodput)
 
-    def format_throughput_summary(throughput_obj: Optional[Any]) -> str:
-        if not throughput_obj:
-            return ""
-        parts = []
-        requests = getattr(throughput_obj, "requests_per_s", None)
-        tokens = getattr(throughput_obj, "tokens_per_s", None)
-        samples = getattr(throughput_obj, "samples_per_s", None)
-        latency_ms = getattr(throughput_obj, "latency_ms", None)
-        goodput = getattr(throughput_obj, "goodput", None)
+    def compact_ms(value: Optional[float]) -> str:
+        if value is None:
+            return "-"
+        abs_val = abs(value)
+        if abs_val >= 100:
+            text = f"{value:.1f}"
+        elif abs_val >= 10:
+            text = f"{value:.2f}"
+        else:
+            text = f"{value:.3f}"
+        text = text.rstrip("0").rstrip(".")
+        return text if text else "0"
 
-        if requests:
-            parts.append(f"{requests:,.2f} req/s")
-        if tokens:
-            parts.append(f"{tokens:,.2f} tokens/s")
-        if samples and samples != tokens:
-            parts.append(f"{samples:,.2f} samples/s")
+    def format_rate_short(throughput_obj: Optional[Any]) -> str:
+        if not throughput_obj:
+            return "-"
+        metrics = [
+            ("requests_per_s", "req/s"),
+            ("tokens_per_s", "tok/s"),
+            ("samples_per_s", "samples/s"),
+            ("bytes_per_s", "B/s"),
+        ]
+        for attr, label in metrics:
+            value = getattr(throughput_obj, attr, None)
+            if value:
+                abs_val = abs(value)
+                if abs_val >= 1000:
+                    number = f"{value:,.0f}"
+                elif abs_val >= 100:
+                    number = f"{value:.1f}"
+                else:
+                    number = f"{value:.2f}"
+                return f"{number} {label}"
+        latency_ms = getattr(throughput_obj, "latency_ms", None)
         if latency_ms:
-            parts.append(f"{latency_ms:.3f} ms/iter")
-        if goodput is not None:
-            parts.append(f"goodput={goodput:.2%}")
-        return ", ".join(parts)
+            return f"{compact_ms(latency_ms)} ms/iter"
+        return "-"
+
+    def format_memory_short(memory_obj: Optional[Any]) -> str:
+        if not memory_obj:
+            return "-"
+        peak_mb = getattr(memory_obj, "peak_mb", None)
+        if peak_mb is None:
+            return "-"
+        if peak_mb >= 1000:
+            text = f"{peak_mb:.0f}"
+        elif peak_mb >= 100:
+            text = f"{peak_mb:.1f}"
+        else:
+            text = f"{peak_mb:.2f}"
+        text = text.rstrip("0").rstrip(".")
+        return text if text else "0"
+
+    def build_perf_row(
+        label: str,
+        mean_ms: Optional[float],
+        timing_obj: Optional[Any],
+        throughput_obj: Optional[Any],
+        speedup_value: float,
+        memory_obj: Optional[Any],
+    ) -> Dict[str, str]:
+        percentiles = getattr(timing_obj, "percentiles", None) if timing_obj else None
+        p99 = None
+        if percentiles and isinstance(percentiles, dict):
+            p99 = percentiles.get(99.0)
+        median = getattr(timing_obj, "median_ms", None) if timing_obj else None
+        mean_val = mean_ms if timing_obj else None
+        speedup_str = "-" if speedup_value <= 0 else f"{speedup_value:.2f}x"
+        return {
+            "Variant": label,
+            "Mean(ms)": compact_ms(mean_val),
+            "Median": compact_ms(median),
+            "p99": compact_ms(p99),
+            "Rate": format_rate_short(throughput_obj),
+            "Speedup": speedup_str,
+            "Mem(MB)": format_memory_short(memory_obj),
+        }
+
+    def render_example_table(example_name: str, rows: List[Dict[str, str]]) -> None:
+        if not rows:
+            return
+        headers = ["Variant", "Mean(ms)", "Median", "p99", "Rate", "Speedup", "Mem(MB)"]
+        widths = {header: len(header) for header in headers}
+        for row in rows:
+            for header in headers:
+                widths[header] = max(widths[header], len(row.get(header, "")))
+        header_line = " | ".join(header.ljust(widths[header]) for header in headers)
+        divider = "-+-".join("-" * widths[header] for header in headers)
+        lines = [header_line, divider]
+        for row in rows:
+            line = " | ".join(row.get(header, "").ljust(widths[header]) for header in headers)
+            lines.append(line)
+        table = "\n".join(lines)
+        logger.info(f"\nExample: {example_name}\n{table}")
     
     if not torch.cuda.is_available():
         logger.warning("CUDA not available - skipping")
@@ -332,6 +405,7 @@ def profile_template(
     summary_data: List[Dict[str, Any]] = []
     
     for baseline_path, optimized_paths, example_name in pairs:
+        example_rows: List[Dict[str, str]] = []
         baseline_benchmark = load_benchmark(baseline_path)
         if baseline_benchmark is None:
             logger.error(f"Baseline failed to load (missing get_benchmark() function?): {baseline_path.name}")
@@ -341,30 +415,19 @@ def profile_template(
             baseline_result = harness.benchmark(baseline_benchmark)
             baseline_timing = baseline_result.timing
             baseline_time = baseline_timing.mean_ms if baseline_timing else 0.0
-            
-            # Display comprehensive baseline metrics
-            logger.info(f"  Example: {example_name}")
-            logger.info(f"    Baseline: {baseline_path.name}")
-            logger.info(f"    Baseline: {baseline_time:.2f} ms")
-            if baseline_timing:
-                logger.info(f"      📊 Timing Stats: median={baseline_timing.median_ms:.2f}ms, "
-                      f"min={baseline_timing.min_ms:.2f}ms, max={baseline_timing.max_ms:.2f}ms, "
-                      f"std={baseline_timing.std_ms:.2f}ms")
-            if baseline_result.memory:
-                mem_str = f"      💾 Memory: peak={baseline_result.memory.peak_mb:.2f}MB"
-                if baseline_result.memory.allocated_mb is not None:
-                    mem_str += f", allocated={baseline_result.memory.allocated_mb:.2f}MB"
-                logger.info(mem_str)
-            if baseline_timing and baseline_timing.percentiles:
-                p99 = baseline_timing.percentiles.get(99.0)
-                if p99:
-                    logger.info(f"      📈 Percentiles: p99={p99:.2f}ms, p75={baseline_timing.percentiles.get(75.0, 0):.2f}ms, "
-                          f"p50={baseline_timing.percentiles.get(50.0, 0):.2f}ms")
             baseline_throughput = getattr(baseline_result, "throughput", None)
-            throughput_summary = format_throughput_summary(baseline_throughput)
-            if throughput_summary:
-                logger.info(f"      ⚡ Throughput: {throughput_summary}")
             record_throughput(f"{example_name}_baseline", baseline_throughput, all_metrics)
+            baseline_mean_for_row = baseline_time if baseline_timing else None
+            example_rows.append(
+                build_perf_row(
+                    baseline_path.name,
+                    baseline_mean_for_row,
+                    baseline_timing,
+                    baseline_throughput,
+                    1.0,
+                    baseline_result.memory,
+                )
+            )
         except Exception as e:
             error_msg = str(e)
             # Check for skip warnings
@@ -396,66 +459,8 @@ def profile_template(
                 optimized_time = optimized_timing.mean_ms if optimized_timing else 0.0
                 speedup = baseline_time / optimized_time if optimized_time > 0 else 1.0
                 
-                # Format output matching user's example: "0.06 ms (4.97x)"
-                if speedup >= 1.0:
-                    speedup_str = f"{optimized_time:.2f} ms ({speedup:.2f}x) 🚀"
-                else:
-                    speedup_str = f"{optimized_time:.2f} ms ({speedup:.2f}x) ⚠️"
-                
-                logger.info(f"    Testing: {opt_name}... {speedup_str}")
-                
-                # Display comprehensive optimized metrics
-                if optimized_timing:
-                    logger.info(f"        📊 Timing: median={optimized_timing.median_ms:.2f}ms, "
-                          f"min={optimized_timing.min_ms:.2f}ms, max={optimized_timing.max_ms:.2f}ms, "
-                          f"std={optimized_timing.std_ms:.2f}ms")
-                
-                # Memory comparison
-                if optimized_result.memory:
-                    mem_change = ""
-                    opt_peak = optimized_result.memory.peak_mb
-                    base_peak = baseline_result.memory.peak_mb if baseline_result.memory else None
-                    if opt_peak is not None and base_peak is not None:
-                        mem_diff = opt_peak - base_peak
-                        mem_change_pct = (mem_diff / base_peak * 100) if base_peak > 0 else 0
-                        if mem_diff > 0:
-                            mem_change = f" (+{mem_diff:.2f}MB, +{mem_change_pct:.1f}%)"
-                        elif mem_diff < 0:
-                            mem_change = f" ({mem_diff:.2f}MB, {mem_change_pct:.1f}%)"
-                        else:
-                            mem_change = " (no change)"
-                    
-                    if opt_peak is not None:
-                        logger.info(f"        💾 Memory: peak={opt_peak:.2f}MB{mem_change}")
-                    if optimized_result.memory.allocated_mb is not None:
-                        logger.info(f"                 allocated={optimized_result.memory.allocated_mb:.2f}MB")
-                
                 optimized_throughput = getattr(optimized_result, "throughput", None)
-                throughput_summary = format_throughput_summary(optimized_throughput)
-                if throughput_summary:
-                    logger.info(f"        ⚡ Throughput: {throughput_summary}")
                 record_throughput(f"{example_name}_{technique}", optimized_throughput, all_metrics)
-                
-                # Percentile comparison
-                if optimized_timing and optimized_timing.percentiles and baseline_timing and baseline_timing.percentiles:
-                    p99_opt = optimized_timing.percentiles.get(99.0)
-                    p99_base = baseline_timing.percentiles.get(99.0)
-                    if p99_opt and p99_base:
-                        p99_speedup = p99_base / p99_opt if p99_opt > 0 else 1.0
-                        logger.info(f"        📈 Percentiles: p99={p99_opt:.2f}ms ({p99_speedup:.2f}x), "
-                              f"p75={optimized_timing.percentiles.get(75.0, 0):.2f}ms, "
-                              f"p50={optimized_timing.percentiles.get(50.0, 0):.2f}ms")
-                
-                # Visual bar chart for speedup (inline)
-                bar_width = 40
-                if speedup >= 1.0:
-                    filled = int(min(bar_width, (speedup - 1.0) / 4.0 * bar_width))
-                    bar = "█" * filled + "░" * (bar_width - filled)
-                else:
-                    filled = int(min(bar_width, (1.0 - speedup) / 0.5 * bar_width))
-                    bar = "░" * (bar_width - filled) + "█" * filled
-                
-                logger.info(f"        [{bar}] {speedup:.2f}x speedup")
                 
                 optimized_results.append({
                     'name': opt_name,
@@ -472,6 +477,18 @@ def profile_template(
                 all_metrics[f"{example_name}_{technique}_baseline_time"] = baseline_time
                 all_metrics[f"{example_name}_{technique}_optimized_time"] = optimized_time
                 all_metrics[f"{example_name}_{technique}_speedup"] = speedup
+
+                optimized_mean_for_row = optimized_time if optimized_timing else None
+                example_rows.append(
+                    build_perf_row(
+                        opt_name,
+                        optimized_mean_for_row,
+                        optimized_timing,
+                        optimized_throughput,
+                        speedup,
+                        optimized_result.memory,
+                    )
+                )
                 
             except Exception as e:
                 error_msg = str(e)
@@ -482,6 +499,8 @@ def profile_template(
                     logger.error(f"Failed: {error_msg}")
                 continue
         
+        render_example_table(example_name, example_rows)
+
         # Summary for this example
         if optimized_results:
             summary_data.append({

@@ -12,7 +12,8 @@ if str(repo_root) not in sys.path:
 
 import torch
 import torch.nn as nn
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import autocast
+from torch.cuda.amp import GradScaler
 
 from common.python.compile_utils import enable_tf32
 from common.python.benchmark_harness import Benchmark, BenchmarkConfig
@@ -80,7 +81,7 @@ class OptimizedFP8Benchmark(Benchmark):
         self.inputs = self.inputs.to(torch.float32)
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01)
         self.criterion = nn.MSELoss()
-        self.scaler = GradScaler()
+        self.scaler = GradScaler(enabled=False)
 
         for _ in range(5):
             self._train_step()
@@ -92,7 +93,7 @@ class OptimizedFP8Benchmark(Benchmark):
         assert self.optimizer and self.criterion and self.scaler is not None
         self.optimizer.zero_grad(set_to_none=True)
         fp8_inputs = fake_fp8_cast(self.inputs)
-        with autocast(device_type="cuda", dtype=torch.float16):
+        with autocast("cuda", dtype=torch.float16):
             outputs = self.model(fp8_inputs)
             loss = self.criterion(outputs, self.targets)
         self.scaler.scale(loss).backward()

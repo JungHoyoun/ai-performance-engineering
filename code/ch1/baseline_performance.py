@@ -20,10 +20,7 @@ try:
 except ImportError:
     pass
 
-try:
-    from common.python.compile_utils import compile_model  # Local helper applies TF32 + torch.compile defaults.
-except ImportError:
-    compile_model = lambda m, **kwargs: m
+from common.python.compile_utils import compile_model  # Local helper applies TF32 + torch.compile defaults.
 
 from typing import Optional
 
@@ -44,6 +41,14 @@ def resolve_device() -> torch.device:
     except Exception as exc:
         print(f"WARNING: CUDA unavailable or unsupported ({exc}); falling back to CPU.")
         return torch.device("cpu")
+
+
+def _should_use_compile(device: torch.device) -> bool:
+    """Grace-Blackwell currently trips torch.compile for this benchmark; fall back to eager there."""
+    if device.type != "cuda":
+        return False
+    major, _ = torch.cuda.get_device_capability(device.index or 0)
+    return major < 12
 
 
 class BaselinePerformanceBenchmark(Benchmark):
@@ -69,13 +74,13 @@ class BaselinePerformanceBenchmark(Benchmark):
             torch.nn.Linear(256, 10),
         )
         
-        if self.device.type == "cuda":
-            try:
-                self.model = compile_model(self.model.to(self.device), mode="reduce-overhead", fullgraph=False, dynamic=False)
-            except Exception as exc:
-                print(f"WARNING: GPU initialization failed: {exc}. Falling back to CPU.")
-                self.device = torch.device("cpu")
-                self.model = self.model.cpu()
+        if _should_use_compile(self.device):
+            self.model = compile_model(
+                self.model.to(self.device),
+                mode="reduce-overhead",
+                fullgraph=False,
+                dynamic=False,
+            )
         else:
             self.model = self.model.to(self.device)
         
@@ -140,14 +145,16 @@ class BaselinePerformanceBenchmark(Benchmark):
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.microbatches is None:
+        if not self.microbatches:
             return "Data not initialized"
-        # Check that model can produce valid output
+        # Use the first microbatch as a validation probe so we avoid allocating
+        # an additional tensor up front.
+        probe = self.microbatches[0]
         try:
             with torch.no_grad():
-                test_output = self.model(self.data)
-                if test_output.shape[0] != self.data.shape[0]:
-                    return f"Output shape mismatch: expected batch_size={self.data.shape[0]}, got {test_output.shape[0]}"
+                test_output = self.model(probe)
+                if test_output.shape[0] != probe.shape[0]:
+                    return f"Output shape mismatch: expected batch_size={probe.shape[0]}, got {test_output.shape[0]}"
                 if test_output.shape[1] != 10:
                     return f"Output shape mismatch: expected num_classes=10, got {test_output.shape[1]}"
         except Exception as e:

@@ -44,6 +44,13 @@ class OptimizedQuantizationBenchmark(Benchmark):
         self.input = None
         self.output = None  # Store output for validation
         self.baseline_output = None  # Store baseline output for comparison
+        self.device_batches: list[torch.Tensor] = []
+        self.graph_input: Optional[torch.Tensor] = None
+        self.graph_output: Optional[torch.Tensor] = None
+        self.graph: Optional[torch.cuda.CUDAGraph] = None
+        self.batch_size = 4
+        self.sequence_length = 512
+        self.hidden_dim = 256
     
     def setup(self) -> None:
         """Setup: Initialize quantized model."""
@@ -61,7 +68,7 @@ class OptimizedQuantizationBenchmark(Benchmark):
         # This is the proper way to do quantization on CUDA, not CPU-only qint8
         from common.python.quantization_utils import quantize_model_to_fp8, get_quantization_dtype
         
-        hidden_dim = 256
+        hidden_dim = self.hidden_dim
         self.model = nn.MultiheadAttention(
             embed_dim=hidden_dim,
             num_heads=8,
@@ -71,7 +78,35 @@ class OptimizedQuantizationBenchmark(Benchmark):
         # Quantize model to FP8 for CUDA-native quantization
         self.model = quantize_model_to_fp8(self.model, self.device, precision='fp8')
         input_dtype = get_quantization_dtype('fp8')
-        self.input = torch.randn(4, 128, hidden_dim, device=self.device, dtype=input_dtype)
+        self.input = torch.randn(
+            self.batch_size,
+            self.sequence_length,
+            hidden_dim,
+            device=self.device,
+            dtype=input_dtype,
+        )
+        self.device_batches = [
+            torch.randn(
+                self.batch_size,
+                self.sequence_length,
+                hidden_dim,
+                device=self.device,
+                dtype=input_dtype,
+            )
+            for _ in range(6)
+        ]
+
+        self.graph_input = torch.empty_like(self.input)
+        self.graph_output = torch.empty_like(self.input)
+        self.graph = torch.cuda.CUDAGraph()
+        with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=True):
+            warmup_out, _ = self.model(self.graph_input, self.graph_input, self.graph_input)
+        self.graph_output.copy_(warmup_out)
+        torch.cuda.synchronize()
+        with torch.cuda.graph(self.graph):
+            with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=True):
+                out, _ = self.model(self.graph_input, self.graph_input, self.graph_input)
+            self.graph_output.copy_(out)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -86,20 +121,16 @@ class OptimizedQuantizationBenchmark(Benchmark):
 
         with nvtx_range("optimized_quantization", enable=enable_nvtx):
             with torch.no_grad():
-                # Optimization: FP8 Quantization on CUDA
-                # Uses FP8 quantized model (native CUDA support on GB10/H100+)
-                # FP8 provides 2x memory reduction vs FP16, 4x vs FP32
-                output, _ = self.model(self.input, self.input, self.input)
-                
-                # Store output for validation
-                self.output = output.detach().clone()
-                
-                # Optimization: FP8 Quantization benefits
-                # - Reduced memory usage (FP8: 2x vs FP16, 4x vs FP32)
-                # - Improved performance (faster FP8 computation on Tensor Cores)
-                # - Better memory bandwidth utilization (less data to transfer)
-                # - Native CUDA support (not CPU-only like qint8)
-                _ = output.sum()
+                if (
+                    self.graph is None
+                    or self.graph_input is None
+                    or self.graph_output is None
+                ):
+                    raise RuntimeError("Quantized graph not initialized")
+                for device_batch in self.device_batches:
+                    self.graph_input.copy_(device_batch)
+                    self.graph.replay()
+                    self.output = self.graph_output.detach()
 
     
     def teardown(self) -> None:
@@ -108,6 +139,10 @@ class OptimizedQuantizationBenchmark(Benchmark):
         self.input = None
         self.output = None
         self.baseline_output = None
+        self.device_batches = []
+        self.graph_input = None
+        self.graph_output = None
+        self.graph = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:

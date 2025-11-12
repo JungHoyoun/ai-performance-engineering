@@ -34,7 +34,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
-from ch10.workload_config import WORKLOAD, is_smoke_test
+from ch10.workload_config import WORKLOAD
 
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
@@ -75,9 +75,8 @@ class OptimizedTritonBenchmark(Benchmark):
         self.output = None
         self.use_triton = TRITON_AVAILABLE
         self.workload = WORKLOAD
-        self.smoke_test = is_smoke_test()
-        self.batch = self.workload.triton_batch_for_mode(self.smoke_test)
-        self.micro_batches = self.workload.triton_micro_batches_for_mode(self.smoke_test)
+        self.batch = self.workload.triton_batch_size
+        self.micro_batches = self.workload.triton_micro_batches
         self.hidden_dim = self.workload.hidden_dim
         self.ffn_dim = self.workload.ffn_dim
         self.total_rows = self.batch * self.micro_batches

@@ -8,6 +8,7 @@ Implements Benchmark protocol for harness integration.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -36,7 +37,6 @@ from common.python.benchmark_harness import (
     BenchmarkHarness,
     BenchmarkMode,
 )
-
 
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""

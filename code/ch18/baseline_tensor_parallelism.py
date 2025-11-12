@@ -9,7 +9,7 @@ from typing import List, Optional
 import torch
 
 from common.python.benchmark_harness import Benchmark, BenchmarkConfig
-from ch18.workload_config import WORKLOAD, is_smoke_test
+from ch18.workload_config import WORKLOAD
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -28,10 +28,9 @@ class BaselineTensorParallelismBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.workload = WORKLOAD
-        self.smoke_test = is_smoke_test()
         self.hidden_dim = self.workload.attention_hidden_dim
         self.batch_size = self.workload.attention_batch_size
-        self.sequence_length = self.workload.seq_len(self.smoke_test)
+        self.sequence_length = self.workload.attention_seq_len
         self.shards = self.workload.tensor_parallel_shards
         self.shard_dim = self.hidden_dim // self.shards
 

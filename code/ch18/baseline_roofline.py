@@ -9,7 +9,7 @@ from typing import Optional
 import torch
 
 from common.python.benchmark_harness import Benchmark, BenchmarkConfig
-from ch18.workload_config import WORKLOAD, is_smoke_test
+from ch18.workload_config import WORKLOAD
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -28,7 +28,6 @@ class BaselineRooflineBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.workload = WORKLOAD
-        self.smoke_test = is_smoke_test()
         self.matrix_size = self.workload.roofline_matmul_size
         self.tile = self.workload.roofline_tile
         self.activation: Optional[torch.Tensor] = None

@@ -314,6 +314,10 @@ now measures an actual speedup when cluster hardware is available.
 > `optimized_cluster_group_dram_partial_cluster_sync_no_dsmem_sm<arch>`, which keeps the same two-block cluster pipeline but materializes partial
 > results in DRAM between synchronization points. The benchmark harness now runs both binaries so you can compare the DSMEM-enabled path
 > to the DRAM-based cluster implementation on any GPU.
+> These fallbacks ship as standard `baseline_cluster_group_no_dsmem.py` /
+> `optimized_cluster_group_no_dsmem.py` pairs, so `python ch10/compare.py` (or
+> `python tools/testing/run_all_benchmarks.py --targets ch10:cluster_group_no_dsmem`)
+> exercises them just like every other example—no special-case build rules are required.
 >
 > **Driver compatibility:** CUDA 13.0 + driver 580.95 on GB10 sometimes drops cluster partners outside compute-sanitizer, triggering
 > `Thread block clusters unstable…` / `CUDA_EXCEPTION_17` from the binary. The Python wrappers detect this and mark the benchmark as

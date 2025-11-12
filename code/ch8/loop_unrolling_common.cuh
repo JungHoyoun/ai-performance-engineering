@@ -7,7 +7,12 @@ namespace ch8 {
 constexpr int kElementsPerRow = 512;
 constexpr int kWeightPeriod = 8;
 constexpr int kThreadsPerBlock = 256;
+constexpr int kRowsPerThread = 2;
+constexpr int kVectorWidth = 4;
 constexpr int kRedundantAccums = 16;
+constexpr int kThreadsPerGroup = 32;
+constexpr int kRowPairsPerIter = kThreadsPerBlock / kThreadsPerGroup;
+static_assert(kThreadsPerBlock % kThreadsPerGroup == 0, "Block size must be a multiple of warp size");
 
 __global__ void loop_unrolling_naive_kernel(
     const float* __restrict__ inputs,
@@ -40,34 +45,80 @@ __global__ void loop_unrolling_optimized_kernel(
     const float* __restrict__ weights,
     float* __restrict__ output,
     int rows) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= rows) {
-        return;
-    }
-
     const int weight_mask = kWeightPeriod - 1;
-    const float* row_ptr = inputs + idx * kElementsPerRow;
-    float partial0 = 0.0f;
-    float partial1 = 0.0f;
-    float partial2 = 0.0f;
-    float partial3 = 0.0f;
+    extern __shared__ float smem[];
+    float* tile_row0 = smem;
+    float* tile_row1 = tile_row0 + kRowPairsPerIter * kElementsPerRow;
 
-    const auto* row_vec = reinterpret_cast<const float4*>(row_ptr);
+    const int group_id = threadIdx.x / kThreadsPerGroup;
+    const int group_lane = threadIdx.x % kThreadsPerGroup;
+
+    for (int block_row_base = blockIdx.x * kRowPairsPerIter * kRowsPerThread;
+         block_row_base < rows;
+         block_row_base += gridDim.x * kRowPairsPerIter * kRowsPerThread) {
+        const int row0 = block_row_base + group_id * kRowsPerThread;
+        if (row0 >= rows) {
+            continue;
+        }
+        const int row1 = row0 + 1;
+        const bool has_row1 = row1 < rows;
+
+        const float* row_ptr0 = inputs + row0 * kElementsPerRow;
+        const float* row_ptr1 = has_row1 ? row_ptr0 + kElementsPerRow : nullptr;
+
+        float* group_tile0 = tile_row0 + group_id * kElementsPerRow;
+        float* group_tile1 = tile_row1 + group_id * kElementsPerRow;
+
+        for (int idx = group_lane; idx < kElementsPerRow; idx += kThreadsPerGroup) {
+            group_tile0[idx] = row_ptr0[idx];
+            if (has_row1) {
+                group_tile1[idx] = row_ptr1[idx];
+            }
+        }
+        unsigned warp_mask = __activemask();
+        __syncwarp(warp_mask);
+
+        float thread_accum0 = 0.0f;
+        float thread_accum1 = 0.0f;
+        for (int idx = group_lane; idx < kElementsPerRow; idx += kThreadsPerGroup) {
+            const float weight = weights[idx & weight_mask];
+            const float mul0 = group_tile0[idx] * weight;
 #pragma unroll
-    for (int k = 0; k < kElementsPerRow; k += 4) {
-        const float4 values = row_vec[k / 4];
-        partial0 = fmaf(values.x, weights[(k + 0) & weight_mask], partial0);
-        partial1 = fmaf(values.y, weights[(k + 1) & weight_mask], partial1);
-        partial2 = fmaf(values.z, weights[(k + 2) & weight_mask], partial2);
-        partial3 = fmaf(values.w, weights[(k + 3) & weight_mask], partial3);
-    }
+            for (int repeat = 0; repeat < kRedundantAccums; ++repeat) {
+                thread_accum0 = fmaf(mul0, 1.0f / static_cast<float>(kRedundantAccums), thread_accum0);
+            }
+            if (has_row1) {
+                const float mul1 = group_tile1[idx] * weight;
+#pragma unroll
+                for (int repeat = 0; repeat < kRedundantAccums; ++repeat) {
+                    thread_accum1 = fmaf(mul1, 1.0f / static_cast<float>(kRedundantAccums), thread_accum1);
+                }
+            }
+        }
 
-    const float sum = (partial0 + partial1) + (partial2 + partial3);
-    output[idx] = sum;
+        for (int offset = kThreadsPerGroup / 2; offset > 0; offset >>= 1) {
+            thread_accum0 += __shfl_down_sync(warp_mask, thread_accum0, offset, kThreadsPerGroup);
+            if (has_row1) {
+                thread_accum1 += __shfl_down_sync(warp_mask, thread_accum1, offset, kThreadsPerGroup);
+            }
+        }
+
+        if (group_lane == 0) {
+            output[row0] = thread_accum0;
+            if (has_row1) {
+                output[row1] = thread_accum1;
+            }
+        }
+        __syncwarp(warp_mask);
+    }
 }
 
 inline dim3 loop_unrolling_grid(int rows) {
-    return dim3((rows + kThreadsPerBlock - 1) / kThreadsPerBlock);
+    const int row_pairs = (rows + kRowsPerThread - 1) / kRowsPerThread;
+    int blocks = (row_pairs + kRowPairsPerIter - 1) / kRowPairsPerIter;
+    blocks = max(blocks, 1);
+    const int max_blocks = 4096;
+    return dim3(min(blocks, max_blocks));
 }
 
 inline void launch_loop_unrolling_baseline(
@@ -89,7 +140,10 @@ inline void launch_loop_unrolling_optimized(
     float* output,
     int rows,
     cudaStream_t stream) {
-    loop_unrolling_optimized_kernel<<<loop_unrolling_grid(rows), kThreadsPerBlock, 0, stream>>>(
+    const size_t shared_bytes =
+        sizeof(float) *
+        (2 * kRowPairsPerIter * kElementsPerRow);
+    loop_unrolling_optimized_kernel<<<loop_unrolling_grid(rows), kThreadsPerBlock, shared_bytes, stream>>>(
         inputs,
         weights,
         output,

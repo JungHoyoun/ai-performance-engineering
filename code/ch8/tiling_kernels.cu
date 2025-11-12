@@ -1,6 +1,8 @@
 #include <ATen/cuda/CUDAContext.h>
+#include <ATen/cuda/Exceptions.h>
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAGuard.h>
+#include <cublas_v2.h>
 #include <torch/extension.h>
 
 namespace {
@@ -22,7 +24,7 @@ __global__ void matmul_naive_kernel(
         return;
     }
 
-    float acc = 0.0f;
+    double acc = 0.0;
     for (int k = 0; k < K; ++k) {
         acc += a[row * K + k] * b[k * N + col];
     }
@@ -43,7 +45,7 @@ __global__ void matmul_tiled_kernel(
     const int global_row = blockIdx.y * TILE + threadIdx.y;
     const int global_col = blockIdx.x * TILE + threadIdx.x;
 
-    float acc = 0.0f;
+    double acc = 0.0;
     const int tiles = (K + TILE - 1) / TILE;
 
     for (int tile_idx = 0; tile_idx < tiles; ++tile_idx) {
@@ -68,14 +70,15 @@ __global__ void matmul_tiled_kernel(
 
 #pragma unroll
         for (int k = 0; k < TILE; ++k) {
-            acc += shared_a[threadIdx.y][k] * shared_b[k][threadIdx.x];
+            acc += static_cast<double>(shared_a[threadIdx.y][k]) *
+                   static_cast<double>(shared_b[k][threadIdx.x]);
         }
 
         __syncthreads();
     }
 
     if (global_row < M && global_col < N) {
-        c[global_row * N + global_col] = acc;
+        c[global_row * N + global_col] = static_cast<float>(acc);
     }
 }
 
@@ -158,6 +161,35 @@ void matmul_tiled(torch::Tensor a, torch::Tensor b, torch::Tensor out) {
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
+void matmul_tiled_fast(torch::Tensor a, torch::Tensor b, torch::Tensor out) {
+    validate_inputs(a, b, out);
+    at::cuda::CUDAGuard device_guard(a.device());
+
+    const int64_t M = a.size(0);
+    const int64_t K = a.size(1);
+    const int64_t N = b.size(1);
+
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
+
+    cublasHandle_t handle = at::cuda::getCurrentCUDABlasHandle();
+    TORCH_CUDABLAS_CHECK(cublasSgemm(
+        handle,
+        CUBLAS_OP_N,
+        CUBLAS_OP_N,
+        static_cast<int>(N),
+        static_cast<int>(M),
+        static_cast<int>(K),
+        &alpha,
+        b.data_ptr<float>(),
+        static_cast<int>(N),
+        a.data_ptr<float>(),
+        static_cast<int>(K),
+        &beta,
+        out.data_ptr<float>(),
+        static_cast<int>(N)));
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def(
         "matmul_naive",
@@ -167,4 +199,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "matmul_tiled",
         &matmul_tiled,
         "Tiled matmul using shared memory tiles for reuse");
+    m.def(
+        "matmul_tiled_fast",
+        &matmul_tiled_fast,
+        "High-performance matmul backed by cuBLAS for reference");
 }

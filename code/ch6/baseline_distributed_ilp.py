@@ -19,7 +19,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
-from ch6.workload_config import WORKLOAD, is_smoke_test
+from ch6.workload_config import WORKLOAD
 
 
 def resolve_device() -> torch.device:
@@ -37,9 +37,8 @@ class BaselineDistributedILPBenchmark(Benchmark):
         self.input = None
         self.output = None
         self.workload = WORKLOAD
-        self.smoke_test = is_smoke_test()
-        self.N = self.workload.distributed_elements_for_mode(self.smoke_test)
-        self.micro_chunks = self.workload.distributed_chunks_for_mode(self.smoke_test)
+        self.N = self.workload.distributed_elements
+        self.micro_chunks = self.workload.distributed_micro_chunks
         self._scale = 1.1
         self._bias = 0.5
    

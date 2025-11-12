@@ -43,9 +43,10 @@ class OptimizedDisaggregatedMemoryBenchmark(Benchmark):
         self.transfer_event = None
         self.kv_cache_host = None
         self.decode_buffer = None
-        self.hidden_dim = 256
-        self.prefill_tokens = 2048
-        self.decode_tokens = 128
+        self.hidden_dim = 1536
+        self.prefill_tokens = 4096
+        self.decode_tokens = 256
+        self.repeats = 6
     
     def setup(self) -> None:
         """Setup: Initialize separate models with disaggregated memory."""
@@ -106,17 +107,18 @@ class OptimizedDisaggregatedMemoryBenchmark(Benchmark):
         with nvtx_range("disaggregated_memory", enable=enable_nvtx):
             with torch.no_grad():
                 # Prefill and decode run on dedicated streams so transfers overlap compute
-                with torch.cuda.stream(self.prefill_stream):
-                    prefill_output = self.prefill_model(self.prefill_input)
-                    newest = prefill_output[-self.decode_tokens:].contiguous()
-                    self.kv_cache_host.copy_(newest, non_blocking=True)
-                    self.transfer_event.record(self.prefill_stream)
+                for _ in range(self.repeats):
+                    with torch.cuda.stream(self.prefill_stream):
+                        prefill_output = self.prefill_model(self.prefill_input)
+                        newest = prefill_output[-self.decode_tokens:].contiguous()
+                        self.kv_cache_host.copy_(newest, non_blocking=True)
+                        self.transfer_event.record(self.prefill_stream)
 
-                with torch.cuda.stream(self.decode_stream):
-                    self.decode_stream.wait_event(self.transfer_event)
-                    self.decode_buffer.copy_(self.kv_cache_host, non_blocking=True)
-                    decode_tokens = self.decode_buffer + self.decode_input
-                    self.output = self.decode_model(decode_tokens)
+                    with torch.cuda.stream(self.decode_stream):
+                        self.decode_stream.wait_event(self.transfer_event)
+                        self.decode_buffer.copy_(self.kv_cache_host, non_blocking=True)
+                        decode_tokens = self.decode_buffer + self.decode_input
+                        self.output = self.decode_model(decode_tokens)
 
             torch.cuda.synchronize()
 

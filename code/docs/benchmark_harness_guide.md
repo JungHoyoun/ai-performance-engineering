@@ -54,7 +54,7 @@ ch*/baseline_*.py  →  ch*/optimized_*.py
 
 **Result**: Run **264 benchmarks** across **20 chapters** with a single command:
 ```bash
-python tools/cli/benchmark_cli.py all
+python tools/cli/benchmark_cli.py run
 ```
 
 ---
@@ -400,7 +400,7 @@ class MyBenchmark(BaseBenchmark):
 
 **Single command**:
 ```bash
-python tools/cli/benchmark_cli.py all
+python tools/cli/benchmark_cli.py run
 ```
 
 **What happens**:
@@ -504,7 +504,7 @@ with self._nvtx_range("my_operation"):
 ### Example 1: Run Single Chapter
 
 ```bash
-python tools/cli/benchmark_cli.py ch13
+python tools/cli/benchmark_cli.py run --targets ch13
 ```
 
 **Result**: Runs all 23 benchmarks in Chapter 13 (PyTorch Profiling), compares baseline vs optimized, generates report.
@@ -512,7 +512,7 @@ python tools/cli/benchmark_cli.py ch13
 ### Example 2: Reproducible Run
 
 ```bash
-python tools/cli/benchmark_cli.py all --reproducible
+python tools/cli/benchmark_cli.py run --reproducible
 ```
 
 **Result**: All seeds set to 42, deterministic algorithms enabled, identical results across runs.
@@ -520,7 +520,7 @@ python tools/cli/benchmark_cli.py all --reproducible
 ### Example 3: Extended Timeouts for Slow Systems
 
 ```bash
-python tools/cli/benchmark_cli.py all --timeout-multiplier 2.0
+python tools/cli/benchmark_cli.py run --timeout-multiplier 2.0
 ```
 
 **Result**: All timeouts doubled (30s → 60s setup, 15s → 30s measurement, etc.).
@@ -528,7 +528,7 @@ python tools/cli/benchmark_cli.py all --timeout-multiplier 2.0
 ### Example 4: Cold Start Measurements
 
 ```bash
-python tools/cli/benchmark_cli.py all --cold-start
+python tools/cli/benchmark_cli.py run --cold-start
 ```
 
 **Result**: GPU state reset between benchmarks, additional cleanup, cold start performance measurements.
@@ -536,7 +536,7 @@ python tools/cli/benchmark_cli.py all --cold-start
 ### Example 5: Profiling Disabled (Faster Runs)
 
 ```bash
-python tools/cli/benchmark_cli.py all --no-profile
+python tools/cli/benchmark_cli.py run --no-profile
 ```
 
 **Result**: Timing-only runs (no nsys/ncu/PyTorch profiler), faster execution, still collects timing and memory stats.
@@ -648,4 +648,3 @@ The `BenchmarkHarness` is a **production-grade benchmarking framework** that:
 8. **Ensures reproducibility** with seed management and manifest capture
 
 **The result**: A single command runs the entire benchmark suite, producing comprehensive performance analysis, profiling data, and comparison reports - enabling systematic performance engineering at scale.
-

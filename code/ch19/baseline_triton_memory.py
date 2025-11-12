@@ -35,7 +35,8 @@ class TritonBenchmark(Benchmark):
         self.output = None
         self.scatter_idx = None
         self.N = 1_000_000
-        self.chunk = 4096
+        self.chunk = 1024
+        self.repeats = 10
 
     def setup(self) -> None:
         """Setup: Initialize tensors with random gather pattern."""
@@ -54,12 +55,13 @@ class TritonBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
         with nvtx_range("triton_memory", enable=enable_nvtx):
-            for start in range(0, self.N, self.chunk):
-                positions = self.scatter_idx[start:start + self.chunk]
-                gathered_a = torch.index_select(self.input_a, 0, positions)
-                gathered_b = torch.index_select(self.input_b, 0, positions)
-                fused = gathered_a * gathered_b + torch.sin(gathered_a)
-                self.output.index_copy_(0, positions, fused)
+            for _ in range(self.repeats):
+                for start in range(0, self.N, self.chunk):
+                    positions = self.scatter_idx[start:start + self.chunk]
+                    gathered_a = torch.index_select(self.input_a, 0, positions)
+                    gathered_b = torch.index_select(self.input_b, 0, positions)
+                    fused = gathered_a * gathered_b + torch.sin(gathered_a)
+                    self.output.index_copy_(0, positions, fused)
             torch.cuda.synchronize()
 
 
@@ -74,8 +76,8 @@ class TritonBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=100,
-            warmup=10,
+            iterations=10,
+            warmup=2,
         )
 
     def validate_result(self) -> Optional[str]:

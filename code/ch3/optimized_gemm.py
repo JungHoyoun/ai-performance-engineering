@@ -56,7 +56,7 @@ class OptimizedGemmBenchmark(Benchmark):
         else:
             self.fn = fused
 
-        with torch.cuda.amp.autocast(dtype=torch.float16):
+        with torch.autocast("cuda", dtype=torch.float16):
             for _ in range(3):
                 _ = self.fn(self.left, self.right, self.epilogue)
         torch.cuda.synchronize()
@@ -69,7 +69,7 @@ class OptimizedGemmBenchmark(Benchmark):
         assert self.left is not None and self.right is not None and self.epilogue is not None
         op = self.fn
         with nvtx_range("optimized_gemm", enable=enable_nvtx):
-            with torch.cuda.amp.autocast(dtype=torch.float16):
+            with torch.autocast("cuda", dtype=torch.float16):
                 _ = op(self.left, self.right, self.epilogue)
 
     def teardown(self) -> None:

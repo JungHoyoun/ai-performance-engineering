@@ -35,6 +35,7 @@ from common.python.benchmark_harness import (
     BenchmarkHarness,
     BenchmarkMode
 )
+from common.python.compile_utils import compile_model
 
 
 def resolve_device() -> torch.device:
@@ -84,7 +85,12 @@ class OptimizedAllTechniquesBenchmark(Benchmark):
             self.model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device).half().eval()
             
             # Compile model for fusion
-            self.model = torch.compile(self.model, mode="reduce-overhead", fullgraph=False, dynamic=False)
+            self.model = compile_model(
+                self.model,
+                mode="reduce-overhead",
+                fullgraph=False,
+                dynamic=False,
+            )
             # Warmup to trigger compilation and catch errors early
             test_input = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float16)
             for _ in range(3):

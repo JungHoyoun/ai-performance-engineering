@@ -42,7 +42,6 @@ class SyntheticDataset(Dataset):
     def __init__(self, num_samples: int = 1000, feature_dim: int = 1024):
         self.num_samples = num_samples
         self.feature_dim = feature_dim
-        # Generate data upfront (simulating disk I/O)
         self.data = torch.randn(num_samples, feature_dim)
         self.labels = torch.randint(0, 10, (num_samples,))
     
@@ -50,8 +49,10 @@ class SyntheticDataset(Dataset):
         return self.num_samples
     
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
-        # Simulate some processing overhead
-        return self.data[idx], self.labels[idx]
+        sample = self.data[idx]
+        enriched = torch.tanh(sample * 1.1) + torch.sin(sample * 0.5)
+        normalized = enriched - enriched.mean()
+        return normalized, self.labels[idx]
 
 class SimpleModel(nn.Module):
     """Simple model for training demonstration."""
@@ -84,6 +85,7 @@ class OptimizedDataloaderTunedBenchmark(Benchmark):
         self.batch_size = 32
         self.feature_dim = 1024
         self._data_iter: Optional[Iterator] = None
+        self._next_batch: Optional[tuple[torch.Tensor, torch.Tensor]] = None
     
     def setup(self) -> None:
         """Setup: Initialize model and optimized DataLoader."""
@@ -96,17 +98,8 @@ class OptimizedDataloaderTunedBenchmark(Benchmark):
             enable_tf32()
         torch.manual_seed(42)
         
-        # Compile model for better performance
-        model = SimpleModel(input_dim=self.feature_dim).to(self.device)
-        major, minor = torch.cuda.get_device_capability(self.device)
-        compile_safe = major < 12  # CUDA 12.1 (Blackwell) hits torch.compile crashes
-        if compile_safe:
-            try:
-                self.model = torch.compile(model, mode="reduce-overhead")
-            except Exception:
-                self.model = model
-        else:
-            self.model = model
+        # Keep the model in eager mode so data pipeline overlap dominates the benchmark.
+        self.model = SimpleModel(input_dim=self.feature_dim).to(self.device)
         
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01)
         self.criterion = nn.CrossEntropyLoss()
@@ -127,21 +120,11 @@ class OptimizedDataloaderTunedBenchmark(Benchmark):
             persistent_workers=True,  # Keep workers alive
         )
         self._data_iter = iter(self.dataloader)
+        self._next_batch: Optional[tuple[torch.Tensor, torch.Tensor]] = None
         
-        # Warmup: run a couple of full steps so torch.compile + DataLoader overlap settle.
-        for i, (data, labels) in enumerate(self.dataloader):
-            if i >= 2:
-                break
-            # Data already on GPU (pin_memory + async transfer)
-            data = data.to(self.device, non_blocking=True)  # Non-blocking transfer
-            labels = labels.to(self.device, non_blocking=True)
-            self.optimizer.zero_grad(set_to_none=True)
-            outputs = self.model(data)
-            loss = self.criterion(outputs, labels)
-            loss.backward()
-            self.optimizer.step()
-        torch.cuda.synchronize()
-        self._data_iter = iter(self.dataloader)
+        # Warmup a few iterations to prime worker pool and the prefetch queue.
+        self._prime_iterator(steps=3)
+        self._next_batch = self._prefetch_next_batch()
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - optimized DataLoader with overlapping."""
@@ -155,16 +138,10 @@ class OptimizedDataloaderTunedBenchmark(Benchmark):
 
         with nvtx_range("dataloader_default", enable=enable_nvtx):
             # Process one batch (optimized DataLoader: overlapped loading)
-            if self._data_iter is None:
-                self._data_iter = iter(self.dataloader)
-            try:
-                data, labels = next(self._data_iter)
-            except StopIteration:
-                self._data_iter = iter(self.dataloader)
-                data, labels = next(self._data_iter)
-            data = data.to(self.device, non_blocking=True)  # Non-blocking transfer
-            labels = labels.to(self.device, non_blocking=True)
-            
+            if self._next_batch is None:
+                self._next_batch = self._prefetch_next_batch()
+            data, labels = self._next_batch
+            self._next_batch = self._prefetch_next_batch()
             self.optimizer.zero_grad()
             outputs = self.model(data)
             loss = self.criterion(outputs, labels)
@@ -183,7 +160,33 @@ class OptimizedDataloaderTunedBenchmark(Benchmark):
                     pass
         del self.model, self.dataloader, self.optimizer, self.criterion
         self._data_iter = None
+        self._next_batch = None
         torch.cuda.empty_cache()
+    
+    def _prime_iterator(self, steps: int = 2) -> None:
+        if self._data_iter is None:
+            self._data_iter = iter(self.dataloader)
+        for _ in range(steps):
+            batch = self._prefetch_next_batch()
+            self.optimizer.zero_grad(set_to_none=True)
+            outputs = self.model(batch[0])
+            loss = self.criterion(outputs, batch[1])
+            loss.backward()
+            self.optimizer.step()
+        torch.cuda.synchronize()
+        self._data_iter = iter(self.dataloader)
+    
+    def _prefetch_next_batch(self) -> tuple[torch.Tensor, torch.Tensor]:
+        if self._data_iter is None:
+            self._data_iter = iter(self.dataloader)
+        try:
+            data, labels = next(self._data_iter)
+        except StopIteration:
+            self._data_iter = iter(self.dataloader)
+            data, labels = next(self._data_iter)
+        data = data.to(self.device, non_blocking=True)
+        labels = labels.to(self.device, non_blocking=True)
+        return data, labels
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""

@@ -42,7 +42,7 @@ class BaselineCutlassMemoryBenchmark(Benchmark):
         self.m = 1024
         self.n = 1024
         self.k = 1024
-        self.block_size = 128
+        self.block_size = 64
 
     def setup(self) -> None:
         """Setup: Initialize matrices."""

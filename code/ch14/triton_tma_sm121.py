@@ -44,6 +44,11 @@ import triton.language as tl
 from typing import Tuple
 import time
 
+from common.python.hardware_capabilities import (
+    detect_capabilities,
+    ensure_tma_box_supported,
+)
+
 # Import architecture configuration
 try:
     from arch_config import configure_optimizations
@@ -54,24 +59,42 @@ except ImportError:
 
 def check_sm121_support() -> Tuple[bool, str]:
     """Check if running on GB10 with TMA support."""
-    if not torch.cuda.is_available():
+    cap = detect_capabilities()
+    if cap is None:
         return False, "CUDA not available"
-    
-    props = torch.cuda.get_device_properties(0)
-    cc = f"{props.major}.{props.minor}"
-    
-    # Skip known-unsupported combo: current Triton does not emit tensormap ops for SM 12.1
-    if props.major == 12 and props.minor == 1:
-        return False, "TMA TensorMap instructions not yet supported on SM 12.1 (GB10)"
-    
-    # Blackwell (SM 10.0) is the validated target for these kernels
-    if props.major == 10 and props.minor == 0:
-        return True, f"TMA supported (SM {cc})"
-    
-    if props.major >= 9:
-        return False, f"TMA kernels require Blackwell SM 10.0; detected SM {cc}"
-    else:
-        return False, f"TMA requires SM 9.0+, found SM {cc}"
+    if cap.sm_version != "sm_121":
+        return False, f"Requires Grace-Blackwell GB10 (sm_121); detected {cap.sm_version}"
+    if not cap.tma_supported:
+        return False, "TMA hardware unavailable on this GPU"
+    if not cap.tma_compiler_supported:
+        return False, (
+            "TMA TensorMap instructions are disabled by this CUDA toolkit/driver "
+            "(see README Platform Caveats)."
+        )
+    try:
+        ensure_tma_box_supported((256,), capability=cap, description="GB10 Triton tutorial tile")
+    except RuntimeError as exc:
+        return False, str(exc)
+    return True, f"TMA supported on {cap.device_name}"
+
+
+def _get_tma_limits():
+    cap = detect_capabilities()
+    return cap.tma_limits if cap else None
+
+
+def _clamp_1d(default: int) -> int:
+    limits = _get_tma_limits()
+    if not limits or limits.max_1d_elements <= 0:
+        return default
+    return min(default, limits.max_1d_elements)
+
+
+def _clamp_2d(width: int, height: int) -> Tuple[int, int]:
+    limits = _get_tma_limits()
+    if not limits or limits.max_2d_width <= 0 or limits.max_2d_height <= 0:
+        return width, height
+    return min(width, limits.max_2d_width), min(height, limits.max_2d_height)
 
 
 # ============================================================================
@@ -119,7 +142,9 @@ def tma_copy_1d(src: torch.Tensor, dst: torch.Tensor) -> None:
     assert src.device == dst.device
     
     N = src.numel()
-    BLOCK_SIZE = 256
+    BLOCK_SIZE = _clamp_1d(256)
+    
+    ensure_tma_box_supported((BLOCK_SIZE,), description="Triton TMA copy block")
     
     grid = lambda meta: (triton.cdiv(N, BLOCK_SIZE),)
     tma_copy_1d_kernel[grid](src, dst, N, BLOCK_SIZE)
@@ -180,7 +205,9 @@ def tma_vector_add(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     assert a.is_contiguous() and b.is_contiguous()
     
     N = a.numel()
-    BLOCK_SIZE = 256
+    BLOCK_SIZE = _clamp_1d(256)
+    
+    ensure_tma_box_supported((BLOCK_SIZE,), description="Triton TMA vector add block")
     
     c = torch.empty_like(a)
     
@@ -271,7 +298,11 @@ def tma_gemm_conservative(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
     assert K == K2
     
     # Conservative configuration
-    BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 32
+    BLOCK_M, BLOCK_N = _clamp_2d(64, 64)
+    BLOCK_K = _clamp_1d(32)
+    
+    ensure_tma_box_supported((BLOCK_M, BLOCK_K), description="Triton TMA GEMM A tile")
+    ensure_tma_box_supported((BLOCK_K, BLOCK_N), description="Triton TMA GEMM B tile")
     
     C = torch.empty((M, N), device=A.device, dtype=torch.float32)
     

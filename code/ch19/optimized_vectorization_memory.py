@@ -15,8 +15,11 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 import torch
+import torch.nn as nn
 
 from typing import Optional
+
+from common.torch_compile_safe import safe_compile
 
 from common.python.benchmark_harness import (
     Benchmark,
@@ -29,6 +32,20 @@ def resolve_device() -> torch.device:
         raise RuntimeError("CUDA required for ch19")
     return torch.device("cuda")
 
+class VectorizedTransform(nn.Module):
+    """Fused vectorized transform that processes all lanes simultaneously."""
+
+    def __init__(self, vector_width: int):
+        super().__init__()
+        self.vector_width = vector_width
+        self.register_buffer("scale", torch.ones(1, vector_width))
+        self.register_buffer("bias", torch.zeros(1, vector_width))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        fused = torch.nn.functional.silu(x * self.scale + self.bias)
+        return fused
+
+
 class OptimizedVectorizationMemoryBenchmark(Benchmark):
     """Optimized: Memory operations with vectorization."""
     
@@ -38,8 +55,11 @@ class OptimizedVectorizationMemoryBenchmark(Benchmark):
         self.output = None
         self.weights = None
         self.bias = None
-        self.vector_width = 32
-        self.num_rows = 32_768
+        self.transform = None
+        self.transform_compiled: Optional[nn.Module] = None
+        self.vector_width = 64
+        self.num_rows = 65_536
+        self.repeats = 8
     
     def setup(self) -> None:
         """Setup: Initialize tensors for vectorized operations."""
@@ -59,6 +79,14 @@ class OptimizedVectorizationMemoryBenchmark(Benchmark):
         self.output = torch.empty_like(self.data)
         self.weights = torch.randn(1, self.vector_width, device=self.device, dtype=torch.float16)
         self.bias = torch.randn(1, self.vector_width, device=self.device, dtype=torch.float16)
+        self.transform = VectorizedTransform(self.vector_width).to(self.device).half()
+        self.transform.scale.copy_(self.weights)
+        self.transform.bias.copy_(self.bias)
+        self.transform_compiled = safe_compile(
+            self.transform,
+            mode="reduce-overhead",
+            timeout=120,
+        )
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -72,10 +100,14 @@ class OptimizedVectorizationMemoryBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
         with nvtx_range("vectorization_memory", enable=enable_nvtx):
-            with torch.cuda.amp.autocast(dtype=torch.float16):
-                fused = self.data * self.weights + self.bias
-                fused = torch.nn.functional.silu(fused)
-                self.output.copy_(fused)
+            if self.transform_compiled is None:
+                raise RuntimeError(
+                    "SKIPPED: optimized_vectorization_memory requires torch.compile support."
+                )
+            with torch.autocast("cuda", dtype=torch.float16):
+                for _ in range(self.repeats):
+                    fused = self.transform_compiled(self.data)
+                    self.output.copy_(fused)
             torch.cuda.synchronize()
             
     # Vectorized operations process multiple elements per instruction
@@ -89,12 +121,14 @@ class OptimizedVectorizationMemoryBenchmark(Benchmark):
         self.output = None
         self.weights = None
         self.bias = None
+        self.transform = None
+        self.transform_compiled = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=100,
+            iterations=50,
             warmup=10,
         )
     

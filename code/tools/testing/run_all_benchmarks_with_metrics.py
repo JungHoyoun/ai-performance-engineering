@@ -9,7 +9,7 @@ This script:
 5. Identifies benchmarks that need fixing
 
 Usage:
-    python run_all_benchmarks_with_metrics.py [--chapter ch1|all]
+    python tools/testing/run_all_benchmarks_with_metrics.py [--targets chX chY:example]
 """
 
 import sys
@@ -18,7 +18,7 @@ import json
 import argparse
 import subprocess
 import tempfile
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Set
 from datetime import datetime
 from dataclasses import dataclass
 
@@ -39,6 +39,7 @@ from tools.testing.run_all_benchmarks import (
     ensure_cuda_executables_built, reset_cuda_state,
     format_time_ms
 )
+from tools.verification.verify_all_benchmarks import resolve_target_chapters
 
 
 @dataclass
@@ -521,8 +522,8 @@ def test_cuda_pair_with_metrics(
     return status
 
 
-def test_chapter_with_metrics(chapter_dir: Path) -> List[BenchmarkStatus]:
-    """Test all benchmarks in a chapter with full metric tracking."""
+def test_chapter_with_metrics(chapter_dir: Path, example_filters: Optional[Set[str]] = None) -> List[BenchmarkStatus]:
+    """Test benchmarks in a chapter with full metric tracking."""
     dump_environment_and_capabilities()
     
     chapter_name = chapter_dir.name
@@ -556,11 +557,17 @@ def test_chapter_with_metrics(chapter_dir: Path) -> List[BenchmarkStatus]:
     # Discover Python benchmarks
     print(f"  Discovering Python benchmarks...", flush=True)
     python_pairs = discover_benchmarks(chapter_dir)
-    print(f"  Found {len(python_pairs)} Python benchmark pair(s)")
+    if example_filters:
+        python_pairs = [pair for pair in python_pairs if pair[2] in example_filters]
+        print(f"  Filtered to {len(python_pairs)} Python benchmark pair(s)")
+    else:
+        print(f"  Found {len(python_pairs)} Python benchmark pair(s)")
     
     # Discover CUDA benchmarks
     print(f"  Discovering CUDA benchmarks...", flush=True)
     cuda_pairs = discover_cuda_benchmarks(chapter_dir)
+    if example_filters:
+        cuda_pairs = [pair for pair in cuda_pairs if pair[2] in example_filters]
     if cuda_pairs:
         print(f"  Found {len(cuda_pairs)} CUDA benchmark pair(s)")
         ensure_cuda_executables_built(chapter_dir)
@@ -686,9 +693,12 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
-        '--chapter',
-        type=str,
-        help='Chapter to test (e.g., ch1) or "all" (default: all)'
+        '--targets',
+        nargs='+',
+        help=("Space-separated list of targets. "
+              "Use 'ch3' to test an entire chapter or 'ch3:resnet_50' "
+              "to run baseline_resnet_50 and optimized_resnet_50. "
+              "Omit this flag (or pass 'all') to run every chapter.")
     )
     parser.add_argument(
         '--output',
@@ -716,13 +726,11 @@ def main():
     print()
     
     # Determine chapters to test
-    if args.chapter and args.chapter != 'all':
-        chapter_dirs = [repo_root / args.chapter]
-    else:
-        chapter_dirs = sorted([
-            d for d in repo_root.iterdir()
-            if d.is_dir() and d.name.startswith('ch') and d.name[2:].isdigit()
-        ])
+    try:
+        chapter_dirs, chapter_filters = resolve_target_chapters(args.targets)
+    except (ValueError, FileNotFoundError) as exc:
+        print(f"ERROR: {exc}")
+        sys.exit(1)
     
     # Test all chapters
     all_statuses = []
@@ -730,7 +738,8 @@ def main():
         if not chapter_dir.exists():
             continue
         
-        statuses = test_chapter_with_metrics(chapter_dir)
+        example_filters = chapter_filters.get(chapter_dir.name)
+        statuses = test_chapter_with_metrics(chapter_dir, example_filters=example_filters)
         all_statuses.extend(statuses)
     
     # Generate table

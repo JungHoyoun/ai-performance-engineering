@@ -19,7 +19,7 @@ import torch.nn as nn
 
 from typing import Optional, Tuple
 
-from common.python.compile_utils import enable_tf32
+from common.python.compile_utils import enable_tf32, compile_model
 from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
@@ -115,11 +115,11 @@ class OptimizedExpertParallelismBenchmark(Benchmark):
             self.device, dtype=torch.bfloat16
         )
         moe.eval()
-        try:
-            moe = torch.compile(moe, mode="reduce-overhead")
-            self.compiled = True
-        except Exception:
-            self.compiled = False
+        moe = compile_model(
+            moe,
+            mode="reduce-overhead",
+        )
+        self.compiled = True
         self.model = moe
 
         self.input_tokens = torch.randn(
@@ -141,7 +141,7 @@ class OptimizedExpertParallelismBenchmark(Benchmark):
             raise RuntimeError("Model/input not initialized")
 
         with nvtx_range("optimized_expert_parallelism", enable=enable_nvtx):
-            with torch.no_grad(), torch.cuda.amp.autocast(dtype=torch.bfloat16):
+            with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
                 _ = self.model(self.input_tokens)
         torch.cuda.synchronize()
 

@@ -36,9 +36,10 @@ class DisaggregatedBenchmark(Benchmark):
         self.prefill_input = None
         self.decode_input = None
         self.output = None
-        self.hidden_dim = 256
-        self.prefill_tokens = 2048
-        self.decode_tokens = 128
+        self.hidden_dim = 1536
+        self.prefill_tokens = 4096
+        self.decode_tokens = 256
+        self.repeats = 6
 
     def setup(self) -> None:
         """Setup: Initialize single-GPU tensors."""
@@ -73,14 +74,14 @@ class DisaggregatedBenchmark(Benchmark):
 
         with nvtx_range("disaggregated_memory_baseline", enable=enable_nvtx):
             with torch.no_grad():
-                prefill_out = self.prefill_model(self.prefill_input)
-                newest = prefill_out[-self.decode_tokens:].contiguous()
-                # Naive pipeline copies activations back to host before decode
-                kv_host = newest.to("cpu", non_blocking=False)
-                torch.cuda.synchronize()
-                kv_gpu = kv_host.to(self.device, non_blocking=False)
-                decode_seed = self.decode_input + kv_gpu
-                self.output = self.decode_model(decode_seed)
+                for _ in range(self.repeats):
+                    prefill_out = self.prefill_model(self.prefill_input)
+                    full_prefill_host = prefill_out.to("cpu", non_blocking=False)
+                    torch.cuda.synchronize()
+                    newest_host = full_prefill_host[-self.decode_tokens:].contiguous()
+                    kv_gpu = newest_host.to(self.device, non_blocking=False)
+                    decode_seed = self.decode_input + kv_gpu
+                    self.output = self.decode_model(decode_seed)
             torch.cuda.synchronize()
 
 

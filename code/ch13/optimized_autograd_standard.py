@@ -8,7 +8,6 @@ Implements Benchmark protocol for harness integration.
 
 from __future__ import annotations
 
-import logging
 import sys
 from pathlib import Path
 
@@ -27,10 +26,7 @@ except ImportError:
     pass  # Continue if arch_config not available
 from typing import Optional
 
-from common.python.compile_utils import (
-    enable_tf32,
-    is_torch_compile_supported_on_device,
-)
+from common.python.compile_utils import enable_tf32
 from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
@@ -62,84 +58,62 @@ class SimpleModel(nn.Module):
 
 
 class OptimizedAutogradCompiledBenchmark(Benchmark):
-    """Compiled autograd - uses torch.compile."""
+    """Autograd accelerated with CUDA graphs to remove launch overhead."""
     
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
-        self.inputs = None
-        self.targets = None
-        self.optimizer = None
-        self.criterion = None
+        self.model: Optional[nn.Module] = None
+        self.inputs: Optional[torch.Tensor] = None
+        self.targets: Optional[torch.Tensor] = None
+        self.optimizer: Optional[torch.optim.Optimizer] = None
+        self.criterion: Optional[nn.Module] = None
         self.batch_size = 32
         self.hidden_dim = 1024
-        self._compiled = False
-        self._logger = logging.getLogger(__name__)
+        self.graph: Optional[torch.cuda.CUDAGraph] = None
+        self.capture_stream: Optional[torch.cuda.Stream] = None
+        self.static_input: Optional[torch.Tensor] = None
+        self.static_target: Optional[torch.Tensor] = None
+        self.input_pool: list[torch.Tensor] = []
+        self.target_pool: list[torch.Tensor] = []
+        self.pool_index = 0
     
     def setup(self) -> None:
-        """Setup: Initialize compiled model and data."""
-        
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        """Setup training step, capture it with CUDA graphs."""
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
-            # Enable TF32 for faster matmul on Ampere+ GPUs
             enable_tf32()
         torch.manual_seed(42)
         
-        # Compile model for optimized autograd
-        model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device).half().train()
-        support_ok, support_reason = is_torch_compile_supported_on_device(self.device.index)
-        self._compiled = False
-
-        if not support_ok and support_reason:
-            self._logger.warning(
-                "torch.compile is missing native SASS for this GPU (%s); continuing with PTX JIT fallback.",
-                support_reason,
-            )
-
-        # Wrap torch.compile in try-except to handle compilation failures gracefully
-        try:
-            self.model = torch.compile(model, mode='reduce-overhead')  # Optimize backward pass
-            self._compiled = True
-            # Warmup to trigger compilation and catch errors early
-            test_input = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float16)
-            test_target = torch.randn_like(test_input)
-            for _ in range(2):
-                self.model.zero_grad(set_to_none=True)
-                output = self.model(test_input)
-                loss = (output - test_target).pow(2).mean()
-                loss.backward()
-            torch.cuda.synchronize()
-        except (RuntimeError, Exception) as e:
-            # Fallback to eager mode if compilation fails
-            error_msg = str(e)
-            if (
-                "generator" in error_msg.lower()
-                or "SavedTensorHooks" in error_msg
-                or "CppCompileError" in error_msg
-            ):
-                # Known PyTorch internal bugs - fall back to eager mode
-                self._logger.warning("torch.compile failed (%s); falling back to eager mode.", error_msg.splitlines()[0])
-                self.model = model
-                self._compiled = False
-            else:
-                # Re-raise unknown errors
-                raise
-
-        self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float16)
-        self.targets = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float16)
-        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01)
+        self.model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device).half().train()
+        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01, foreach=True)
         self.criterion = nn.MSELoss()
-        
-        # Warmup (includes compilation) - full train steps to cover backward graph
-        for _ in range(3):
-            self.optimizer.zero_grad(set_to_none=True)
-            outputs = self.model(self.inputs)
-            loss = self.criterion(outputs, self.targets)
-            loss.backward()
-            self.optimizer.step()
+
+        self.input_pool = [
+            torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float16)
+            for _ in range(8)
+        ]
+        self.target_pool = [torch.randn_like(inp) for inp in self.input_pool]
+        self.inputs = self.input_pool[0]
+        self.targets = self.target_pool[0]
+
+        # Warmup a few eager steps before capture.
+        for idx in range(3):
+            self._train_step(self.input_pool[idx], self.target_pool[idx])
         torch.cuda.synchronize()
+
+        # CUDA graph capture.
+        self.static_input = self.input_pool[0].clone()
+        self.static_target = self.target_pool[0].clone()
+        self.graph = torch.cuda.CUDAGraph()
+        self.capture_stream = torch.cuda.Stream()
+        with torch.cuda.stream(self.capture_stream):
+            for _ in range(2):
+                self._train_step(self.static_input, self.static_target)
+            torch.cuda.synchronize()
+            with torch.cuda.graph(self.graph, stream=self.capture_stream):
+                self._train_step(self.static_input, self.static_target)
+        self.capture_stream.synchronize()
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - compiled autograd."""
@@ -152,24 +126,37 @@ class OptimizedAutogradCompiledBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
+        if self.graph is None or self.static_input is None or self.static_target is None:
+            raise RuntimeError("CUDA graph not initialized")
+
+        current_input = self.input_pool[self.pool_index]
+        current_target = self.target_pool[self.pool_index]
+        self.pool_index = (self.pool_index + 1) % len(self.input_pool)
+
         with nvtx_range("autograd_standard", enable=enable_nvtx):
-            self.optimizer.zero_grad()
-            outputs = self.model(self.inputs)
-            loss = self.criterion(outputs, self.targets)
-            loss.backward()  # Compiled backward pass
-            self.optimizer.step()
+            self.static_input.copy_(current_input)
+            self.static_target.copy_(current_target)
+            self.graph.replay()
+        torch.cuda.synchronize(self.device)
+
+    def _train_step(self, batch: torch.Tensor, target: torch.Tensor) -> None:
+        assert self.model is not None and self.optimizer is not None and self.criterion is not None
+        self.optimizer.zero_grad(set_to_none=True)
+        outputs = self.model(batch)
+        loss = self.criterion(outputs, target)
+        loss.backward()
+        self.optimizer.step()
 
     def teardown(self) -> None:
         """Cleanup."""
         del self.model, self.inputs, self.targets, self.optimizer, self.criterion
+        self.graph = None
+        self.static_input = None
+        self.static_target = None
+        self.capture_stream = None
+        self.input_pool = []
+        self.target_pool = []
         torch.cuda.empty_cache()
-        if self._compiled:
-            try:
-                import torch._dynamo as _dynamo  # type: ignore
-                _dynamo.reset()
-            except Exception:
-                pass
-            self._compiled = False
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""

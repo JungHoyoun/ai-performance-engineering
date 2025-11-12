@@ -55,6 +55,7 @@ from torch.nn.attention.flex_attention import (
 )
 from typing import Optional, Tuple
 import time
+from common.python.compile_utils import compile_callable, compile_model
 
 # Check for FP8 support
 try:
@@ -72,25 +73,15 @@ else:
     _flex_attention_wrapper = None
 
 
-if _flex_attention_wrapper is not None and hasattr(torch, "compile"):
-    try:
-        _FLEX_ATTENTION_FN = torch.compile(
-            _flex_attention_wrapper,
-            mode="reduce-overhead",
-            fullgraph=True,
-            dynamic=True,
-        )
-    except Exception:  # pragma: no cover - fallback to eager flex
-        _FLEX_ATTENTION_FN = _flex_attention_wrapper
+if _flex_attention_wrapper is not None:
+    _FLEX_ATTENTION_FN = compile_callable(
+        _flex_attention_wrapper,
+        mode="reduce-overhead",
+        fullgraph=True,
+        dynamic=True,
+    )
 else:
-    _FLEX_ATTENTION_FN = _flex_attention_wrapper
-
-if (
-    _FLEX_ATTENTION_FN is _flex_attention_wrapper
-    and flex_attention is not None
-    and hasattr(flex_attention, "_FLEX_ATTENTION_DISABLE_COMPILE_DEBUG")
-):
-    flex_attention._FLEX_ATTENTION_DISABLE_COMPILE_DEBUG = True
+    _FLEX_ATTENTION_FN = None
 
 
 # ============================================================================
@@ -414,7 +405,7 @@ class BlackwellInferencePipeline:
         # Compile model with torch.compile (PyTorch 2.9)
         if compile:
             print("Compiling model with torch.compile...")
-            self.model = torch.compile(
+            self.model = compile_model(
                 self.model,
                 mode="max-autotune",
                 fullgraph=False,
@@ -424,7 +415,7 @@ class BlackwellInferencePipeline:
                     "triton.cudagraphs": True,
                     "triton.cudagraph_trees": True,
                     "max_autotune_gemm_backends": "TRITON,CUTLASS,ATen",
-                }
+                },
             )
             print(" Model compiled")
         
@@ -583,7 +574,7 @@ def compare_inference_methods():
     
     # 3. Compiled
     print("\n3. With torch.compile")
-    compiled_layer = torch.compile(layer, mode="reduce-overhead")
+    compiled_layer = compile_model(layer, mode="reduce-overhead")
     # Warmup
     for _ in range(5):
         _ = compiled_layer(hidden_states)

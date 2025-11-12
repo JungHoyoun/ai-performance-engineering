@@ -53,7 +53,7 @@ except Exception:
 import torch
 import torch.nn as nn
 
-from common.python.compile_utils import enable_tf32
+from common.python.compile_utils import enable_tf32, compile_model
 
 try:
     from torch.nn.attention.flex_attention import flex_attention, create_block_mask
@@ -547,10 +547,12 @@ def run_workload(
         else:
             raise
 
-    compiled_model = None
     if not skip_compile and eager_result is not None:
+        compiled_model = compile_model(
+            model,
+            mode=compile_mode,
+        )
         try:
-            compiled_model = torch.compile(model, mode=compile_mode)
             compiled_result = benchmark_model(
                 compiled_model,
                 x,
@@ -560,10 +562,10 @@ def run_workload(
                 precision_ctx_factory,
             )
         except RuntimeError as exc:
-            if "out of memory" in str(exc).lower():
-                notes.append("Compiled: OOM")
-            else:
-                notes.append(f"Compiled: failure ({exc})")
+            message = str(exc).lower()
+            if "out of memory" in message:
+                raise RuntimeError("SKIPPED: compiled benchmark OOM") from exc
+            raise
         finally:
             del compiled_model
 

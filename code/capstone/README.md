@@ -98,10 +98,10 @@ cores fed while the naive kernel stalls on global memory.
 `capstone/scenario_benchmark.py` composes the chapter benchmarks into a single
 BenchmarkHarness-driven storyline. Every scenario defines a list of phases (each
 phase maps to the canonical `baseline_*` / `optimized_*` module inside the
-chapter directories). The harness automatically enables smoke-test scale by
-setting `BENCHMARK_SMOKE_TEST=1`, keeps NVTX off for baselines, and turns it on
-for optimized runs. Results are logged phase-by-phase so you can see which
-chapters executed (or were skipped due to hardware constraints).
+chapter directories). The harness always runs the canonical benchmark scale,
+keeps NVTX off for baselines, and turns it on for optimized runs. Results are
+logged phase-by-phase so you can see which chapters executed (or were skipped
+due to hardware constraints).
 
 Run any scenario directly:
 
@@ -113,8 +113,8 @@ python capstone/optimized_01_system_foundations.py
 Or via the unified CLI:
 
 ```bash
-python tools/cli/benchmark_cli.py capstone --example baseline_01_system_foundations
-python tools/cli/benchmark_cli.py capstone --example optimized_01_system_foundations
+python tools/cli/benchmark_cli.py run --targets capstone
+python tools/cli/benchmark_cli.py run --targets capstone:01_system_foundations
 ```
 
 | Scenario | Baseline entry | Optimized entry | Chapters |

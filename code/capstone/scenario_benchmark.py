@@ -4,9 +4,8 @@ This module provides a reusable Benchmark implementation that stitches
 baseline/optimized examples from every chapter into a single narrative run.
 Each scenario defines a list of chapter phases (baseline + optimized), and the
 CapstoneScenarioBenchmark executes them sequentially using the shared
-BenchmarkHarness.  Every phase runs in smoke-test scale by default so the
-entire storyline can execute on a single developer workstation while still
-exercising the real benchmark code paths.
+BenchmarkHarness.  Every phase runs at the canonical benchmark scale so the
+storyline reflects the exact workloads used for expectation tracking.
 """
 
 from __future__ import annotations
@@ -44,7 +43,6 @@ from common.python.benchmark_harness import (  # noqa: E402  (after sys.path)
 )
 
 
-SMOKE_FLAG = "BENCHMARK_SMOKE_TEST"
 DEFAULT_PHASE_ITERATIONS = 16
 DEFAULT_PHASE_TIMEOUT_S = 120
 
@@ -597,20 +595,6 @@ def _load_benchmark(module_path: str):
     return benchmark
 
 
-@contextmanager
-def _smoke_mode(enabled: bool = True):
-    previous = os.environ.get(SMOKE_FLAG)
-    if enabled:
-        os.environ[SMOKE_FLAG] = "1"
-    try:
-        yield
-    finally:
-        if previous is None:
-            os.environ.pop(SMOKE_FLAG, None)
-        else:
-            os.environ[SMOKE_FLAG] = previous
-
-
 class CapstoneScenarioBenchmark(BaseBenchmark):
     """Benchmark wrapper that executes a sequence of chapter phases."""
 
@@ -652,10 +636,9 @@ class CapstoneScenarioBenchmark(BaseBenchmark):
                 pass
 
     def benchmark_fn(self) -> None:
-        with _smoke_mode(True):
-            for spec in self._phase_specs:
-                with self._nvtx_range(f"capstone_{spec.name}"):
-                    self._run_phase(spec)
+        for spec in self._phase_specs:
+            with self._nvtx_range(f"capstone_{spec.name}"):
+                self._run_phase(spec)
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         self._scenario_total_ms = sum(

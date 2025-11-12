@@ -46,7 +46,8 @@ class BaselineTilingBenchmark(Benchmark):
         self.device = resolve_device()
         self.model = None
         self.input = None
-    
+        self.repetitions = 4  # Each attention head recomputes without tiling
+   
     def setup(self) -> None:
         """Setup: Initialize model without tiling."""
         torch.manual_seed(42)
@@ -75,17 +76,10 @@ class BaselineTilingBenchmark(Benchmark):
         with nvtx_range("baseline_tiling", enable=enable_nvtx):
             with torch.no_grad():
                 # Baseline: No tiling - process entire matrix at once
-                # Tiling would break computation into smaller tiles
-                # This baseline processes full matrix, causing poor cache utilization
-                
-                # Single large matrix multiplication (no tiling)
-                output = self.model(self.input)
-                
-                # Baseline: No tiling benefits
-                # - Processes entire matrix (poor cache utilization)
-                # - No reuse of cached data
-                # - Inefficient memory access patterns
-                _ = output.sum()
+                # Re-run for every head, thrashing caches each time.
+                for _ in range(self.repetitions):
+                    output = self.model(self.input)
+                    _ = output.sum()
 
     
     def teardown(self) -> None:

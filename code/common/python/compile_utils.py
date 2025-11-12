@@ -8,14 +8,13 @@ import threading
 import warnings
 from collections import defaultdict
 from functools import lru_cache
-from typing import Any, Dict, Optional, Tuple, cast
+from typing import Any, Callable, Dict, Optional, Tuple, TypeVar, cast
 
 import torch
 
 logger = logging.getLogger(__name__)
 
 _LEGACY_TF32_PATCHED = False
-_COMPILE_WARNED = False
 
 
 def _patch_legacy_tf32_attributes() -> None:
@@ -124,7 +123,46 @@ def get_optimal_compile_mode(preferred_mode: str = "max-autotune", sm_threshold:
         return "reduce-overhead"
 
 
-def compile_model(module: torch.nn.Module, **_: Any) -> torch.nn.Module:
+_CallableT = TypeVar("_CallableT", bound=Callable[..., Any])
+
+
+def _get_torch_compile() -> Callable[..., Any]:
+    compile_fn = getattr(torch, "compile", None)
+    if compile_fn is None:  # pragma: no cover - depends on PyTorch build
+        raise RuntimeError("SKIPPED: torch.compile is unavailable in this PyTorch build.")
+    return compile_fn
+
+
+_ALLOWED_COMPILE_KWARGS = {"fullgraph", "dynamic", "backend", "options", "disable"}
+
+
+def _normalize_compile_kwargs(kwargs: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
+    extra: Dict[str, Any] = dict(kwargs)  # defensive copy so callers can reuse dicts
+    preferred_mode = extra.pop("mode", "max-autotune")
+    chosen_mode = get_optimal_compile_mode(preferred_mode)
+    filtered = {key: value for key, value in extra.items() if key in _ALLOWED_COMPILE_KWARGS}
+    return chosen_mode, filtered
+
+
+def compile_callable(fn: _CallableT, **kwargs: Any) -> _CallableT:
+    """
+    Compile an arbitrary callable with torch.compile and propagate failures.
+
+    Parameters mirror torch.compile's kwargs, plus ``mode`` which defaults to
+    ``max-autotune`` but is automatically downgraded via ``get_optimal_compile_mode``.
+    """
+    compile_fn = _get_torch_compile()
+    chosen_mode, extra = _normalize_compile_kwargs(kwargs)
+    try:
+        compiled = compile_fn(fn, mode=chosen_mode, **extra)
+    except Exception as exc:  # pragma: no cover - propagate compile failures
+        raise RuntimeError(
+            f"torch.compile failed in compile_callable (mode={chosen_mode}): {exc}"
+        ) from exc
+    return cast(_CallableT, compiled)
+
+
+def compile_model(module: torch.nn.Module, **kwargs: Any) -> torch.nn.Module:
     """
     Compile a module with torch.compile when available.
 
@@ -132,35 +170,12 @@ def compile_model(module: torch.nn.Module, **_: Any) -> torch.nn.Module:
     Unknown keyword arguments are ignored intentionally to preserve backwards
     compatibility with chapter-specific wrappers.
     """
-    compile_fn = getattr(torch, "compile", None)
-    if compile_fn is None:
-        return module
-
     if getattr(module, "_is_compiled_benchmark_module", False):
         return module
 
-    mode = _.get("mode", "max-autotune")
-    fullgraph = _.get("fullgraph", False)
-    dynamic = _.get("dynamic", False)
-    options = _.get("options")
-
-    chosen_mode = get_optimal_compile_mode(mode)
-    try:
-        compiled = compile_fn(
-            module,
-            mode=chosen_mode,
-            fullgraph=fullgraph,
-            dynamic=dynamic,
-            options=options,
-        )
-        setattr(compiled, "_is_compiled_benchmark_module", True)
-        return compiled
-    except Exception as exc:
-        global _COMPILE_WARNED
-        if not _COMPILE_WARNED:
-            logger.warning("torch.compile failed (falling back to eager): %s", exc)
-            _COMPILE_WARNED = True
-        return module
+    compiled = compile_callable(module, **kwargs)
+    setattr(compiled, "_is_compiled_benchmark_module", True)
+    return compiled
 
 
 def enable_tf32(

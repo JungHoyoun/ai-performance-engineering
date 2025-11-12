@@ -41,8 +41,8 @@ class BenchmarkDefaults:
     execution_mode: Optional[str] = None
     
     # Reproducibility defaults
-    deterministic: bool = False
-    seed: Optional[int] = None
+    deterministic: bool = True
+    seed: Optional[int] = 1337
     
     # Timeout defaults (in seconds)
     setup_timeout_seconds: Optional[int] = 30

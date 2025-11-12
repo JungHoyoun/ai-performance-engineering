@@ -19,7 +19,7 @@ import torch.nn as nn
 
 from typing import Optional
 
-from common.python.compile_utils import enable_tf32
+from common.python.compile_utils import enable_tf32, compile_model
 from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
@@ -88,50 +88,28 @@ class OptimizedModelCompiledBenchmark(Benchmark):
         vocab_size = 10000
         
         model = SimpleTransformer().to(self.device).eval()
-        self.model = model  # Store reference for fallback
+        self.model = model
         
-        # Compile model with optimal settings
-        try:
-            self.compiled_model = torch.compile(
-                model, 
-                mode="reduce-overhead", 
-                fullgraph=False,
-                dynamic=False
-            )
-        except Exception as e:
-            # Fallback to eager if compilation fails
-            self.compiled_model = model
+        self.compiled_model = compile_model(
+            model,
+            mode="reduce-overhead",
+            fullgraph=False,
+            dynamic=False,
+        )
         
         self.input_ids = torch.randint(0, vocab_size, (batch_size, seq_len), device=self.device)
         
         # Warmup (compilation happens here)
-        # Catch PyTorch internal errors (e.g., C++ compilation failures in inductor)
-        try:
-            for _ in range(30):
-                with torch.no_grad():
-                    _ = self.compiled_model(self.input_ids)
-            torch.cuda.synchronize()
-            
-            # Additional warmup after compilation
-            for _ in range(10):
-                with torch.no_grad():
-                    _ = self.compiled_model(self.input_ids)
-            torch.cuda.synchronize()
-        except (RuntimeError, Exception) as e:
-            # PyTorch internal errors (e.g., inductor C++ compilation failures)
-            # Fall back to eager mode if compilation/warmup fails
-            error_msg = str(e)
-            if "CppCompileError" in error_msg or "torch._inductor" in error_msg or "SavedTensorHooks" in error_msg:
-                # Known PyTorch internal bugs - fall back to eager mode
-                self.compiled_model = self.model
-                # Run a simple warmup with eager mode
-                for _ in range(5):
-                    with torch.no_grad():
-                        _ = self.compiled_model(self.input_ids)
-                torch.cuda.synchronize()
-            else:
-                # Re-raise unknown errors
-                raise
+        for _ in range(30):
+            with torch.no_grad():
+                _ = self.compiled_model(self.input_ids)
+        torch.cuda.synchronize()
+        
+        # Additional warmup after compilation
+        for _ in range(10):
+            with torch.no_grad():
+                _ = self.compiled_model(self.input_ids)
+        torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Function to benchmark."""

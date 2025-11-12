@@ -105,7 +105,7 @@ class OptimizedTensorParallelismBenchmark(Benchmark):
         outputs: List[Optional[torch.Tensor]] = [None] * len(self.shard_modules)
 
         with nvtx_range("optimized_tensor_parallelism", enable=enable_nvtx):
-            with torch.no_grad(), torch.cuda.amp.autocast(dtype=torch.bfloat16):
+            with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
                 for idx, (module, shard_input, stream) in enumerate(zip(self.shard_modules, chunks, self.streams)):
                     target_device = next(module.parameters()).device
                     with torch.cuda.stream(stream):

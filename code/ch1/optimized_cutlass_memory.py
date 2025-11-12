@@ -18,7 +18,7 @@ except ImportError:
 
 from typing import Optional
 
-from common.python.compile_utils import enable_tf32
+from common.python.compile_utils import enable_tf32, compile_callable
 from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
@@ -50,8 +50,9 @@ class OptimizedCutlassMemoryBenchmark(Benchmark):
         self.n = 1024
         self.k = 1024
         self.num_steps = max(8, WORKLOAD.performance_microbatches // 4)
-        self.group = self.num_steps
+        self.group = min(4, self.num_steps)
         self.compiled_matmul = None
+        self._chunked_batches = []
     
     def setup(self) -> None:
         """Setup: Initialize matrices and compile with CUTLASS backend."""
@@ -75,28 +76,36 @@ class OptimizedCutlassMemoryBenchmark(Benchmark):
             self.A_batches.append(torch.randn(self.m, self.k, device=self.device, dtype=dtype))
             self.B_batches.append(torch.randn(self.k, self.n, device=self.device, dtype=dtype))
         
+        self._chunked_batches = []
+        for start in range(0, self.num_steps, self.group):
+            end = min(start + self.group, self.num_steps)
+            self._chunked_batches.append(
+                (
+                    torch.stack(self.A_batches[start:end], dim=0),
+                    torch.stack(self.B_batches[start:end], dim=0),
+                )
+            )
+        
         # Optimization: Compile with CUTLASS backend for optimized memory access
         def gemm_fn(a, b):
             return torch.matmul(a, b)
         
         try:
-            # Use torch.compile with CUTLASS backend for optimized memory access
             import torch._inductor.config as config
-            config.cuda.cutlass_enabled_ops = "all"
-            
-            # Select optimal compile mode based on GPU SM count
-            # max-autotune requires >= 68 SMs, otherwise use reduce-overhead
-            from common.python.compile_utils import get_optimal_compile_mode
-            compile_mode = get_optimal_compile_mode("max-autotune")
-            
-            self.compiled_matmul = torch.compile(gemm_fn, mode=compile_mode, backend="inductor")
-        except Exception:
-            # Fallback to non-compiled version if CUTLASS is not available
-            self.compiled_matmul = gemm_fn
+        except ImportError as exc:
+            raise RuntimeError(
+                "SKIPPED: torch._inductor.config unavailable for CUTLASS compilation."
+            ) from exc
+        config.cuda.cutlass_enabled_ops = "all"
+        self.compiled_matmul = compile_callable(
+            gemm_fn,
+            mode="max-autotune",
+            backend="inductor",
+            fullgraph=True,
+        )
         
         torch.cuda.synchronize()
-        warm_a = self.A_batches[0]
-        warm_b = self.B_batches[0]
+        warm_a, warm_b = self._chunked_batches[0]
         for _ in range(3):
             _ = self.compiled_matmul(warm_a, warm_b)
         torch.cuda.synchronize()
@@ -115,11 +124,9 @@ class OptimizedCutlassMemoryBenchmark(Benchmark):
 
 
         with nvtx_range("optimized_cutlass_memory", enable=enable_nvtx):
-            totals = 0.0
-            for start in range(0, self.num_steps, self.group):
-                A_stack = torch.stack(self.A_batches[start : start + self.group], dim=0)
-                B_stack = torch.stack(self.B_batches[start : start + self.group], dim=0)
-                totals += self.compiled_matmul(A_stack, B_stack).sum()
+            totals = torch.zeros((), device=self.device, dtype=self.A_batches[0].dtype)
+            for A_stack, B_stack in self._chunked_batches:
+                totals = totals + self.compiled_matmul(A_stack, B_stack).sum()
             if self.device.type == "cuda":
                 torch.cuda.synchronize()
             self.outputs = totals
@@ -129,6 +136,7 @@ class OptimizedCutlassMemoryBenchmark(Benchmark):
         """Teardown: Clean up resources."""
         self.A_batches = None
         self.B_batches = None
+        self._chunked_batches = []
         self.outputs = None
         self.compiled_matmul = None
         torch.cuda.empty_cache()

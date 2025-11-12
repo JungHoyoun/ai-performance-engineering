@@ -26,6 +26,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn.functional as F
 from torch.nn.attention import sdpa_kernel, SDPBackend
+from common.python.compile_utils import compile_callable
 
 _ARCH_CFG = ArchitectureConfig()
 
@@ -59,9 +60,6 @@ import numpy as np
 import json
 import threading
 import queue
-
-HAS_TORCH_COMPILE = hasattr(torch, "compile")
-
 
 def is_cuda_usable() -> bool:
     """Return True when a CUDA device is present and supported (treat sm121 as valid)."""
@@ -102,17 +100,6 @@ def get_sdpa_context():
         return sdpa_kernel(list(PREFERRED_SDP_BACKENDS))
     except Exception:
         return nullcontext()
-
-
-def compile_callable(callable_obj, **kwargs):
-    """Compile a callable with torch.compile when available, falling back safely."""
-    if not HAS_TORCH_COMPILE:
-        return callable_obj
-    try:
-        return torch.compile(callable_obj, **kwargs)
-    except Exception as exc:
-        print(f"torch.compile fallback ({callable_obj.__class__.__name__}): {exc}")
-        return callable_obj
 
 
 def get_compute_dtype() -> torch.dtype:
@@ -459,13 +446,11 @@ class PrefillWorker:
         self.prefill_kernel = PrefillKernel(self.attention_layers, self.ffn_layers)
         self.prefill_kernel_compiled: Optional[torch.nn.Module] = None
         if self.config.compile_prefill:
-            compiled_kernel = compile_callable(
+            self.prefill_kernel_compiled = compile_callable(
                 self.prefill_kernel,
                 mode="reduce-overhead",
                 dynamic=True,
             )
-            if compiled_kernel is not self.prefill_kernel:
-                self.prefill_kernel_compiled = compiled_kernel
         
     def _create_attention_layers(self) -> nn.ModuleList:
         """Create attention layers for prefill."""
@@ -508,17 +493,7 @@ class PrefillWorker:
         )
         
         kernel = self.prefill_kernel_compiled or self.prefill_kernel
-        try:
-            _, key_states, value_states = kernel(x)
-        except Exception as exc:
-            if self.prefill_kernel_compiled is not None:
-                print(f"[PrefillWorker] torch.compile fallback to eager due to: {exc}")
-                self.prefill_kernel_compiled = None
-                if hasattr(torch, "_dynamo"):
-                    torch._dynamo.reset()
-                _, key_states, value_states = self.prefill_kernel(x)
-            else:
-                raise
+        _, key_states, value_states = kernel(x)
 
         kv_cache: Dict[str, torch.Tensor] = {}
         for idx, (key_state, value_state) in enumerate(zip(key_states, value_states)):
@@ -559,14 +534,12 @@ class DecodeWorker:
         self.decode_kernel = DecodeKernel(self.attention_layers, self.ffn_layers, self.lm_head)
         self.decode_kernel_compiled: Optional[torch.nn.Module] = None
         if self.config.compile_decode:
-            compiled_kernel = compile_callable(
+            self.decode_kernel_compiled = compile_callable(
                 self.decode_kernel,
                 mode="reduce-overhead",
                 fullgraph=True,
                 dynamic=False,
             )
-            if compiled_kernel is not self.decode_kernel:
-                self.decode_kernel_compiled = compiled_kernel
 
         # Seed with a random token for the first decode step.
         seed_token = torch.randint(0, self.vocab_size, (1,), device=self.device)
@@ -624,17 +597,7 @@ class DecodeWorker:
         token_embed = token_embed.to(device=self.device, dtype=self.compute_dtype)
 
         kernel = self.decode_kernel_compiled or self.decode_kernel
-        try:
-            logits, key_states, value_states = kernel(token_embed, self.kv_cache)
-        except Exception as exc:
-            if self.decode_kernel_compiled is not None:
-                print(f"[DecodeWorker] torch.compile fallback to eager due to: {exc}")
-                self.decode_kernel_compiled = None
-                if hasattr(torch, "_dynamo"):
-                    torch._dynamo.reset()
-                logits, key_states, value_states = self.decode_kernel(token_embed, self.kv_cache)
-            else:
-                raise
+        logits, key_states, value_states = kernel(token_embed, self.kv_cache)
         self.kv_cache = tuple((k, v) for k, v in zip(key_states, value_states))
 
         probs = torch.softmax(logits[0].float(), dim=-1)

@@ -11,6 +11,8 @@ try:
 except ImportError:  # pragma: no cover - torch always installed in benchmarks
     torch = None  # type: ignore[assignment]
 
+from common.python.hardware_capabilities import detect_capabilities
+
 # Global flag for forcing pipeline API (set via CLI flag, not env var)
 _force_pipeline: bool = False
 
@@ -26,20 +28,18 @@ def set_force_pipeline(force: bool) -> None:
 
 
 @lru_cache(maxsize=1)
-def _get_device_properties():
-    """Return current CUDA device properties or None if unavailable."""
-    if torch is None or not torch.cuda.is_available():
-        return None
-    device = torch.cuda.current_device()
-    return torch.cuda.get_device_properties(device)
-
-
 def _get_compute_capability() -> Tuple[int, int]:
     """Return (major, minor) compute capability, defaulting to (0, 0)."""
-    props = _get_device_properties()
-    if props is None:
+    cap = detect_capabilities()
+    if cap is None:
         return (0, 0)
-    return props.major, props.minor
+    parts = cap.compute_capability.split(".")
+    try:
+        major = int(parts[0])
+        minor = int(parts[1]) if len(parts) > 1 else 0
+    except ValueError:
+        major, minor = 0, 0
+    return major, minor
 
 
 def pipeline_support_status() -> Tuple[bool, str]:
@@ -59,12 +59,17 @@ def supports_cuda_pipeline_api() -> bool:
 
 def tma_support_status() -> Tuple[bool, str]:
     """Return (supported, reason) for Tensor Memory Accelerator availability."""
-    major, minor = _get_compute_capability()
-    if major == 0 and minor == 0:
+    cap = detect_capabilities()
+    if cap is None:
         return False, "CUDA device not available"
-    if major >= 9:
-        return True, f"compute capability {major}.{minor} (>= 9.0)"
-    return False, f"requires compute capability >= 9.0 (Hopper+), found {major}.{minor}"
+    if not cap.tma_supported:
+        return False, f"TMA unavailable on {cap.device_name} ({cap.compute_capability})"
+    if not cap.tma_compiler_supported:
+        return False, (
+            f"TMA instructions are disabled on {cap.device_name} ({cap.sm_version}); "
+            "CUDA 13.0 refuses tensormap operands for this architecture."
+        )
+    return True, f"{cap.device_name} ({cap.compute_capability}) exposes TMA"
 
 
 def supports_tensor_memory_accelerator() -> bool:
@@ -74,12 +79,17 @@ def supports_tensor_memory_accelerator() -> bool:
 
 def blackwell_tma_support_status() -> Tuple[bool, str]:
     """Return (supported, reason) for Blackwell-ready TMA pipelines."""
-    major, minor = _get_compute_capability()
-    if major == 0 and minor == 0:
+    cap = detect_capabilities()
+    if cap is None:
         return False, "CUDA device not available"
-    if major >= 12:
-        return True, f"compute capability {major}.{minor} (Blackwell/GB series)"
-    return False, f"requires compute capability >= 12.0 (Blackwell), found {major}.{minor}"
+    if cap.architecture not in {"blackwell", "blackwell_ultra", "grace_blackwell"}:
+        return False, f"requires Blackwell/Grace-Blackwell, found {cap.architecture}"
+    if not cap.tma_ready:
+        return False, (
+            f"{cap.device_name} ({cap.sm_version}) hardware supports TMA but the "
+            "current CUDA toolchain does not emit tcgen05/tensormap instructions."
+        )
+    return True, f"{cap.name} ({cap.compute_capability})"
 
 
 def pipeline_runtime_allowed() -> Tuple[bool, str]:

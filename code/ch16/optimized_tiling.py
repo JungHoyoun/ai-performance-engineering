@@ -65,8 +65,8 @@ class OptimizedTilingBenchmark(Benchmark):
         # Optimization: Use FP16 for faster computation - FAIL FAST if not supported
         if self.device.type != "cuda":
             raise RuntimeError("CUDA required for optimized_tiling benchmark")
-        self.model = self.model.half()
-        self.model.eval()
+        self.model = self.model.half().eval()
+        self.model = compile_model(self.model, mode="reduce-overhead")
         
         # Large input (will be processed with tiling) - FAIL FAST if model has no parameters
         params = list(self.model.parameters())
@@ -89,34 +89,9 @@ class OptimizedTilingBenchmark(Benchmark):
 
         with nvtx_range("optimized_tiling", enable=enable_nvtx):
             with torch.no_grad():
-                # Optimization: Tiling - process matrix in tiles
-                # Breaks computation into smaller tiles for better cache usage
-                # Improves memory access locality
-                
-                # Simulate tiled matrix multiplication
-                # In CUDA kernels, this would use explicit tile loading/storing
-                # For PyTorch, we demonstrate tiling concept through chunked processing
-                batch_size, input_dim = self.input.shape
-                output_dim = self.model.out_features
-                
-                # Process in tiles (tiling optimization)
-                # Use standard forward pass - PyTorch handles tiling internally
-                # For demonstration, we show the concept but use efficient implementation
                 output = self.model(self.input)
-                
-                # Note: In actual CUDA kernels, tiling would be explicit:
-                # - Load input tile to shared memory
-                # - Load weight tile to shared memory  
-                # - Compute partial result
-                # - Accumulate results
-                # PyTorch's matmul already uses optimized tiling internally
-                
-                # Optimization: Tiling benefits
-                # - Better cache utilization (smaller working set)
-                # - Improved memory access locality
-                # - Reduced cache misses
-                # - Better performance for large matrices
                 _ = output.sum()
+        torch.cuda.synchronize()
 
     
     def teardown(self) -> None:

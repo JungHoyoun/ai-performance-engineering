@@ -18,6 +18,8 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
+from common.python.compile_utils import compile_model
+
 from typing import Optional
 
 from common.python.benchmark_harness import (
@@ -69,10 +71,11 @@ class OptimizedRooflineBenchmark(Benchmark):
         self.device_input = host_activation.to(self.device, non_blocking=True)
         self.input = self.device_input
 
-        try:
-            self.compiled = torch.compile(self.model, mode="max-autotune", fullgraph=True)
-        except Exception:
-            self.compiled = self.model
+        self.compiled = compile_model(
+            self.model,
+            mode="max-autotune",
+            fullgraph=True,
+        )
 
         self.roofline_data = {
             "compute_bound": False,

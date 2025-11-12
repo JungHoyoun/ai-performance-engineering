@@ -37,7 +37,7 @@ import torch.nn as nn
 from torch.nn.attention.flex_attention import flex_attention, create_block_mask
 import time
 
-from common.python.compile_utils import enable_tf32
+from common.python.compile_utils import enable_tf32, compile_model
 
 assert torch.cuda.is_available(), "CUDA required for FlexAttention examples"
 _major, _minor = torch.cuda.get_device_capability()
@@ -220,31 +220,21 @@ def main():
     flex_correct = FlexAttentionCORRECT(window_size=512).cuda().eval()
     
     # CRITICAL: Compile the entire module
-    compile_issue_msg = None
-    correct_time = None
-    correct_speedup = None
-    try:
-        flex_correct_compiled = torch.compile(flex_correct, **COMPILE_KWARGS)
-        
-        correct_time = benchmark_attention(
-            flex_correct_compiled,
-            Q,
-            K,
-            V,
-            "FlexAttention (compiled)",
-            num_warmup=COMPILED_WARMUP,
-            num_iters=BASE_ITERS if QUICK_MODE else 200,
-        )
-        correct_speedup = baseline_time / correct_time
-        print(f"  vs Baseline: {correct_speedup:.2f}x {'' if correct_speedup >= 1.5 else ''}")
-    except Exception as err:
-        error_text = str(err)
-        if not _is_known_compile_failure(error_text):
-            raise
-        compile_issue_msg = _summarize_error_text(error_text)
-        print("  FlexAttention compiled path unavailable on this GPU/toolchain.")
-        print(f"  Reason: {compile_issue_msg}")
-        print("  Skipping compiled benchmark and speedup target.")
+    flex_correct_compiled = compile_model(
+        flex_correct,
+        **COMPILE_KWARGS,
+    )
+    correct_time = benchmark_attention(
+        flex_correct_compiled,
+        Q,
+        K,
+        V,
+        "FlexAttention (compiled)",
+        num_warmup=COMPILED_WARMUP,
+        num_iters=BASE_ITERS if QUICK_MODE else 200,
+    )
+    correct_speedup = baseline_time / correct_time
+    print(f"  vs Baseline: {correct_speedup:.2f}x {'' if correct_speedup >= 1.5 else ''}")
     
     # Results
     print("\n" + "=" * 80)
@@ -252,21 +242,13 @@ def main():
     print("=" * 80)
     print(f"Baseline SDPA:                 {baseline_time:.2f} ms (1.0x)")
     print(f"FlexAttention (not compiled):  {wrong_time:.2f} ms ({wrong_speedup:.2f}x)")
-    if correct_speedup is not None:
-        print(
-            f"FlexAttention (COMPILED):      {correct_time:.2f} ms ({correct_speedup:.2f}x) "
-            f"{'' if correct_speedup >= 1.5 else ''}"
-        )
-    else:
-        print("FlexAttention (COMPILED):      unavailable")
-        if compile_issue_msg:
-            print(f"  Details: {compile_issue_msg}")
+    print(
+        f"FlexAttention (COMPILED):      {correct_time:.2f} ms ({correct_speedup:.2f}x) "
+        f"{'' if correct_speedup >= 1.5 else ''}"
+    )
     print()
     
-    if correct_speedup is None:
-        print(" FlexAttention compiled kernel generation is currently unsupported here.")
-        print(" Consider upgrading PyTorch/Triton or GPU drivers once support lands.")
-    elif correct_speedup >= 2.0:
+    if correct_speedup >= 2.0:
         print(" EXCELLENT! Achieving 2x+ speedup!")
     elif correct_speedup >= 1.5:
         print(" GOOD! Meeting 1.5x+ speedup target!")

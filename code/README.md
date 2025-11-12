@@ -78,9 +78,9 @@ cp third_party/TransformerEngine/transformer_engine/pytorch/dist/transformer_eng
 
 ### Verify Installation
 1. `nvidia-smi` – confirm GPU visibility and driver ≥ 580.
-2. `python3 tools/verification/verify_all_benchmarks.py` – import & syntax check.
-3. Optional smoke pass:  
-   `python tools/cli/benchmark_cli.py ch1 --artifacts-dir ./artifacts --smoke-test`.
+2. `python tools/cli/benchmark_cli.py verify` – import & syntax check (runs every chapter by default; add `--targets ch3 --targets ch4:resnet_50` for scoped runs).
+3. Run a targeted benchmark suite when you're ready:  
+   `python tools/cli/benchmark_cli.py run --targets ch1 --artifacts-dir ./artifacts`.
 
 ### Repository Layout
 ```text
@@ -96,7 +96,7 @@ code/
 ### Workflow Checklist
 1. Define baseline/optimized pairs with shared workload configs.
 2. Warm up kernels and cache graph compilations before timing.
-3. Capture smoke runs for quick validation, then full runs for production numbers.
+3. Capture canonical runs for production numbers (tweak `--iterations/--warmup` only when experimenting).
 4. Record artifacts (`benchmark_test_results.json`/`.md`, logs) under timestamped folders.
 5. Run `tools/analysis/analyze_expectations.py` after capturing new artifacts.
 6. Document findings (speedup, throughput, applied optimizations) for reproducibility.
@@ -109,21 +109,21 @@ code/
 Recommended entry point for structured runs:
 ```bash
 # Full suite
-python tools/cli/benchmark_cli.py
+python tools/cli/benchmark_cli.py run
 
 # Single chapter
-python tools/cli/benchmark_cli.py ch12 --artifacts-dir ./artifacts
+python tools/cli/benchmark_cli.py run --targets ch12 --artifacts-dir ./artifacts
 
 # Custom options
-python tools/cli/benchmark_cli.py ch10 --timeout-multiplier 2.0 --reproducible --cold-start
-python tools/cli/benchmark_cli.py ch18 --profile  # collect Nsight/torch profiler traces
+python tools/cli/benchmark_cli.py run --targets ch10 --timeout-multiplier 2.0 --reproducible --cold-start
+python tools/cli/benchmark_cli.py run --targets ch18 --profile  # collect Nsight/torch profiler traces
 ```
 
 ### Legacy Runner / Targeted Examples
 `tools/testing/run_all_benchmarks.py` discovers every `baseline_*.py` file, pairs it with the matching optimized implementation, and emits PoB-friendly summaries.
 ```bash
-PYTHONPATH=. python tools/testing/run_all_benchmarks.py --chapter ch10 --only-examples cluster_group_no_dsmem
-PYTHONPATH=. python tools/testing/run_all_benchmarks.py --chapter all --timeout-multiplier 2.0
+PYTHONPATH=. python tools/testing/run_all_benchmarks.py --targets ch10:cluster_group_no_dsmem
+PYTHONPATH=. python tools/testing/run_all_benchmarks.py --targets all --timeout-multiplier 2.0
 ```
 Artifacts land under `artifacts/<timestamp>/<example>/results/benchmark_test_results.{json,md}` with manifests, configuration snapshots, and environment logs.
 
@@ -132,10 +132,10 @@ Artifacts land under `artifacts/<timestamp>/<example>/results/benchmark_test_res
 - `--reproducible` – force deterministic seeds and algorithms.
 - `--cold-start` – extra cleanup between benchmarks (includes garbage collection and CUDA context resets).
 - `--profile/--no-profile` – opt into Nsight/Torch tracing when needed.
-- `BENCHMARK_SMOKE_TEST=1` – shrink workloads via shared configs.
+- `--iterations`, `--warmup` – override the default 20/5 sampling when you need quicker local experiments.
 
 ### Reporting & Proof-of-Benefit
-1. Run the desired benchmarks (smoke or full) and stash artifacts.
+1. Run the desired benchmarks and stash artifacts.
 2. Invoke `python tools/analysis/analyze_expectations.py --artifacts-dir artifacts --output-csv reports/proof_of_benefit.csv` (or point `--output-csv` at another expectations report path).
 3. Review the generated CSV for any rows flagged as failed/regressed to identify benchmarks that slipped below their stored expectations.
 

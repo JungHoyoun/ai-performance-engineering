@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-import os
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -33,11 +32,6 @@ from common.python.benchmark_harness import (
 from ch13.kv_cache_workload import get_workload
 
 WORKLOAD = get_workload()
-SMOKE_ENV_FLAG = "BENCHMARK_SMOKE_TEST"
-
-
-def is_smoke_test() -> bool:
-    return os.environ.get(SMOKE_ENV_FLAG) == "1"
 
 
 def resolve_device() -> torch.device:
@@ -143,8 +137,7 @@ class BaselineKVCacheNaiveBenchmark(Benchmark):
         self.head_dim = self.workload.head_dim
         self.hidden_dim = self.workload.hidden_dim
         self.batch_size = self.workload.batch_size
-        self.smoke_test = is_smoke_test()
-        self.sequence_lengths = list(self.workload.lengths_for_mode(self.smoke_test))
+        self.sequence_lengths = list(self.workload.lengths())
     
     def setup(self) -> None:
         """Setup: Initialize model and KV cache."""

@@ -101,10 +101,7 @@ class OptimizedAttentionBenchmark(Benchmark):
             # Enable TF32 for faster matmul on Ampere+ GPUs
             enable_tf32()
         
-        try:
-            from common.python.compile_utils import compile_model
-        except ImportError:
-            compile_model = lambda m, **kwargs: m
+        from common.python.compile_utils import compile_model
         
         self.model = OptimizedAttention(hidden_dim=256, num_heads=8)
         

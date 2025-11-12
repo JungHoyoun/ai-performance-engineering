@@ -30,7 +30,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
-from ch6.workload_config import WORKLOAD, is_smoke_test
+from ch6.workload_config import WORKLOAD
 
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
@@ -47,12 +47,11 @@ class OptimizedAttentionILPBenchmark(Benchmark):
         self.out_proj = None
         self.input = None
         self.workload = WORKLOAD
-        self.smoke_test = is_smoke_test()
         self.batch = self.workload.attention_batch
         self.embed_dim = self.workload.attention_embed_dim
         self.num_heads = self.workload.attention_heads
         self.head_dim = self.embed_dim // self.num_heads
-        self.tokens = self.workload.attention_tokens_for_mode(self.smoke_test)
+        self.tokens = self.workload.attention_tokens
         self._last_sum = None
         self.streams = [torch.cuda.Stream() for _ in range(2)]
     

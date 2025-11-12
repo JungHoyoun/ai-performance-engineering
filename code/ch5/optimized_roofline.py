@@ -59,7 +59,7 @@ class OptimizedRooflineBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
         assert self.data is not None and self.weights is not None
         with nvtx_range("optimized_roofline", enable=enable_nvtx):
-            with torch.cuda.amp.autocast(dtype=torch.float16):
+            with torch.autocast("cuda", dtype=torch.float16):
                 _ = self.kernel(self.data, self.weights)
 
     def teardown(self) -> None:

@@ -48,7 +48,7 @@ class OptimizedModel(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Gradient checkpointing: recompute activations in backward
         # Saves memory by not storing intermediate activations
-        x = checkpoint(self._fc1_relu, x)
+        x = checkpoint(self._fc1_relu, x, preserve_rng_state=False)
         x = self.fc2(x)
         return x
     
@@ -57,47 +57,60 @@ class OptimizedModel(nn.Module):
         return self.relu(self.fc1(x))
 
 class OptimizedMemoryProfilingBenchmark(Benchmark):
-    """Optimized memory profiling - uses gradient checkpointing."""
+    """Optimized memory profiling - uses gradient checkpointing + CUDA graphs."""
     
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
-        # Optimization: Compile model for kernel fusion and optimization
-
-        # Optimization: Compile model for kernel fusion and optimization
-
-        self.inputs = None
-        self.targets = None
-        self.criterion = None
+        self.model: Optional[OptimizedModel] = None
+        self.inputs: Optional[torch.Tensor] = None
+        self.targets: Optional[torch.Tensor] = None
+        self.criterion: Optional[nn.Module] = None
         self.peak_memory_mb = 0.0
         self.batch_size = 32
         self.hidden_dim = 2048
+        self.graph: Optional[torch.cuda.CUDAGraph] = None
+        self.capture_stream: Optional[torch.cuda.Stream] = None
+        self.static_input: Optional[torch.Tensor] = None
+        self.static_target: Optional[torch.Tensor] = None
     
     def setup(self) -> None:
         """Setup: Initialize model and data."""
-        
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
-            # Enable TF32 for faster matmul on Ampere+ GPUs
             enable_tf32()
         torch.manual_seed(42)
         torch.cuda.reset_peak_memory_stats()
         
-        # Optimized model with gradient checkpointing
-        self.model = OptimizedModel(hidden_dim=self.hidden_dim).to(self.device)
-        # Keep model in FP32 - checkpointing is about memory, not precision
-        # Converting to FP16 would require matching input dtype
+        self.model = OptimizedModel(hidden_dim=self.hidden_dim).to(self.device, dtype=torch.bfloat16)
         self.model.train()
-        self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
-        self.targets = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
+        self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.bfloat16)
+        self.targets = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.bfloat16)
         self.criterion = nn.MSELoss()
         
         # Warmup
         _ = self.model(self.inputs)
         torch.cuda.synchronize()
         torch.cuda.reset_peak_memory_stats()
+
+        self.static_input = self.inputs.clone()
+        self.static_target = self.targets.clone()
+        self.graph = torch.cuda.CUDAGraph()
+        self.capture_stream = torch.cuda.Stream()
+        with torch.cuda.stream(self.capture_stream):
+            for _ in range(2):
+                self._train_step(self.static_input, self.static_target)
+            torch.cuda.synchronize()
+            with torch.cuda.graph(self.graph, stream=self.capture_stream):
+                self._train_step(self.static_input, self.static_target)
+        self.capture_stream.synchronize()
+    
+    def _train_step(self, inputs: torch.Tensor, targets: torch.Tensor) -> None:
+        assert self.model is not None and self.criterion is not None
+        self.model.zero_grad(set_to_none=True)
+        outputs = self.model(inputs)
+        loss = self.criterion(outputs, targets)
+        loss.backward()
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - memory profiling with checkpointing."""
@@ -109,15 +122,19 @@ class OptimizedMemoryProfilingBenchmark(Benchmark):
 
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
+        if (
+            self.graph is None
+            or self.static_input is None
+            or self.static_target is None
+            or self.model is None
+        ):
+            raise RuntimeError("CUDA graph not initialized")
+
         with nvtx_range("optimized_memory_profiling", enable=enable_nvtx):
-            # Forward pass (checkpointing reduces memory)
-            outputs = self.model(self.inputs)
-            loss = self.criterion(outputs, self.targets)
-            
-            # Backward pass (recomputes activations, saves memory)
-            loss.backward()
-            
-            # Track peak memory (should be lower than baseline)
+            self.static_input.copy_(self.inputs)
+            self.static_target.copy_(self.targets)
+            self.model.zero_grad(set_to_none=True)
+            self.graph.replay()
             self.peak_memory_mb = torch.cuda.max_memory_allocated() / (1024 ** 2)
 
     def teardown(self) -> None:

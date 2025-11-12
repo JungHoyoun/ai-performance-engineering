@@ -45,7 +45,7 @@ class OptimizedBankConflictsBenchmark(Benchmark):
         self.input = None
         self.output = None
         self.N = 1_048_576  # 1024 x 1024
-        self.passes = 64
+        self.passes = 256
     
     def setup(self) -> None:
         """Setup: Initialize tensors with padding."""

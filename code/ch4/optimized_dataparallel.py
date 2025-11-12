@@ -75,7 +75,7 @@ class OptimizedDdpBenchmark(Benchmark):
         idx = self.batch_idx % len(self.inputs)
         self.batch_idx += 1
         with nvtx_range("optimized_dataparallel", enable=enable_nvtx):
-            with torch.cuda.amp.autocast(dtype=torch.float16):
+            with torch.autocast("cuda", dtype=torch.float16):
                 output = self.model(self.inputs[idx])
                 loss = nn.functional.mse_loss(output, self.targets[idx])
             self.optimizer.zero_grad(set_to_none=True)

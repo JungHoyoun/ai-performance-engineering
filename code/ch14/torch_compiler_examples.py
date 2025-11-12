@@ -26,6 +26,7 @@ import torch
 import torch.nn as nn
 import triton.testing
 import time
+from common.python.compile_utils import compile_model
 
 from extras.ch14.torch_compile_large_model import create_model
 
@@ -162,7 +163,7 @@ def main():
     
     # 3. Create compiled version with proper settings
     print("Compiling model...")
-    model_compiled = torch.compile(
+    model_compiled = compile_model(
         model,
         mode='max-autotune',      # Most aggressive optimization
         fullgraph=True,            # Compile entire graph (best performance)

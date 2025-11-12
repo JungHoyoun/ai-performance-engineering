@@ -20,7 +20,7 @@ import torch.nn as nn
 
 from typing import Optional
 
-from torch.cuda.amp import autocast
+from torch.amp import autocast
 
 from common.python.benchmark_harness import (
     Benchmark,
@@ -93,7 +93,7 @@ class OptimizedQuantizationBenchmark(Benchmark):
         with nvtx_range("optimized_quantization", enable=enable_nvtx):
             with torch.no_grad():
                 for _ in range(self.repeats):
-                    with autocast(dtype=torch.float16):
+                    with autocast("cuda", dtype=torch.float16):
                         for micro_input in self.inputs:
                             output = self.model(micro_input)
                             _ = output.sum()

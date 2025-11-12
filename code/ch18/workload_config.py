@@ -2,15 +2,7 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
-
-SMOKE_ENV_FLAG = "BENCHMARK_SMOKE_TEST"
-
-
-def is_smoke_test() -> bool:
-    """Return True when the harness is running in smoke-test mode."""
-    return os.environ.get(SMOKE_ENV_FLAG) == "1"
 
 
 @dataclass(frozen=True)
@@ -37,23 +29,6 @@ class Chapter18Workload:
     shared_feature_maps: int = 96
     shared_spatial: int = 192
     shared_kernel_size: int = 5
-
-    smoke_seq_len: int = 512
-    smoke_decode_seq_len: int = 64
-    smoke_micro_batches: int = 3
-    smoke_pipeline_micro_batches: int = 5
-
-    def seq_len(self, smoke: bool = False) -> int:
-        return self.smoke_seq_len if smoke else self.attention_seq_len
-
-    def decode_len(self, smoke: bool = False) -> int:
-        return self.smoke_decode_seq_len if smoke else self.decode_seq_len
-
-    def micro_batches_for_mode(self, smoke: bool = False) -> int:
-        return self.smoke_micro_batches if smoke else self.micro_batches
-
-    def pipeline_micro_batches_for_mode(self, smoke: bool = False) -> int:
-        return self.smoke_pipeline_micro_batches if smoke else self.pipeline_micro_batches
 
 
 WORKLOAD = Chapter18Workload()

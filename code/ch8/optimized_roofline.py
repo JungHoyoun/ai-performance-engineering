@@ -102,7 +102,7 @@ class OptimizedRooflineBenchmark(Benchmark):
                 end_event = torch.cuda.Event(enable_timing=True)
                 
                 start_event.record()
-                with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                with torch.autocast("cuda", dtype=torch.bfloat16):
                     for micro_input in self.inputs:
                         output = self.compiled_model(micro_input)
                         _ = output.sum()

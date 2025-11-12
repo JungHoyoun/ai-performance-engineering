@@ -17,7 +17,6 @@ class KVCacheWorkload:
     num_heads: int = 16
     head_dim: int = 64
     sequence_lengths: Tuple[int, ...] = (1024, 1536, 2048)
-    smoke_sequence_lengths: Tuple[int, ...] = (1024,)
     dtype: torch.dtype = torch.float16
     page_size: int = 256
     block_size: int = 128
@@ -30,10 +29,8 @@ class KVCacheWorkload:
     def max_seq_len(self) -> int:
         return max(self.sequence_lengths)
 
-    def lengths_for_mode(self, smoke_test: bool = False) -> Tuple[int, ...]:
-        """Return sequence lengths for the requested mode."""
-        if smoke_test and self.smoke_sequence_lengths:
-            return self.smoke_sequence_lengths
+    def lengths(self) -> Tuple[int, ...]:
+        """Return the canonical sequence lengths."""
         return self.sequence_lengths
 
 

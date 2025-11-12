@@ -489,43 +489,43 @@ python3 [script]
 ### AI Optimization (ILP + Shared Weights)
 - **Baseline** (`ch8/baseline_ai_optimization.py`): serial dot product per sample; every warp reloads the weight vector from global memory.
 - **Optimized** (`ch8/optimized_ai_optimization.py`): stages weights into shared memory once per block and processes four elements per lane using `float4` loads to expose ILP.
-- **Run**: `python tools/cli/benchmark_cli.py --smoke-test --only-examples ai_optimization ch8`
+- **Run**: `python tools/cli/benchmark_cli.py run --targets ch8:ai_optimization --smoke-test`
 - **Speedup**: ~2× on GB10.
 
 ### Distributed Pipeline
 - **Baseline** (`ch8/baseline_distributed.py`): sequential host→device copies plus compute per virtual rank.
 - **Optimized** (`ch8/optimized_distributed.py`): issues async copies on independent CUDA streams and overlaps them with compute (mimicking NCCL pipelining).
-- **Run**: `python tools/cli/benchmark_cli.py --smoke-test --only-examples distributed ch8`
+- **Run**: `python tools/cli/benchmark_cli.py run --targets ch8:distributed --smoke-test`
 - **Speedup**: ~1.5× with four virtual ranks.
 
 ### NCCL-Style Ring Reduction
 - **Baseline** (`ch8/baseline_nccl.py`): copies each chunk to the host and reduces on the CPU.
 - **Optimized** (`ch8/optimized_nccl.py`): invokes `nccl_kernels.cu`, which performs the ring reduction entirely on the GPU.
-- **Run**: `python tools/cli/benchmark_cli.py --smoke-test --only-examples nccl ch8`
+- **Run**: `python tools/cli/benchmark_cli.py run --targets ch8:nccl --smoke-test`
 - **Speedup**: ~1.5×.
 
 ### HBM Residency vs. Streaming
 - **Baseline** (`ch8/baseline_hbm.py`): copies column-major tensors from host memory every iteration.
 - **Optimized** (`ch8/optimized_hbm.py`): keeps row-major tensors resident and uses vectorized loads.
-- **Run**: `python tools/cli/benchmark_cli.py --smoke-test --only-examples hbm ch8`
+- **Run**: `python tools/cli/benchmark_cli.py run --targets ch8:hbm --smoke-test`
 - **Speedup**: 3–4× once copies leave the hot loop.
 
 ### Double Buffering (Host vs. Device Residency)
 - **Baseline** (`ch8/baseline_double_buffering.py`): streams input from pinned host memory each pass before launching the single-buffer kernel.
 - **Optimized** (`ch8/optimized_double_buffering.py`): keeps data on device and pipelines loads in shared memory, mirroring the chapter narrative.
-- **Run**: `python tools/cli/benchmark_cli.py --smoke-test --only-examples double_buffering ch8`
+- **Run**: `python tools/cli/benchmark_cli.py run --targets ch8:double_buffering --smoke-test`
 - **Speedup**: ≥4×.
 
 ### Thresholding with cp.async + Warp Ballots
 - **Baseline** (`ch8/baseline_threshold.py` + `.cu`): branchy kernel that copies tensors from host per iteration and computes sin/cos everywhere.
 - **Optimized** (`ch8/optimized_threshold.py` / `optimized_threshold_predicated.cu`): stages tiles via `cp.async` (TMA) into shared memory, uses warp ballots to skip inactive lanes, and only computes sin/cos when needed.
-- **Run**: `python tools/cli/benchmark_cli.py --smoke-test --only-examples threshold ch8`
+- **Run**: `python tools/cli/benchmark_cli.py run --targets ch8:threshold --smoke-test`
 - **Speedup**: ~3× on the Python harness and ≥1.05× on CUDA-capable TMA hardware.
 
 ### Threshold TMA Pipeline (Blackwell Only)
 - **Baseline** (`ch8/baseline_thresholdtma.py` / `baseline_thresholdtma.cu`): same math path as the branchy kernel but gated so it only runs when Blackwell/GB GPUs are present.
 - **Optimized** (`ch8/optimized_thresholdtma.py` / `optimized_thresholdtma.cu`): rewrites the threshold kernel using the CUDA `cuda::pipeline` API (TMA on Blackwell) with double-buffered tiles.
-- **Run**: `python tools/cli/benchmark_cli.py --smoke-test --only-examples thresholdtma ch8`
+- **Run**: `python tools/cli/benchmark_cli.py run --targets ch8:thresholdtma --smoke-test`
 - **Speedup**: expect ≥1.05× once TMA kernels are enabled; otherwise the harness prints `SKIPPED: …` on unsupported hardware.
 
 ---

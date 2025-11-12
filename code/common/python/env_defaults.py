@@ -8,6 +8,10 @@ from common.python.cuda_capabilities import (
     pipeline_runtime_allowed,
     tma_support_status,
 )
+from common.python.hardware_capabilities import (
+    detect_capabilities,
+    format_capability_report,
+)
 import os
 import sys
 from pathlib import Path
@@ -263,35 +267,8 @@ def dump_environment_and_capabilities(stream=None, *, force: bool = False) -> No
     print("HARDWARE CAPABILITIES", file=stream)
     print("=" * 80, file=stream)
 
-    try:
-        import torch
-    except ImportError:
-        print("torch not available: unable to report GPU capabilities", file=stream)
-        return
-
-    if not torch.cuda.is_available():
-        print("CUDA not available on this system", file=stream)
-        return
-
-    try:
-        device = torch.cuda.current_device()
-        props = torch.cuda.get_device_properties(device)
-    except Exception as exc:
-        print(f"Failed to query CUDA device: {exc}", file=stream)
-        return
-
-    print(f"GPU Name: {props.name}", file=stream)
-    print(f"Compute Capability: {props.major}.{props.minor}", file=stream)
-    print(f"Total Memory (GB): {props.total_memory / (1024 ** 3):.2f}", file=stream)
-    print(f"SM Count: {props.multi_processor_count}", file=stream)
-    print(f"CUDA Version (PyTorch): {getattr(torch.version, 'cuda', 'unknown')}", file=stream)
-    cudnn_version = None
-    try:
-        if torch.backends.cudnn.is_available():
-            cudnn_version = torch.backends.cudnn.version()
-    except Exception:
-        cudnn_version = None
-    print(f"cuDNN Version: {cudnn_version or 'unavailable'}", file=stream)
+    cap_report = format_capability_report()
+    print(cap_report, file=stream)
     
     pipeline_supported, pipeline_reason = pipeline_support_status()
     tma_supported, tma_reason = tma_support_status()

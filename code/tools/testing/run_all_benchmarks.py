@@ -8,10 +8,9 @@ This script:
 4. Generates a comprehensive summary report
 
 Usage:
-    python benchmark.py [--chapter ch1|all] [--format json|markdown|both]
+    python tools/testing/run_all_benchmarks.py [--targets chX chY:example] [--format json|markdown|both]
 """
 
-from common.python import compile_utils as _compile_utils_patch  # noqa: F401
 import sys
 from pathlib import Path
 import json
@@ -22,11 +21,15 @@ from collections import defaultdict
 import statistics
 import math
 from dataclasses import dataclass
+import threading
+from contextlib import ExitStack
 
 # Ensure repository root on sys.path before importing helpers
 repo_root = Path(__file__).resolve().parent.parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
+
+from common.python import compile_utils as _compile_utils_patch  # noqa: F401
 
 from common.python.env_defaults import apply_env_defaults, dump_environment_and_capabilities
 
@@ -40,6 +43,7 @@ import tempfile
 from common.python.chapter_compare_template import discover_benchmarks, load_benchmark
 from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode, BenchmarkConfig
 from common.python.run_manifest import reset_gpu_state, get_git_info
+from common.python.gpu_telemetry import format_gpu_telemetry, query_gpu_telemetry
 try:
     from common.python.cuda_binary_benchmark import detect_supported_arch
 except ImportError:  # pragma: no cover - optional dependency during docs builds
@@ -49,6 +53,7 @@ from common.python.expectations import (
     METRIC_DIRECTIONS,
     detect_expectation_key,
 )
+from tools.verification.verify_all_benchmarks import resolve_target_chapters
 
 # Import logger
 try:
@@ -163,16 +168,6 @@ def extract_from_pytorch_trace(trace_path: Path) -> Dict[str, float]:
 
 INFORMATIONAL_BENCHMARKS: Dict[str, Set[str]] = {}
 
-SMOKE_CUDA_ITERATION_OVERRIDES: Dict[str, int] = {
-    # CUDA microbenchmarks in these chapters are highly jittery; give them more samples even in smoke mode.
-    "ch6": 8,
-    "ch7": 12,
-    "ch10": 10,
-    "ch11": 8,
-    "ch12": 10,
-}
-
-
 def format_time_ms(time_ms: float) -> str:
     """Format time in milliseconds with adaptive precision.
     
@@ -257,6 +252,72 @@ def find_best_optimization_entry(optimizations: List[Dict[str, Any]]) -> Optiona
     return best_entry
 
 
+def start_progress_watchdog(
+    logger,
+    chapter_name: str,
+    warn_after: float = 300.0,
+    ping_every: float = 90.0,
+):
+    """Spawn a background watchdog that emits progress heartbeats and hang warnings."""
+    state = {
+        "last_progress": time.time(),
+        "last_note": "initializing chapter",
+        "warned": False,
+        "active": True,
+    }
+    stop_event = threading.Event()
+    ping_every = max(30.0, ping_every)
+    warn_after = max(ping_every * 2.0, warn_after)
+
+    def heartbeat() -> None:
+        while not stop_event.wait(ping_every):
+            if not state["active"]:
+                break
+            elapsed = time.time() - state["last_progress"]
+            if elapsed >= warn_after:
+                if not state["warned"]:
+                    logger.warning(
+                        "    ⏱️ No benchmark progress in %s for %.0fs (last completed: %s)",
+                        chapter_name,
+                        elapsed,
+                        state["last_note"],
+                    )
+                    state["warned"] = True
+            else:
+                logger.info(
+                    "    …%s still running (last completed: %s, %.0fs ago)",
+                    chapter_name,
+                    state["last_note"],
+                    elapsed,
+                )
+
+    thread = threading.Thread(
+        target=heartbeat,
+        name=f"{chapter_name}_progress_watchdog",
+        daemon=True,
+    )
+    thread.start()
+
+    def record(note: str) -> None:
+        gap = time.time() - state["last_progress"]
+        state["last_progress"] = time.time()
+        state["last_note"] = note
+        if state["warned"]:
+            logger.info(
+                "    ✅ Progress resumed after %.0fs (now at %s)",
+                gap,
+                note,
+            )
+            state["warned"] = False
+
+    def stop() -> None:
+        state["active"] = False
+        stop_event.set()
+        thread.join(timeout=1.0)
+
+    return record, stop
+
+
 def _capture_metric(metrics: Dict[str, float], key: str, value: Optional[float]) -> None:
     if value is None:
         return
@@ -331,13 +392,53 @@ def build_expectation_metadata(
 
 
 def _format_metric_value(value: Optional[float]) -> str:
-    if value is None or (isinstance(value, float) and math.isnan(value)):
+    if not isinstance(value, (int, float)):
+        return str(value) if value is not None else "n/a"
+    if math.isnan(value):
         return "n/a"
     if abs(value) >= 1000:
         return f"{value:,.2f}"
     if abs(value) >= 1:
         return f"{value:.3f}"
     return f"{value:.5f}"
+
+
+def _format_profiler_value(value: Any) -> str:
+    if isinstance(value, (int, float)):
+        return _format_metric_value(float(value))
+    return str(value)
+
+
+def log_profiler_metrics_table(
+    logger,
+    metrics: Dict[str, Dict[str, Any]],
+    indent: str = "",
+) -> None:
+    rows: List[Dict[str, str]] = []
+    for profiler_name, profiler_metrics in sorted(metrics.items()):
+        for metric_key, value in sorted(profiler_metrics.items()):
+            rows.append(
+                {
+                    "Profiler": profiler_name,
+                    "Metric": metric_key,
+                    "Value": _format_profiler_value(value),
+                }
+            )
+    if not rows:
+        logger.info(f"{indent}(no profiler metrics)")
+        return
+    headers = ["Profiler", "Metric", "Value"]
+    widths = {header: len(header) for header in headers}
+    for row in rows:
+        for header in headers:
+            widths[header] = max(widths[header], len(row.get(header, "")))
+    header_line = " | ".join(header.ljust(widths[header]) for header in headers)
+    divider = "-+-".join("-" * widths[header] for header in headers)
+    logger.info(f"{indent}{header_line}")
+    logger.info(f"{indent}{divider}")
+    for row in rows:
+        line = " | ".join(row.get(header, "").ljust(widths[header]) for header in headers)
+        logger.info(f"{indent}{line}")
 
 
 def log_expectation_evaluation(
@@ -357,22 +458,41 @@ def log_expectation_evaluation(
     if rel_path:
         header += f": {rel_path}"
     logger.info(header)
-    for comp in evaluation.comparisons:
+    comparisons = evaluation.comparisons or []
+    if not comparisons:
+        logger.info("      (no expectation comparisons)")
+        return
+
+    headers = ["Metric", "Observed", "Expected", "Delta", "Δ%", "Status"]
+    rows: List[Dict[str, str]] = []
+    for comp in comparisons:
         delta_pct = comp.get("delta_pct")
         pct_str = "n/a"
         if delta_pct is not None and not math.isinf(delta_pct):
             pct_str = f"{delta_pct:+.2f}%"
         elif delta_pct is not None and math.isinf(delta_pct):
             pct_str = "+inf%" if delta_pct > 0 else "-inf%"
-        logger.info(
-            "      %s -> obs=%s, exp=%s, Δ=%s (%s) [%s]",
-            comp["metric"],
-            _format_metric_value(comp.get("observed")),
-            _format_metric_value(comp.get("expected")),
-            _format_metric_value(comp.get("delta")),
-            pct_str,
-            comp.get("status"),
+        rows.append(
+            {
+                "Metric": comp.get("metric", ""),
+                "Observed": _format_metric_value(comp.get("observed")),
+                "Expected": _format_metric_value(comp.get("expected")),
+                "Delta": _format_metric_value(comp.get("delta")),
+                "Δ%": pct_str,
+                "Status": comp.get("status", ""),
+            }
         )
+    widths = {header: len(header) for header in headers}
+    for row in rows:
+        for header in headers:
+            widths[header] = max(widths[header], len(row.get(header, "")))
+    header_line = " | ".join(header.ljust(widths[header]) for header in headers)
+    divider = "-+-".join("-" * widths[header] for header in headers)
+    logger.info(f"      {header_line}")
+    logger.info(f"      {divider}")
+    for row in rows:
+        line = " | ".join(row.get(header, "").ljust(widths[header]) for header in headers)
+        logger.info(f"      {line}")
 
 
 def reset_cuda_state():
@@ -1293,18 +1413,28 @@ def ensure_cuda_executables_built(chapter_dir: Path) -> bool:
         return False
 
 
-def _test_chapter_impl(chapter_dir: Path, enable_profiling: bool = False, smoke_test: bool = False, timeout_multiplier: float = 1.0, reproducible: bool = False, cold_start: bool = False, iterations: Optional[int] = None, warmup: Optional[int] = None, only_examples: Optional[List[str]] = None) -> Dict[str, Any]:
+def _test_chapter_impl(
+    chapter_dir: Path,
+    enable_profiling: bool = False,
+    smoke_test: bool = False,
+    timeout_multiplier: float = 1.0,
+    reproducible: bool = False,
+    cold_start: bool = False,
+    iterations: Optional[int] = None,
+    warmup: Optional[int] = None,
+    only_examples: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """Test all benchmarks in a chapter and return results.
     
     Args:
         chapter_dir: Path to chapter directory
         enable_profiling: If True, generate profiling files (nsys, ncu, PyTorch) alongside benchmarks
-        smoke_test: If True, reduce iterations and warmup for smoke testing (CI/quick validation)
+        smoke_test: If True, reduce iterations/warmup for quick validation runs
         timeout_multiplier: Multiply all timeouts by this factor (e.g., 2.0 = double all timeouts)
         reproducible: If True, set all seeds to 42 and enable deterministic algorithms
         cold_start: If True, perform additional GPU state cleanup (gc.collect()) between benchmarks for cold start measurements. CUDA state is always reset by default.
-        iterations: Number of benchmark iterations (overrides smoke_test defaults if provided)
-        warmup: Number of warmup iterations (overrides smoke_test defaults if provided)
+        iterations: Number of benchmark iterations (defaults to 20 if not provided)
+        warmup: Number of warmup iterations (defaults to 5 if not provided)
         only_examples: List of example names to run (e.g., ['moe', 'cutlass']). If None, runs all examples.
     """
     dump_environment_and_capabilities()
@@ -1314,8 +1444,8 @@ def _test_chapter_impl(chapter_dir: Path, enable_profiling: bool = False, smoke_
     # Set up profiling output directory if profiling is enabled
     profiling_output_dir = None
     if enable_profiling:
-        repo_root = chapter_dir.parent
-        profiling_output_dir = repo_root / "benchmark_profiles" / chapter_name
+        profiling_root = chapter_dir.parent
+        profiling_output_dir = profiling_root / "benchmark_profiles" / chapter_name
         profiling_output_dir.mkdir(parents=True, exist_ok=True)
         
         # Check which profilers are available
@@ -1399,6 +1529,7 @@ def _test_chapter_impl(chapter_dir: Path, enable_profiling: bool = False, smoke_
     python_pairs = discover_benchmarks(chapter_dir)
     example_filters = None
     if only_examples:
+        logger.info(f"  Requested examples: {only_examples}")
         example_filters = {name.strip() for name in only_examples if name.strip()}
         if example_filters:
             python_pairs = [
@@ -1418,7 +1549,9 @@ def _test_chapter_impl(chapter_dir: Path, enable_profiling: bool = False, smoke_
         logger.info(f"  Found {len(cuda_pairs)} CUDA benchmark pair(s), ensuring executables are built...")
         ensure_cuda_executables_built(chapter_dir)
     
-    if not python_pairs and not cuda_pairs:
+    total_benchmarks = len(python_pairs) + len(cuda_pairs)
+    logger.info(f"  Benchmark counts -> python: {len(python_pairs)}, cuda: {len(cuda_pairs)}, total: {total_benchmarks}")
+    if not total_benchmarks:
         return {
             'chapter': chapter_name,
             'status': 'no_benchmarks',
@@ -1431,8 +1564,15 @@ def _test_chapter_impl(chapter_dir: Path, enable_profiling: bool = False, smoke_
             }
         }
     
+    progress_recorder = None
+    stop_watchdog = None
+    if total_benchmarks:
+        progress_recorder, stop_watchdog = start_progress_watchdog(
+            logger,
+            chapter_name,
+        )
+
     # Create harness for Python benchmarks with explicit timeout to prevent hangs
-    # Adjust iterations/warmup based on smoke_test or use provided values
     if iterations is None:
         iterations = 5 if smoke_test else 20
     if warmup is None:
@@ -1441,7 +1581,7 @@ def _test_chapter_impl(chapter_dir: Path, enable_profiling: bool = False, smoke_
     config = BenchmarkConfig(
         iterations=iterations,
         warmup=warmup,
-        measurement_timeout_seconds=60,  # Allow heavier smoke workloads before timing out
+        measurement_timeout_seconds=60,
         timeout_multiplier=timeout_multiplier,  # Apply timeout multiplier from CLI
         enable_memory_tracking=True,  # Enable memory metrics display
         enable_profiling=enable_profiling,  # Respect profiling flag (opt-in via CLI)
@@ -1465,119 +1605,702 @@ def _test_chapter_impl(chapter_dir: Path, enable_profiling: bool = False, smoke_
     # Check GPU count for distributed benchmark detection
     num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
     
-    # Process Python benchmarks
-    for baseline_path, optimized_paths, example_name in python_pairs:
-        logger.info(f"\n  Example: {example_name}")
-        logger.info(f"    Baseline: {baseline_path.name}")
+    done_count = 0
+
+    def mark_progress(example_label: str) -> None:
+        nonlocal done_count
+        done_count += 1
+        if progress_recorder:
+            progress_recorder(f"{chapter_name}:{example_label} ({done_count}/{total_benchmarks})")
+
+    from contextlib import ExitStack
+
+    with ExitStack() as cleanup_stack:
+        if stop_watchdog:
+            cleanup_stack.callback(stop_watchdog)
+
+        # Process Python benchmarks
+        for baseline_path, optimized_paths, example_name in python_pairs:
+            logger.info(f"\n  Example: {example_name}")
+            logger.info(f"    Baseline: {baseline_path.name}")
         
-        if example_name in informational_examples:
-            informational_skipped += 1
-            logger.info("    ℹ️ Informational systems demo - documented for reference, not benchmarked.")
-            continue
+            if example_name in informational_examples:
+                informational_skipped += 1
+                logger.info("    ℹ️ Informational systems demo - documented for reference, not benchmarked.")
+                mark_progress(example_name)
+                continue
         
-        result_entry = {
-            'example': example_name,
-            'type': 'python',
-            'baseline_file': baseline_path.name,
-            'baseline_time_ms': None,
-            'baseline_throughput': None,
-            'optimizations': [],
-            'best_speedup': 1.0,
-            'status': 'failed_error',
-            'error': None,
-        }
+            result_entry = {
+                'example': example_name,
+                'type': 'python',
+                'baseline_file': baseline_path.name,
+                'baseline_time_ms': None,
+                'baseline_throughput': None,
+                'optimizations': [],
+                'best_speedup': 1.0,
+                'status': 'failed_error',
+                'error': None,
+            }
         
-        # Check if this is a distributed benchmark and we have only 1 GPU
-        is_distributed = is_distributed_benchmark(baseline_path)
-        if is_distributed and num_gpus == 1:
-            skip_reason = f"SKIPPED: Distributed benchmark requires multiple GPUs (found {num_gpus} GPU)"
-            logger.warning(f"    WARNING: {skip_reason}")
-            result_entry['status'] = 'skipped'
-            result_entry['error'] = skip_reason
-            result_entry['skip_reason'] = skip_reason
-            benchmark_results.append(result_entry)
-            skipped_distributed += 1  # Count as skipped, not successful
-            continue
+            # Check if this is a distributed benchmark and we have only 1 GPU
+            is_distributed = is_distributed_benchmark(baseline_path)
+            if is_distributed and num_gpus == 1:
+                skip_reason = f"SKIPPED: Distributed benchmark requires multiple GPUs (found {num_gpus} GPU)"
+                logger.warning(f"    WARNING: {skip_reason}")
+                result_entry['status'] = 'skipped'
+                result_entry['error'] = skip_reason
+                result_entry['skip_reason'] = skip_reason
+                benchmark_results.append(result_entry)
+                skipped_distributed += 1  # Count as skipped, not successful
+                mark_progress(example_name)
+                continue
         
-        # Reset CUDA state before each benchmark pair (always, to prevent cascading failures)
-        reset_cuda_state()
-        # Additional cleanup for cold start mode (includes gc.collect() for more thorough cleanup)
-        if cold_start:
-            reset_gpu_state()
-        
-        # Load and run baseline
-        baseline_benchmark = load_benchmark(baseline_path)
-        if baseline_benchmark is None:
-            result_entry['error'] = 'Failed to load baseline'
-            benchmark_results.append(result_entry)
-            failed_error += 1
-            reset_cuda_state()  # Reset after failure
+            # Reset CUDA state before each benchmark pair (always, to prevent cascading failures)
+            reset_cuda_state()
+            # Additional cleanup for cold start mode (includes gc.collect() for more thorough cleanup)
             if cold_start:
                 reset_gpu_state()
-            continue
+            
+            # Load and run baseline
+            baseline_benchmark = load_benchmark(baseline_path)
+            if baseline_benchmark is None:
+                result_entry['error'] = 'Failed to load baseline'
+                benchmark_results.append(result_entry)
+                failed_error += 1
+                reset_cuda_state()  # Reset after failure
+                if cold_start:
+                    reset_gpu_state()
+                continue
+            
+            try:
+                # Use benchmark_with_manifest for reproducibility
+                run_id = f"{chapter_name}_{example_name}_baseline"
+                baseline_run = harness.benchmark_with_manifest(baseline_benchmark, run_id=run_id)
+                baseline_result = baseline_run.result
+                baseline_timing = baseline_result.timing
+                baseline_memory = baseline_result.memory
+                baseline_custom_metrics = getattr(baseline_result, "custom_metrics", None) or {}
+                if not baseline_custom_metrics:
+                    getter = getattr(baseline_benchmark, "get_custom_metrics", None)
+                    if callable(getter):
+                        try:
+                            metrics = getter()
+                            if isinstance(metrics, dict):
+                                baseline_custom_metrics = metrics
+                        except Exception:
+                            baseline_custom_metrics = {}
+                baseline_time = baseline_timing.mean_ms if baseline_timing else 0.0
+                result_entry['baseline_time_ms'] = baseline_time
+                if baseline_custom_metrics:
+                    result_entry['baseline_custom_metrics'] = baseline_custom_metrics
+                
+                # Enhanced baseline metrics display with emojis and formatting
+                logger.info(f"    Baseline: {format_time_ms(baseline_time)} ms")
+                if baseline_timing:
+                    logger.info(f"      📊 Timing Stats: median={format_time_ms(baseline_timing.median_ms)}ms, "
+                          f"min={format_time_ms(baseline_timing.min_ms)}ms, max={format_time_ms(baseline_timing.max_ms)}ms, "
+                          f"std={format_time_ms(baseline_timing.std_ms)}ms")
+                if baseline_memory and baseline_memory.peak_mb:
+                    mem_str = f"      💾 Memory: peak={baseline_memory.peak_mb:.2f}MB"
+                    if baseline_memory.allocated_mb:
+                        mem_str += f", allocated={baseline_memory.allocated_mb:.2f}MB"
+                    logger.info(mem_str)
+                if baseline_timing and baseline_timing.percentiles:
+                    p99 = baseline_timing.percentiles.get(99.0, 0)
+                    p75 = baseline_timing.percentiles.get(75.0, 0)
+                    p50 = baseline_timing.percentiles.get(50.0, baseline_timing.median_ms if baseline_timing else 0)
+                    logger.info(f"      📈 Percentiles: p99={format_time_ms(p99)}ms, p75={format_time_ms(p75)}ms, p50={format_time_ms(p50)}ms")
+                baseline_throughput = baseline_result.throughput
+                throughput_summary = format_throughput_summary(baseline_throughput)
+                if throughput_summary:
+                    logger.info(f"      ⚡ Throughput: {throughput_summary}")
+                serialized_throughput = serialize_throughput(baseline_throughput)
+                if serialized_throughput:
+                    result_entry['baseline_throughput'] = serialized_throughput
+                baseline_gpu_metrics = getattr(baseline_result, "gpu_metrics", None)
+                if baseline_gpu_metrics:
+                    result_entry['baseline_gpu_metrics'] = baseline_gpu_metrics
+                    logger.info(f"      🌡️ GPU Telemetry: {format_gpu_telemetry(baseline_gpu_metrics)}")
+                if "scenario_total_phase_ms" in baseline_custom_metrics:
+                    logger.info(
+                        f"      📐 Scenario phase sum: "
+                        f"{baseline_custom_metrics['scenario_total_phase_ms']:.3f} ms"
+                    )
+                
+                # Profile baseline if profiling is enabled (nsys, ncu, PyTorch)
+                if enable_profiling and profiling_output_dir:
+                    logger.info(f"    Profiling baseline...")
+                    profiler_results = []
+                    baseline_metrics = {}
+                    
+                    # nsys profiling
+                    if check_nsys_available():
+                        logger.info(f"      nsys...")
+                        nsys_path = profile_python_benchmark(
+                            baseline_benchmark, baseline_path, chapter_dir, profiling_output_dir, variant="baseline"
+                        )
+                        if nsys_path:
+                            result_entry['baseline_nsys_rep'] = str(nsys_path.relative_to(chapter_dir.parent))
+                            profiler_results.append("nsys✓")
+                            # Extract metrics
+                            nsys_metrics = extract_from_nsys_report(nsys_path)
+                            if nsys_metrics:
+                                baseline_metrics['nsys'] = nsys_metrics
+                        else:
+                            profiler_results.append("nsys✗")
+                    else:
+                        profiler_results.append("nsys-")
+                    
+                    # ncu profiling
+                    if check_ncu_available():
+                        logger.info(f"ncu...")
+                        ncu_path = profile_python_benchmark_ncu(
+                            baseline_benchmark, baseline_path, chapter_dir, profiling_output_dir, variant="baseline"
+                        )
+                        if ncu_path:
+                            result_entry['baseline_ncu_rep'] = str(ncu_path.relative_to(chapter_dir.parent))
+                            profiler_results.append("ncu✓")
+                            # Extract metrics
+                            ncu_metrics = extract_from_ncu_report(ncu_path)
+                            if ncu_metrics:
+                                baseline_metrics['ncu'] = ncu_metrics
+                        else:
+                            profiler_results.append("ncu✗")
+                    else:
+                        profiler_results.append("ncu-")
+                    
+                    # PyTorch profiler
+                    if TORCH_PROFILER_AVAILABLE:
+                        logger.info(f"PyTorch...")
+                        torch_path = profile_python_benchmark_torch(
+                            baseline_benchmark, baseline_path, chapter_dir, profiling_output_dir, variant="baseline"
+                        )
+                        if torch_path:
+                            result_entry['baseline_torch_trace'] = str(torch_path.relative_to(chapter_dir.parent))
+                            profiler_results.append("torch✓")
+                            # Extract metrics
+                            torch_metrics = extract_from_pytorch_trace(torch_path)
+                            if torch_metrics:
+                                baseline_metrics['torch'] = torch_metrics
+                        else:
+                            profiler_results.append("torch✗")
+                    else:
+                        profiler_results.append("torch-")
+                    
+                    logger.info(f" ({', '.join(profiler_results)})")
+                    
+                    # Display extracted metrics
+                    if baseline_metrics:
+                        logger.info(f"      📈 Profiler Metrics:")
+                        log_profiler_metrics_table(logger, baseline_metrics, indent="        ")
+                        result_entry['baseline_profiler_metrics'] = baseline_metrics
+            except Exception as e:
+                error_str = str(e)
+                skip_reason = check_hardware_limitation(error_str)
+                
+                if skip_reason:
+                    result_entry['status'] = 'skipped'
+                    result_entry['error'] = f'HARDWARE/SOFTWARE LIMITATION: {skip_reason}'
+                    result_entry['skip_reason'] = skip_reason
+                    logger.warning(f"    WARNING: SKIPPED: {skip_reason}")
+                    skipped_hw += 1
+                else:
+                    result_entry['error'] = f'Baseline execution failed: {error_str}'
+                    failed_error += 1
+                    maybe_reset_gpu_for_error(error_str, f"{chapter_name}:{example_name}:baseline")
+                
+                benchmark_results.append(result_entry)
+                reset_cuda_state()  # Reset after failure
+                # Additional cleanup for cold start mode
+                if cold_start:
+                    reset_gpu_state()
+                continue
+            
+            # Test each optimization
+            for optimized_path in optimized_paths:
+                opt_name = optimized_path.name
+                technique = opt_name.replace(f'optimized_{example_name}_', '').replace('.py', '')
+                if technique == opt_name.replace('optimized_', '').replace('.py', ''):
+                    technique = 'default'
+                
+                # Check if optimized benchmark is distributed and we have only 1 GPU
+                is_opt_distributed = is_distributed_benchmark(optimized_path)
+                if is_opt_distributed and num_gpus == 1:
+                    skip_reason = f"SKIPPED: Distributed benchmark requires multiple GPUs (found {num_gpus} GPU)"
+                    logger.warning(f"    WARNING: {opt_name}: {skip_reason}")
+                    result_entry['optimizations'].append({
+                        'file': opt_name,
+                        'technique': technique,
+                        'status': 'skipped',
+                        'error': skip_reason,
+                    })
+                    continue
+                
+                optimized_benchmark = load_benchmark(optimized_path)
+                if optimized_benchmark is None:
+                    logger.error(f"    Testing: {opt_name}... FAILED (load)")
+                    result_entry['optimizations'].append({
+                        'file': opt_name,
+                        'technique': technique,
+                        'status': 'failed_error',
+                        'error': 'Failed to load',
+                    })
+                    continue
+                
+                try:
+                    # Reset CUDA state before each optimized benchmark (always, to prevent cascading failures)
+                    reset_cuda_state()
+                    # Additional cleanup for cold start mode (includes gc.collect() for more thorough cleanup)
+                    if cold_start:
+                        reset_gpu_state()
+                    
+                    # Use benchmark_with_manifest for reproducibility
+                    opt_run_id = f"{chapter_name}_{example_name}_optimized_{technique}"
+                    optimized_run = harness.benchmark_with_manifest(optimized_benchmark, run_id=opt_run_id)
+                    optimized_result = optimized_run.result
+                    optimized_timing = optimized_result.timing
+                    optimized_memory = optimized_result.memory
+                    optimized_custom_metrics = getattr(optimized_result, "custom_metrics", None) or {}
+                    if not optimized_custom_metrics:
+                        getter = getattr(optimized_benchmark, "get_custom_metrics", None)
+                        if callable(getter):
+                            try:
+                                metrics = getter()
+                                if isinstance(metrics, dict):
+                                    optimized_custom_metrics = metrics
+                            except Exception:
+                                optimized_custom_metrics = {}
+                    optimized_time = optimized_timing.mean_ms if optimized_timing else 0.0
+                    speedup = baseline_time / optimized_time if optimized_time > 0 else 1.0
+                    scenario_speedup = None
+                    b_phase = (result_entry.get('baseline_custom_metrics') or {}).get("scenario_total_phase_ms")
+                    o_phase = optimized_custom_metrics.get("scenario_total_phase_ms")
+                    if b_phase and o_phase and o_phase > 0:
+                        scenario_speedup = b_phase / o_phase
+                        if scenario_speedup > speedup:
+                            speedup = scenario_speedup
+                    
+                    # Enhanced metrics display with emojis and formatting
+                    emoji = "🚀" if speedup > 1.0 else "⚠️" if speedup < 1.0 else "="
+                    logger.info(f"    Testing: {opt_name}... {format_time_ms(optimized_time)} ms ({speedup:.2f}x) {emoji}")
+                    
+                    if optimized_timing:
+                        logger.info(f"        📊 Timing: median={format_time_ms(optimized_timing.median_ms)}ms, "
+                              f"min={format_time_ms(optimized_timing.min_ms)}ms, max={format_time_ms(optimized_timing.max_ms)}ms, "
+                              f"std={format_time_ms(optimized_timing.std_ms)}ms")
+                    
+                    if optimized_memory and optimized_memory.peak_mb:
+                        mem_change = ""
+                        if baseline_memory and baseline_memory.peak_mb:
+                            diff_mb = optimized_memory.peak_mb - baseline_memory.peak_mb
+                            pct_change = (diff_mb / baseline_memory.peak_mb) * 100 if baseline_memory.peak_mb > 0 else 0
+                            sign = "+" if diff_mb >= 0 else ""
+                            mem_change = f" ({sign}{diff_mb:.2f}MB, {sign}{pct_change:.1f}%)"
+                        
+                        mem_str = f"        💾 Memory: peak={optimized_memory.peak_mb:.2f}MB{mem_change}"
+                        logger.info(mem_str)
+                        if optimized_memory.allocated_mb:
+                            logger.info(f"                 allocated={optimized_memory.allocated_mb:.2f}MB")
+                    
+                    optimized_throughput = optimized_result.throughput
+                    throughput_summary = format_throughput_summary(optimized_throughput)
+                    throughput_payload = serialize_throughput(optimized_throughput)
+                    if throughput_summary:
+                        logger.info(f"        ⚡ Throughput: {throughput_summary}")
+                    
+                    if "scenario_total_phase_ms" in optimized_custom_metrics:
+                        logger.info(
+                            f"        📐 Scenario phase sum: "
+                            f"{optimized_custom_metrics['scenario_total_phase_ms']:.3f} ms"
+                        )
+                    if scenario_speedup is not None:
+                        logger.info(f"        📊 Scenario phase-sum speedup: {scenario_speedup:.2f}x")
+                    
+                    if optimized_timing and optimized_timing.percentiles:
+                        p99 = optimized_timing.percentiles.get(99.0, 0)
+                        p75 = optimized_timing.percentiles.get(75.0, 0)
+                        p50 = optimized_timing.percentiles.get(50.0, optimized_timing.median_ms if optimized_timing else 0)
+                        p99_speedup = ""
+                        if baseline_timing and baseline_timing.percentiles and 99.0 in baseline_timing.percentiles:
+                            p99_baseline = baseline_timing.percentiles[99.0]
+                            if p99_baseline > 0:
+                                p99_speedup = f" ({p99_baseline/p99:.2f}x)" if p99 > 0 else ""
+                        logger.info(f"        📈 Percentiles: p99={format_time_ms(p99)}ms{p99_speedup}, p75={format_time_ms(p75)}ms, p50={format_time_ms(p50)}ms")
+                    
+                    opt_gpu_metrics = getattr(optimized_result, "gpu_metrics", None)
+                    if opt_gpu_metrics:
+                        logger.info(f"        🌡️ GPU Telemetry: {format_gpu_telemetry(opt_gpu_metrics)}")
+                    
+                    # Visual speedup bar (always show for consistency)
+                    bar_length = 40
+                    if speedup > 1.0:
+                        # Improvement: fill bar proportionally to speedup
+                        filled = min(int((speedup - 1.0) / max(speedup, 10.0) * bar_length), bar_length)
+                        bar = "█" * filled + "░" * (bar_length - filled)
+                        logger.info(f"        [{bar}] {speedup:.2f}x speedup")
+                    elif speedup < 1.0:
+                        # Regression: show how much slower (distance from 1.0)
+                        regress_ratio = (1.0 - speedup)  # e.g., 0.93x = 0.07 (7% slower)
+                        # Normalize: 0.5x (50% slower) = full bar, scale linearly
+                        filled = min(int(regress_ratio / 0.5 * bar_length), bar_length)
+                        bar = "█" * filled + "░" * (bar_length - filled)
+                        logger.info(f"        [{bar}] {speedup:.2f}x slowdown")
+                    else:
+                        # No change
+                        bar = "░" * bar_length
+                        logger.info(f"        [{bar}] {speedup:.2f}x (no change)")
+                    
+                    opt_result = {
+                        'file': opt_name,
+                        'technique': technique,
+                        'status': 'succeeded',
+                        'time_ms': optimized_time,
+                        'speedup': speedup,
+                    }
+                    if opt_gpu_metrics:
+                        opt_result['gpu_metrics'] = opt_gpu_metrics
+                    if optimized_custom_metrics:
+                        opt_result['custom_metrics'] = optimized_custom_metrics
+                    if scenario_speedup is not None:
+                        opt_result['scenario_speedup'] = scenario_speedup
+                    if throughput_payload:
+                        opt_result['throughput'] = throughput_payload
+                    
+                    # Profile optimized if profiling is enabled (nsys, ncu, PyTorch)
+                    if enable_profiling and profiling_output_dir:
+                        logger.info(f"\n    Profiling optimized...")
+                        profiler_results = []
+                        optimized_metrics = {}
+                        
+                        # nsys profiling
+                        if check_nsys_available():
+                            logger.info(f"      nsys...")
+                            nsys_path = profile_python_benchmark(
+                                optimized_benchmark, optimized_path, chapter_dir, profiling_output_dir, 
+                                variant=f"optimized_{technique}"
+                            )
+                            if nsys_path:
+                                opt_result['optimized_nsys_rep'] = str(nsys_path.relative_to(chapter_dir.parent))
+                                profiler_results.append("nsys✓")
+                                # Extract metrics
+                                nsys_metrics = extract_from_nsys_report(nsys_path)
+                                if nsys_metrics:
+                                    optimized_metrics['nsys'] = nsys_metrics
+                            else:
+                                profiler_results.append("nsys✗")
+                        else:
+                            profiler_results.append("nsys-")
+                        
+                        # ncu profiling
+                        if check_ncu_available():
+                            logger.info(f"ncu...")
+                            ncu_path = profile_python_benchmark_ncu(
+                                optimized_benchmark, optimized_path, chapter_dir, profiling_output_dir,
+                                variant=f"optimized_{technique}"
+                            )
+                            if ncu_path:
+                                opt_result['optimized_ncu_rep'] = str(ncu_path.relative_to(chapter_dir.parent))
+                                profiler_results.append("ncu✓")
+                                # Extract metrics
+                                ncu_metrics = extract_from_ncu_report(ncu_path)
+                                if ncu_metrics:
+                                    optimized_metrics['ncu'] = ncu_metrics
+                            else:
+                                profiler_results.append("ncu✗")
+                        else:
+                            profiler_results.append("ncu-")
+                        
+                        # PyTorch profiler
+                        if TORCH_PROFILER_AVAILABLE:
+                            logger.info(f"PyTorch...")
+                            torch_path = profile_python_benchmark_torch(
+                                optimized_benchmark, optimized_path, chapter_dir, profiling_output_dir,
+                                variant=f"optimized_{technique}"
+                            )
+                            if torch_path:
+                                opt_result['optimized_torch_trace'] = str(torch_path.relative_to(chapter_dir.parent))
+                                profiler_results.append("torch✓")
+                                # Extract metrics
+                                torch_metrics = extract_from_pytorch_trace(torch_path)
+                                if torch_metrics:
+                                    optimized_metrics['torch'] = torch_metrics
+                            else:
+                                profiler_results.append("torch✗")
+                        else:
+                            profiler_results.append("torch-")
+                        
+                        logger.info(f" ({', '.join(profiler_results)})")
+                        
+                        # Display extracted metrics
+                        if optimized_metrics:
+                            logger.info(f"        📈 Profiler Metrics:")
+                            log_profiler_metrics_table(logger, optimized_metrics, indent="          ")
+                            opt_result['optimized_profiler_metrics'] = optimized_metrics
+                    
+                    result_entry['optimizations'].append(opt_result)
+                    
+                    if speedup > result_entry['best_speedup']:
+                        result_entry['best_speedup'] = speedup
+                        speedups.append(speedup)
+                    
+                except Exception as e:
+                    # Get comprehensive error information with timeout protection
+                    def safe_get_error_str(exc, timeout_sec=1):
+                        """Safely get error string with timeout to prevent hangs."""
+                        error_parts = {"type": type(exc).__name__, "str": None, "repr": None}
+                        
+                        def get_str():
+                            try:
+                                error_parts["str"] = str(exc)
+                            except Exception:
+                                pass
+                        
+                        def get_repr():
+                            try:
+                                error_parts["repr"] = repr(exc)
+                            except Exception:
+                                pass
+                        
+                        # Try to get string representation with timeout
+                        import threading
+                        t1 = threading.Thread(target=get_str, daemon=True)
+                        t2 = threading.Thread(target=get_repr, daemon=True)
+                        t1.start()
+                        t2.start()
+                        t1.join(timeout=timeout_sec)
+                        t2.join(timeout=timeout_sec)
+                        
+                        # Use best available representation
+                        if error_parts["str"]:
+                            return error_parts["str"]
+                        elif error_parts["repr"]:
+                            return error_parts["repr"]
+                        else:
+                            return error_parts["type"]
+                    
+                    error_str = safe_get_error_str(e)
+                    error_full = f"{type(e).__name__}: {error_str}" if error_str else type(e).__name__
+                    
+                    # If error string is suspiciously short or empty, try to get more info
+                    if not error_str or len(error_str.strip()) < 3:
+                        import traceback
+                        try:
+                            tb_lines = traceback.format_exception_only(type(e), e)
+                            if tb_lines:
+                                error_full = tb_lines[-1].strip()
+                                error_str = error_full
+                        except Exception:
+                            # If even traceback fails, use minimal info
+                            error_full = f"{type(e).__name__}: (error message unavailable)"
+                    
+                    skip_reason = check_hardware_limitation(error_full)
+                    
+                    if skip_reason:
+                        logger.warning(f"    Testing: {opt_name}... WARNING: SKIPPED: {skip_reason}")
+                        result_entry['optimizations'].append({
+                            'file': opt_name,
+                            'technique': technique,
+                            'status': 'skipped',
+                            'error': f'HARDWARE/SOFTWARE LIMITATION: {skip_reason}',
+                            'skip_reason': skip_reason,
+                        })
+                        skipped_hw += 1
+                    else:
+                        # Format error message: show full error but truncate if extremely long
+                        if len(error_full) > 200:
+                            # Try to truncate at word boundary for very long errors
+                            truncated = error_full[:197]
+                            last_space = truncated.rfind(' ')
+                            if last_space > 150:
+                                truncated = truncated[:last_space]
+                            truncated += "..."
+                            logger.error(f"    Testing: {opt_name}... FAILED ({truncated})")
+                            logger.error(f"        Full error: {error_full}")
+                        else:
+                            logger.error(f"    Testing: {opt_name}... FAILED ({error_full})")
+                        result_entry['optimizations'].append({
+                            'file': opt_name,
+                            'technique': technique,
+                            'status': 'failed_error',
+                            'error': error_full,  # Store full error with type
+                        })
+                        maybe_reset_gpu_for_error(error_full, f"{chapter_name}:{example_name}:{opt_name}")
+                    
+                    reset_cuda_state()  # Reset after failure
+                    # Additional cleanup for cold start mode
+                    if cold_start:
+                        reset_gpu_state()
+            
+            if result_entry['status'] == 'skipped':
+                benchmark_results.append(result_entry)
+                continue
+    
+            baseline_ok = result_entry.get('baseline_time_ms') is not None
+            optimizations = result_entry.get('optimizations', [])
+            has_success = any(opt.get('status') == 'succeeded' for opt in optimizations)
+            all_skipped_opt = bool(optimizations) and all(opt.get('status') == 'skipped' for opt in optimizations)
+    
+            evaluation = None
+            if baseline_ok and has_success:
+                metrics, best_opt = collect_expectation_metrics(result_entry)
+                metadata = build_expectation_metadata(result_entry, best_opt, git_commit)
+                example_key = expectation_example_key(result_entry['example'], result_entry.get('type', 'python'))
+                evaluation = expectations_store.evaluate(example_key, metrics, metadata)
+                if evaluation:
+                    result_entry['expectation'] = evaluation.to_dict()
+                log_expectation_evaluation(logger, evaluation, repo_root)
+                if evaluation and evaluation.regressed:
+                    regression_metrics = None
+                    if best_opt and isinstance(best_opt, dict):
+                        regression_metrics = best_opt.get("gpu_metrics")
+                    if not regression_metrics:
+                        regression_metrics = result_entry.get("baseline_gpu_metrics")
+                    if regression_metrics:
+                        logger.warning("    🌡️ GPU telemetry during regression: %s", format_gpu_telemetry(regression_metrics))
+                        temp = regression_metrics.get("temperature_gpu_c")
+                        if temp is not None and temp >= 85:
+                            logger.warning("    ⚠️ GPU temperature %.1f°C exceeds recommended threshold; consider cooling or resetting before re-running.", temp)
+                    else:
+                        live_metrics = query_gpu_telemetry()
+                        logger.warning("    🌡️ GPU telemetry during regression: %s", format_gpu_telemetry(live_metrics))
+                    result_entry['status'] = 'failed_regression'
+                    regression_details = evaluation.regressions[0] if evaluation.regressions else None
+                    if regression_details:
+                        result_entry['error'] = (
+                            f"Expectation regression on {regression_details['metric']}: "
+                            f"observed {_format_metric_value(regression_details.get('observed'))} vs "
+                            f"expected {_format_metric_value(regression_details.get('expected'))}"
+                        )
+                    else:
+                        result_entry['error'] = 'Expectation regression detected'
+                    failed_regression += 1
+                else:
+                    result_entry['status'] = 'succeeded'
+                    successful += 1
+            elif baseline_ok and (all_skipped_opt or not optimizations):
+                result_entry['status'] = 'succeeded'
+                successful += 1
+            else:
+                result_entry['status'] = 'failed_error'
+                if not result_entry.get('error'):
+                    result_entry['error'] = 'Baseline or optimization failed'
+                failed_error += 1
+            
+            benchmark_results.append(result_entry)
+            mark_progress(example_name)
+            
+            # Reset CUDA state after each benchmark pair (always, to ensure clean state)
+            reset_cuda_state()
+            # Additional cleanup for cold start mode (includes gc.collect() for more thorough cleanup)
+            if cold_start:
+                reset_gpu_state()
         
-        try:
-            # Use benchmark_with_manifest for reproducibility
-            run_id = f"{chapter_name}_{example_name}_baseline"
-            baseline_run = harness.benchmark_with_manifest(baseline_benchmark, run_id=run_id)
-            baseline_result = baseline_run.result
-            baseline_timing = baseline_result.timing
-            baseline_memory = baseline_result.memory
-            baseline_custom_metrics = getattr(baseline_result, "custom_metrics", None) or {}
-            if not baseline_custom_metrics:
-                getter = getattr(baseline_benchmark, "get_custom_metrics", None)
-                if callable(getter):
-                    try:
-                        metrics = getter()
-                        if isinstance(metrics, dict):
-                            baseline_custom_metrics = metrics
-                    except Exception:
-                        baseline_custom_metrics = {}
-            baseline_time = baseline_timing.mean_ms if baseline_timing else 0.0
+        # Process CUDA benchmarks
+        for baseline_cu_path, optimized_cu_paths, example_name in cuda_pairs:
+            logger.info(f"\n  Example (CUDA): {example_name}")
+
+            if example_name in informational_examples:
+                informational_skipped += 1
+                logger.info("    ℹ️ Informational systems demo - documented for reference, not benchmarked.")
+                mark_progress(example_name)
+                continue
+
+            result_entry = {
+                'example': example_name,
+                'baseline_file': baseline_cu_path.name,
+                'type': 'cuda',
+                'baseline_time_ms': None,
+                'baseline_throughput': None,
+                'optimizations': [],
+                'best_speedup': 1.0,
+                'status': 'failed_error',
+                'error': None,
+            }
+
+            # Find baseline executable
+            baseline_executable = find_cuda_executable(baseline_cu_path, chapter_dir)
+            if baseline_executable is None:
+                result_entry['error'] = f'Baseline executable not found for {baseline_cu_path.name}'
+                benchmark_results.append(result_entry)
+                failed_error += 1
+                mark_progress(example_name)
+                reset_cuda_state()  # Reset after failure
+                if cold_start:
+                    reset_gpu_state()
+                continue
+
+            # Benchmark baseline with explicit timeout
+            # Note: Some CUDA benchmarks can take multiple seconds per run, so allow longer timeouts
+            cuda_iterations = 3
+            cuda_warmup = 0
+            cuda_timeout = 30
+            logger.info(
+                f"    Running baseline executable {baseline_executable.name} "
+                f"(runs={cuda_iterations}, timeout={cuda_timeout}s per run)"
+            )
+            baseline_result = benchmark_cuda_executable(
+                baseline_executable,
+                iterations=cuda_iterations,
+                warmup=cuda_warmup,
+                timeout=cuda_timeout,
+            )
+            if baseline_result is None:
+                result_entry['error'] = f'Baseline execution failed or timed out ({cuda_timeout}s timeout)'
+                benchmark_results.append(result_entry)
+                failed_error += 1
+                mark_progress(example_name)
+                reset_cuda_state()  # Reset after failure
+                if cold_start:
+                    reset_gpu_state()
+                continue
+            if baseline_result.skip_reason:
+                reason = baseline_result.skip_reason
+                logger.warning(f"    Baseline executable {baseline_executable.name} SKIPPED: {reason}")
+                result_entry['status'] = 'skipped'
+                result_entry['error'] = reason
+                result_entry['skip_reason'] = reason
+                benchmark_results.append(result_entry)
+                skipped_hw += 1
+                mark_progress(example_name)
+                reset_cuda_state()
+                if cold_start:
+                    reset_gpu_state()
+                continue
+
+            baseline_time = baseline_result.mean_ms
             result_entry['baseline_time_ms'] = baseline_time
-            if baseline_custom_metrics:
-                result_entry['baseline_custom_metrics'] = baseline_custom_metrics
-            
-            # Enhanced baseline metrics display with emojis and formatting
+
+            # Enhanced baseline metrics display with emojis and formatting (same as Python)
             logger.info(f"    Baseline: {format_time_ms(baseline_time)} ms")
-            if baseline_timing:
-                logger.info(f"      📊 Timing Stats: median={format_time_ms(baseline_timing.median_ms)}ms, "
-                      f"min={format_time_ms(baseline_timing.min_ms)}ms, max={format_time_ms(baseline_timing.max_ms)}ms, "
-                      f"std={format_time_ms(baseline_timing.std_ms)}ms")
-            if baseline_memory and baseline_memory.peak_mb:
-                mem_str = f"      💾 Memory: peak={baseline_memory.peak_mb:.2f}MB"
-                if baseline_memory.allocated_mb:
-                    mem_str += f", allocated={baseline_memory.allocated_mb:.2f}MB"
-                logger.info(mem_str)
-            if baseline_timing and baseline_timing.percentiles:
-                p99 = baseline_timing.percentiles.get(99.0, 0)
-                p75 = baseline_timing.percentiles.get(75.0, 0)
-                p50 = baseline_timing.percentiles.get(50.0, baseline_timing.median_ms if baseline_timing else 0)
+            logger.info(
+                f"      📊 Timing Stats: median={format_time_ms(baseline_result.median_ms)}ms, "
+                f"min={format_time_ms(baseline_result.min_ms)}ms, max={format_time_ms(baseline_result.max_ms)}ms, "
+                f"std={format_time_ms(baseline_result.std_ms)}ms"
+            )
+            if baseline_result.percentiles:
+                p99 = baseline_result.percentiles.get(99.0, 0)
+                p75 = baseline_result.percentiles.get(75.0, 0)
+                p50 = baseline_result.percentiles.get(50.0, baseline_result.median_ms)
                 logger.info(f"      📈 Percentiles: p99={format_time_ms(p99)}ms, p75={format_time_ms(p75)}ms, p50={format_time_ms(p50)}ms")
-            baseline_throughput = baseline_result.throughput
-            throughput_summary = format_throughput_summary(baseline_throughput)
-            if throughput_summary:
-                logger.info(f"      ⚡ Throughput: {throughput_summary}")
-            serialized_throughput = serialize_throughput(baseline_throughput)
-            if serialized_throughput:
-                result_entry['baseline_throughput'] = serialized_throughput
-            if "scenario_total_phase_ms" in baseline_custom_metrics:
-                logger.info(
-                    f"      📐 Scenario phase sum: "
-                    f"{baseline_custom_metrics['scenario_total_phase_ms']:.3f} ms"
-                )
-            
-            # Profile baseline if profiling is enabled (nsys, ncu, PyTorch)
+
+            baseline_gpu_metrics = getattr(baseline_result, "gpu_metrics", None)
+            if not baseline_gpu_metrics:
+                baseline_gpu_metrics = query_gpu_telemetry()
+            if baseline_gpu_metrics:
+                result_entry['baseline_gpu_metrics'] = baseline_gpu_metrics
+                logger.info(f"      🌡️ GPU Telemetry: {format_gpu_telemetry(baseline_gpu_metrics)}")
+
+            # Profile baseline if profiling is enabled (nsys, ncu)
             if enable_profiling and profiling_output_dir:
                 logger.info(f"    Profiling baseline...")
                 profiler_results = []
                 baseline_metrics = {}
-                
+
                 # nsys profiling
                 if check_nsys_available():
                     logger.info(f"      nsys...")
-                    nsys_path = profile_python_benchmark(
-                        baseline_benchmark, baseline_path, chapter_dir, profiling_output_dir, variant="baseline"
+                    nsys_path = profile_cuda_executable(
+                        baseline_executable, chapter_dir, profiling_output_dir, variant="baseline"
                     )
                     if nsys_path:
                         result_entry['baseline_nsys_rep'] = str(nsys_path.relative_to(chapter_dir.parent))
@@ -1590,12 +2313,12 @@ def _test_chapter_impl(chapter_dir: Path, enable_profiling: bool = False, smoke_
                         profiler_results.append("nsys✗")
                 else:
                     profiler_results.append("nsys-")
-                
+
                 # ncu profiling
                 if check_ncu_available():
-                    logger.info(f"ncu...")
-                    ncu_path = profile_python_benchmark_ncu(
-                        baseline_benchmark, baseline_path, chapter_dir, profiling_output_dir, variant="baseline"
+                    logger.info(f"      ncu...")
+                    ncu_path = profile_cuda_executable_ncu(
+                        baseline_executable, chapter_dir, profiling_output_dir, variant="baseline"
                     )
                     if ncu_path:
                         result_entry['baseline_ncu_rep'] = str(ncu_path.relative_to(chapter_dir.parent))
@@ -1608,174 +2331,111 @@ def _test_chapter_impl(chapter_dir: Path, enable_profiling: bool = False, smoke_
                         profiler_results.append("ncu✗")
                 else:
                     profiler_results.append("ncu-")
-                
-                # PyTorch profiler
-                if TORCH_PROFILER_AVAILABLE:
-                    logger.info(f"PyTorch...")
-                    torch_path = profile_python_benchmark_torch(
-                        baseline_benchmark, baseline_path, chapter_dir, profiling_output_dir, variant="baseline"
-                    )
-                    if torch_path:
-                        result_entry['baseline_torch_trace'] = str(torch_path.relative_to(chapter_dir.parent))
-                        profiler_results.append("torch✓")
-                        # Extract metrics
-                        torch_metrics = extract_from_pytorch_trace(torch_path)
-                        if torch_metrics:
-                            baseline_metrics['torch'] = torch_metrics
-                    else:
-                        profiler_results.append("torch✗")
-                else:
-                    profiler_results.append("torch-")
-                
+
                 logger.info(f" ({', '.join(profiler_results)})")
-                
+
                 # Display extracted metrics
                 if baseline_metrics:
-                    logger.info(f"      📈 Profiler Metrics:")
+                    logger.info("      📈 Profiler Metrics:")
                     if 'nsys' in baseline_metrics:
                         for key, value in baseline_metrics['nsys'].items():
                             logger.info(f"        nsys.{key}: {value:.2f}")
                     if 'ncu' in baseline_metrics:
                         for key, value in baseline_metrics['ncu'].items():
                             logger.info(f"        ncu.{key}: {value:.2f}")
-                    if 'torch' in baseline_metrics:
-                        for key, value in baseline_metrics['torch'].items():
-                            logger.info(f"        torch.{key}: {value:.2f}")
                     result_entry['baseline_profiler_metrics'] = baseline_metrics
-        except Exception as e:
-            error_str = str(e)
-            skip_reason = check_hardware_limitation(error_str)
-            
-            if skip_reason:
-                result_entry['status'] = 'skipped'
-                result_entry['error'] = f'HARDWARE/SOFTWARE LIMITATION: {skip_reason}'
-                result_entry['skip_reason'] = skip_reason
-                logger.warning(f"    WARNING: SKIPPED: {skip_reason}")
-                skipped_hw += 1
-            else:
-                result_entry['error'] = f'Baseline execution failed: {error_str}'
-                failed_error += 1
-                maybe_reset_gpu_for_error(error_str, f"{chapter_name}:{example_name}:baseline")
-            
-            benchmark_results.append(result_entry)
-            reset_cuda_state()  # Reset after failure
-            # Additional cleanup for cold start mode
-            if cold_start:
-                reset_gpu_state()
-            continue
-        
-        # Test each optimization
-        for optimized_path in optimized_paths:
-            opt_name = optimized_path.name
-            technique = opt_name.replace(f'optimized_{example_name}_', '').replace('.py', '')
-            if technique == opt_name.replace('optimized_', '').replace('.py', ''):
-                technique = 'default'
-            
-            # Check if optimized benchmark is distributed and we have only 1 GPU
-            is_opt_distributed = is_distributed_benchmark(optimized_path)
-            if is_opt_distributed and num_gpus == 1:
-                skip_reason = f"SKIPPED: Distributed benchmark requires multiple GPUs (found {num_gpus} GPU)"
-                logger.warning(f"    WARNING: {opt_name}: {skip_reason}")
-                result_entry['optimizations'].append({
-                    'file': opt_name,
-                    'technique': technique,
-                    'status': 'skipped',
-                    'error': skip_reason,
-                })
-                continue
-            
-            optimized_benchmark = load_benchmark(optimized_path)
-            if optimized_benchmark is None:
-                logger.error(f"    Testing: {opt_name}... FAILED (load)")
-                result_entry['optimizations'].append({
-                    'file': opt_name,
-                    'technique': technique,
-                    'status': 'failed_error',
-                    'error': 'Failed to load',
-                })
-                continue
-            
-            try:
-                # Reset CUDA state before each optimized benchmark (always, to prevent cascading failures)
-                reset_cuda_state()
-                # Additional cleanup for cold start mode (includes gc.collect() for more thorough cleanup)
-                if cold_start:
-                    reset_gpu_state()
-                
-                # Use benchmark_with_manifest for reproducibility
-                opt_run_id = f"{chapter_name}_{example_name}_optimized_{technique}"
-                optimized_run = harness.benchmark_with_manifest(optimized_benchmark, run_id=opt_run_id)
-                optimized_result = optimized_run.result
-                optimized_timing = optimized_result.timing
-                optimized_memory = optimized_result.memory
-                optimized_custom_metrics = getattr(optimized_result, "custom_metrics", None) or {}
-                if not optimized_custom_metrics:
-                    getter = getattr(optimized_benchmark, "get_custom_metrics", None)
-                    if callable(getter):
-                        try:
-                            metrics = getter()
-                            if isinstance(metrics, dict):
-                                optimized_custom_metrics = metrics
-                        except Exception:
-                            optimized_custom_metrics = {}
-                optimized_time = optimized_timing.mean_ms if optimized_timing else 0.0
+
+            # Test each optimization
+            for optimized_cu_path in optimized_cu_paths:
+                opt_name = optimized_cu_path.name
+                technique = opt_name.replace(f'optimized_{example_name}_', '').replace('.cu', '')
+                if technique == opt_name.replace('optimized_', '').replace('.cu', ''):
+                    technique = 'default'
+
+                if num_gpus < 2 and cuda_binary_requires_multi_gpu(optimized_cu_path):
+                    reason = (
+                        f"SKIPPED: {opt_name} requires >=2 GPUs (e.g., NVLink/C2C) but only {num_gpus} GPU present"
+                    )
+                    logger.warning(f"    WARNING: {reason}")
+                    result_entry['optimizations'].append({
+                        'file': opt_name,
+                        'technique': technique,
+                        'status': 'skipped',
+                        'skip_reason': reason,
+                    })
+                    skipped_hw += 1
+                    continue
+
+                optimized_executable = find_cuda_executable(optimized_cu_path, chapter_dir)
+                if optimized_executable is None:
+                    logger.error(f"    Testing: {opt_name}... FAILED (executable not found)")
+                    result_entry['optimizations'].append({
+                        'file': opt_name,
+                        'technique': technique,
+                        'status': 'failed_error',
+                        'error': 'Executable not found',
+                    })
+                    failed_error += 1
+                    continue
+
+                logger.info(
+                    f"    Running {opt_name} "
+                    f"(runs={cuda_iterations}, timeout={cuda_timeout}s per run)"
+                )
+                optimized_result = benchmark_cuda_executable(
+                    optimized_executable,
+                    iterations=cuda_iterations,
+                    warmup=cuda_warmup,
+                    timeout=cuda_timeout,
+                )
+                if optimized_result is None:
+                    logger.error(f"    Testing: {opt_name}... FAILED (execution or timeout)")
+                    result_entry['optimizations'].append({
+                        'file': opt_name,
+                        'technique': technique,
+                        'status': 'failed_error',
+                        'error': f'Execution failed or timed out ({cuda_timeout}s timeout)',
+                    })
+                    failed_error += 1
+                    continue
+                if optimized_result.skip_reason:
+                    reason = optimized_result.skip_reason
+                    logger.warning(f"    Testing: {opt_name}... WARNING: SKIPPED: {reason}")
+                    result_entry['optimizations'].append({
+                        'file': opt_name,
+                        'technique': technique,
+                        'status': 'skipped',
+                        'skip_reason': reason,
+                        'error': f'HARDWARE/SOFTWARE LIMITATION: {reason}',
+                    })
+                    skipped_hw += 1
+                    continue
+
+                optimized_time = optimized_result.mean_ms
                 speedup = baseline_time / optimized_time if optimized_time > 0 else 1.0
-                scenario_speedup = None
-                b_phase = (result_entry.get('baseline_custom_metrics') or {}).get("scenario_total_phase_ms")
-                o_phase = optimized_custom_metrics.get("scenario_total_phase_ms")
-                if b_phase and o_phase and o_phase > 0:
-                    scenario_speedup = b_phase / o_phase
-                    if scenario_speedup > speedup:
-                        speedup = scenario_speedup
-                
-                # Enhanced metrics display with emojis and formatting
+
+                # Enhanced metrics display with emojis and formatting (same as Python)
                 emoji = "🚀" if speedup > 1.0 else "⚠️" if speedup < 1.0 else "="
                 logger.info(f"    Testing: {opt_name}... {format_time_ms(optimized_time)} ms ({speedup:.2f}x) {emoji}")
-                
-                if optimized_timing:
-                    logger.info(f"        📊 Timing: median={format_time_ms(optimized_timing.median_ms)}ms, "
-                          f"min={format_time_ms(optimized_timing.min_ms)}ms, max={format_time_ms(optimized_timing.max_ms)}ms, "
-                          f"std={format_time_ms(optimized_timing.std_ms)}ms")
-                
-                if optimized_memory and optimized_memory.peak_mb:
-                    mem_change = ""
-                    if baseline_memory and baseline_memory.peak_mb:
-                        diff_mb = optimized_memory.peak_mb - baseline_memory.peak_mb
-                        pct_change = (diff_mb / baseline_memory.peak_mb) * 100 if baseline_memory.peak_mb > 0 else 0
-                        sign = "+" if diff_mb >= 0 else ""
-                        mem_change = f" ({sign}{diff_mb:.2f}MB, {sign}{pct_change:.1f}%)"
-                    
-                    mem_str = f"        💾 Memory: peak={optimized_memory.peak_mb:.2f}MB{mem_change}"
-                    logger.info(mem_str)
-                    if optimized_memory.allocated_mb:
-                        logger.info(f"                 allocated={optimized_memory.allocated_mb:.2f}MB")
-                
-                optimized_throughput = optimized_result.throughput
-                throughput_summary = format_throughput_summary(optimized_throughput)
-                throughput_payload = serialize_throughput(optimized_throughput)
-                if throughput_summary:
-                    logger.info(f"        ⚡ Throughput: {throughput_summary}")
-                
-                if "scenario_total_phase_ms" in optimized_custom_metrics:
-                    logger.info(
-                        f"        📐 Scenario phase sum: "
-                        f"{optimized_custom_metrics['scenario_total_phase_ms']:.3f} ms"
-                    )
-                if scenario_speedup is not None:
-                    logger.info(f"        📊 Scenario phase-sum speedup: {scenario_speedup:.2f}x")
-                
-                if optimized_timing and optimized_timing.percentiles:
-                    p99 = optimized_timing.percentiles.get(99.0, 0)
-                    p75 = optimized_timing.percentiles.get(75.0, 0)
-                    p50 = optimized_timing.percentiles.get(50.0, optimized_timing.median_ms if optimized_timing else 0)
+
+                logger.info(
+                    f"        📊 Timing: median={format_time_ms(optimized_result.median_ms)}ms, "
+                    f"min={format_time_ms(optimized_result.min_ms)}ms, max={format_time_ms(optimized_result.max_ms)}ms, "
+                    f"std={format_time_ms(optimized_result.std_ms)}ms"
+                )
+
+                if optimized_result.percentiles:
+                    p99 = optimized_result.percentiles.get(99.0, 0)
+                    p75 = optimized_result.percentiles.get(75.0, 0)
+                    p50 = optimized_result.percentiles.get(50.0, optimized_result.median_ms)
                     p99_speedup = ""
-                    if baseline_timing and baseline_timing.percentiles and 99.0 in baseline_timing.percentiles:
-                        p99_baseline = baseline_timing.percentiles[99.0]
+                    if baseline_result.percentiles and 99.0 in baseline_result.percentiles:
+                        p99_baseline = baseline_result.percentiles[99.0]
                         if p99_baseline > 0:
                             p99_speedup = f" ({p99_baseline/p99:.2f}x)" if p99 > 0 else ""
                     logger.info(f"        📈 Percentiles: p99={format_time_ms(p99)}ms{p99_speedup}, p75={format_time_ms(p75)}ms, p50={format_time_ms(p50)}ms")
-                
-                # Visual speedup bar (always show for consistency)
+
+                # Visual speedup bar (always show for consistency, same as Python)
                 bar_length = 40
                 if speedup > 1.0:
                     # Improvement: fill bar proportionally to speedup
@@ -1784,8 +2444,7 @@ def _test_chapter_impl(chapter_dir: Path, enable_profiling: bool = False, smoke_
                     logger.info(f"        [{bar}] {speedup:.2f}x speedup")
                 elif speedup < 1.0:
                     # Regression: show how much slower (distance from 1.0)
-                    regress_ratio = (1.0 - speedup)  # e.g., 0.93x = 0.07 (7% slower)
-                    # Normalize: 0.5x (50% slower) = full bar, scale linearly
+                    regress_ratio = (1.0 - speedup)
                     filled = min(int(regress_ratio / 0.5 * bar_length), bar_length)
                     bar = "█" * filled + "░" * (bar_length - filled)
                     logger.info(f"        [{bar}] {speedup:.2f}x slowdown")
@@ -1793,7 +2452,7 @@ def _test_chapter_impl(chapter_dir: Path, enable_profiling: bool = False, smoke_
                     # No change
                     bar = "░" * bar_length
                     logger.info(f"        [{bar}] {speedup:.2f}x (no change)")
-                
+
                 opt_result = {
                     'file': opt_name,
                     'technique': technique,
@@ -1801,24 +2460,24 @@ def _test_chapter_impl(chapter_dir: Path, enable_profiling: bool = False, smoke_
                     'time_ms': optimized_time,
                     'speedup': speedup,
                 }
-                if optimized_custom_metrics:
-                    opt_result['custom_metrics'] = optimized_custom_metrics
-                if scenario_speedup is not None:
-                    opt_result['scenario_speedup'] = scenario_speedup
-                if throughput_payload:
-                    opt_result['throughput'] = throughput_payload
-                
-                # Profile optimized if profiling is enabled (nsys, ncu, PyTorch)
+                cuda_opt_gpu_metrics = getattr(optimized_result, "gpu_metrics", None)
+                if not cuda_opt_gpu_metrics:
+                    cuda_opt_gpu_metrics = query_gpu_telemetry()
+                if cuda_opt_gpu_metrics:
+                    opt_result['gpu_metrics'] = cuda_opt_gpu_metrics
+                    logger.info(f"        🌡️ GPU Telemetry: {format_gpu_telemetry(cuda_opt_gpu_metrics)}")
+
+                # Profile optimized if profiling is enabled (nsys, ncu)
                 if enable_profiling and profiling_output_dir:
                     logger.info(f"\n    Profiling optimized...")
                     profiler_results = []
                     optimized_metrics = {}
-                    
+
                     # nsys profiling
                     if check_nsys_available():
                         logger.info(f"      nsys...")
-                        nsys_path = profile_python_benchmark(
-                            optimized_benchmark, optimized_path, chapter_dir, profiling_output_dir, 
+                        nsys_path = profile_cuda_executable(
+                            optimized_executable, chapter_dir, profiling_output_dir,
                             variant=f"optimized_{technique}"
                         )
                         if nsys_path:
@@ -1832,12 +2491,12 @@ def _test_chapter_impl(chapter_dir: Path, enable_profiling: bool = False, smoke_
                             profiler_results.append("nsys✗")
                     else:
                         profiler_results.append("nsys-")
-                    
+
                     # ncu profiling
                     if check_ncu_available():
-                        logger.info(f"ncu...")
-                        ncu_path = profile_python_benchmark_ncu(
-                            optimized_benchmark, optimized_path, chapter_dir, profiling_output_dir,
+                        logger.info("ncu...")
+                        ncu_path = profile_cuda_executable_ncu(
+                            optimized_executable, chapter_dir, profiling_output_dir,
                             variant=f"optimized_{technique}"
                         )
                         if ncu_path:
@@ -1851,537 +2510,83 @@ def _test_chapter_impl(chapter_dir: Path, enable_profiling: bool = False, smoke_
                             profiler_results.append("ncu✗")
                     else:
                         profiler_results.append("ncu-")
-                    
-                    # PyTorch profiler
-                    if TORCH_PROFILER_AVAILABLE:
-                        logger.info(f"PyTorch...")
-                        torch_path = profile_python_benchmark_torch(
-                            optimized_benchmark, optimized_path, chapter_dir, profiling_output_dir,
-                            variant=f"optimized_{technique}"
-                        )
-                        if torch_path:
-                            opt_result['optimized_torch_trace'] = str(torch_path.relative_to(chapter_dir.parent))
-                            profiler_results.append("torch✓")
-                            # Extract metrics
-                            torch_metrics = extract_from_pytorch_trace(torch_path)
-                            if torch_metrics:
-                                optimized_metrics['torch'] = torch_metrics
-                        else:
-                            profiler_results.append("torch✗")
-                    else:
-                        profiler_results.append("torch-")
-                    
+
                     logger.info(f" ({', '.join(profiler_results)})")
-                    
+
                     # Display extracted metrics
                     if optimized_metrics:
-                        logger.info(f"        📈 Profiler Metrics:")
-                        if 'nsys' in optimized_metrics:
-                            for key, value in optimized_metrics['nsys'].items():
-                                logger.info(f"          nsys.{key}: {value:.2f}")
-                        if 'ncu' in optimized_metrics:
-                            for key, value in optimized_metrics['ncu'].items():
-                                logger.info(f"          ncu.{key}: {value:.2f}")
-                        if 'torch' in optimized_metrics:
-                            for key, value in optimized_metrics['torch'].items():
-                                logger.info(f"          torch.{key}: {value:.2f}")
+                        logger.info("        📈 Profiler Metrics:")
+                        log_profiler_metrics_table(logger, optimized_metrics, indent="          ")
                         opt_result['optimized_profiler_metrics'] = optimized_metrics
-                
+
                 result_entry['optimizations'].append(opt_result)
-                
+
                 if speedup > result_entry['best_speedup']:
                     result_entry['best_speedup'] = speedup
                     speedups.append(speedup)
-                
-            except Exception as e:
-                # Get comprehensive error information with timeout protection
-                def safe_get_error_str(exc, timeout_sec=1):
-                    """Safely get error string with timeout to prevent hangs."""
-                    error_parts = {"type": type(exc).__name__, "str": None, "repr": None}
-                    
-                    def get_str():
-                        try:
-                            error_parts["str"] = str(exc)
-                        except Exception:
-                            pass
-                    
-                    def get_repr():
-                        try:
-                            error_parts["repr"] = repr(exc)
-                        except Exception:
-                            pass
-                    
-                    # Try to get string representation with timeout
-                    import threading
-                    t1 = threading.Thread(target=get_str, daemon=True)
-                    t2 = threading.Thread(target=get_repr, daemon=True)
-                    t1.start()
-                    t2.start()
-                    t1.join(timeout=timeout_sec)
-                    t2.join(timeout=timeout_sec)
-                    
-                    # Use best available representation
-                    if error_parts["str"]:
-                        return error_parts["str"]
-                    elif error_parts["repr"]:
-                        return error_parts["repr"]
-                    else:
-                        return error_parts["type"]
-                
-                error_str = safe_get_error_str(e)
-                error_full = f"{type(e).__name__}: {error_str}" if error_str else type(e).__name__
-                
-                # If error string is suspiciously short or empty, try to get more info
-                if not error_str or len(error_str.strip()) < 3:
-                    import traceback
-                    try:
-                        tb_lines = traceback.format_exception_only(type(e), e)
-                        if tb_lines:
-                            error_full = tb_lines[-1].strip()
-                            error_str = error_full
-                    except Exception:
-                        # If even traceback fails, use minimal info
-                        error_full = f"{type(e).__name__}: (error message unavailable)"
-                
-                skip_reason = check_hardware_limitation(error_full)
-                
-                if skip_reason:
-                    logger.warning(f"    Testing: {opt_name}... WARNING: SKIPPED: {skip_reason}")
-                    result_entry['optimizations'].append({
-                        'file': opt_name,
-                        'technique': technique,
-                        'status': 'skipped',
-                        'error': f'HARDWARE/SOFTWARE LIMITATION: {skip_reason}',
-                        'skip_reason': skip_reason,
-                    })
-                    skipped_hw += 1
-                else:
-                    # Format error message: show full error but truncate if extremely long
-                    if len(error_full) > 200:
-                        # Try to truncate at word boundary for very long errors
-                        truncated = error_full[:197]
-                        last_space = truncated.rfind(' ')
-                        if last_space > 150:
-                            truncated = truncated[:last_space]
-                        truncated += "..."
-                        logger.error(f"    Testing: {opt_name}... FAILED ({truncated})")
-                        logger.error(f"        Full error: {error_full}")
-                    else:
-                        logger.error(f"    Testing: {opt_name}... FAILED ({error_full})")
-                    result_entry['optimizations'].append({
-                        'file': opt_name,
-                        'technique': technique,
-                        'status': 'failed_error',
-                        'error': error_full,  # Store full error with type
-                    })
-                    maybe_reset_gpu_for_error(error_full, f"{chapter_name}:{example_name}:{opt_name}")
-                
-                reset_cuda_state()  # Reset after failure
-                # Additional cleanup for cold start mode
-                if cold_start:
-                    reset_gpu_state()
-        
-        if result_entry['status'] == 'skipped':
-            benchmark_results.append(result_entry)
-            continue
 
-        baseline_ok = result_entry.get('baseline_time_ms') is not None
-        optimizations = result_entry.get('optimizations', [])
-        has_success = any(opt.get('status') == 'succeeded' for opt in optimizations)
-        all_skipped_opt = bool(optimizations) and all(opt.get('status') == 'skipped' for opt in optimizations)
+            if result_entry['best_speedup'] > 1.0:
+                logger.info(f"    Best speedup: {result_entry['best_speedup']:.2f}x")
+            if result_entry['status'] == 'skipped':
+                benchmark_results.append(result_entry)
+                mark_progress(example_name)
+                continue
 
-        evaluation = None
-        if baseline_ok and has_success:
-            metrics, best_opt = collect_expectation_metrics(result_entry)
-            metadata = build_expectation_metadata(result_entry, best_opt, git_commit)
-            example_key = expectation_example_key(result_entry['example'], result_entry.get('type', 'python'))
-            evaluation = expectations_store.evaluate(example_key, metrics, metadata)
-            if evaluation:
-                result_entry['expectation'] = evaluation.to_dict()
-            log_expectation_evaluation(logger, evaluation, repo_root)
-            if evaluation and evaluation.regressed:
-                result_entry['status'] = 'failed_regression'
-                regression_details = evaluation.regressions[0] if evaluation.regressions else None
-                if regression_details:
-                    result_entry['error'] = (
-                        f"Expectation regression on {regression_details['metric']}: "
-                        f"observed {_format_metric_value(regression_details.get('observed'))} vs "
-                        f"expected {_format_metric_value(regression_details.get('expected'))}"
-                    )
+            optimizations = result_entry.get('optimizations', [])
+            has_success = any(opt.get('status') == 'succeeded' for opt in optimizations)
+            all_skipped_opt = bool(optimizations) and all(opt.get('status') == 'skipped' for opt in optimizations)
+            baseline_ok = result_entry.get('baseline_time_ms') is not None
+
+            evaluation = None
+            if baseline_ok and has_success:
+                metrics, best_opt = collect_expectation_metrics(result_entry)
+                metadata = build_expectation_metadata(result_entry, best_opt, git_commit)
+                example_key = expectation_example_key(result_entry['example'], result_entry.get('type', 'python'))
+                evaluation = expectations_store.evaluate(example_key, metrics, metadata)
+                if evaluation:
+                    result_entry['expectation'] = evaluation.to_dict()
+                log_expectation_evaluation(logger, evaluation, repo_root)
+                if evaluation and evaluation.regressed:
+                    regression_metrics = None
+                    if best_opt and isinstance(best_opt, dict):
+                        regression_metrics = best_opt.get("gpu_metrics")
+                    if not regression_metrics:
+                        regression_metrics = result_entry.get("baseline_gpu_metrics")
+                    if regression_metrics:
+                        logger.warning("    🌡️ GPU telemetry during regression: %s", format_gpu_telemetry(regression_metrics))
+                        temp = regression_metrics.get("temperature_gpu_c")
+                        if temp is not None and temp >= 85:
+                            logger.warning("    ⚠️ GPU temperature %.1f°C exceeds recommended threshold; consider cooling or resetting before re-running.", temp)
+                    else:
+                        live_metrics = query_gpu_telemetry()
+                        logger.warning("    🌡️ GPU telemetry during regression: %s", format_gpu_telemetry(live_metrics))
+                    result_entry['status'] = 'failed_regression'
+                    regression_details = evaluation.regressions[0] if evaluation.regressions else None
+                    if regression_details:
+                        result_entry['error'] = (
+                            f"Expectation regression on {regression_details['metric']}: "
+                            f"observed {_format_metric_value(regression_details.get('observed'))} vs "
+                            f"expected {_format_metric_value(regression_details.get('expected'))}"
+                        )
+                    else:
+                        result_entry['error'] = 'Expectation regression detected'
+                    failed_regression += 1
                 else:
-                    result_entry['error'] = 'Expectation regression detected'
-                failed_regression += 1
-            else:
+                    result_entry['status'] = 'succeeded'
+                    successful += 1
+            elif baseline_ok and (all_skipped_opt or not optimizations):
                 result_entry['status'] = 'succeeded'
                 successful += 1
-        elif baseline_ok and (all_skipped_opt or not optimizations):
-            result_entry['status'] = 'succeeded'
-            successful += 1
-        else:
-            result_entry['status'] = 'failed_error'
-            if not result_entry.get('error'):
-                result_entry['error'] = 'Baseline or optimization failed'
-            failed_error += 1
-        
-        benchmark_results.append(result_entry)
-        
-        # Reset CUDA state after each benchmark pair (always, to ensure clean state)
-        reset_cuda_state()
-        # Additional cleanup for cold start mode (includes gc.collect() for more thorough cleanup)
-        if cold_start:
-            reset_gpu_state()
-    
-    # Process CUDA benchmarks
-    for baseline_cu_path, optimized_cu_paths, example_name in cuda_pairs:
-        logger.info(f"\n  Example (CUDA): {example_name}")
-        
-        if example_name in informational_examples:
-            informational_skipped += 1
-            logger.info("    ℹ️ Informational systems demo - documented for reference, not benchmarked.")
-            continue
-        
-        result_entry = {
-            'example': example_name,
-            'baseline_file': baseline_cu_path.name,
-            'type': 'cuda',
-            'baseline_time_ms': None,
-            'baseline_throughput': None,
-            'optimizations': [],
-            'best_speedup': 1.0,
-            'status': 'failed_error',
-            'error': None,
-        }
-        
-        # Find baseline executable
-        baseline_executable = find_cuda_executable(baseline_cu_path, chapter_dir)
-        if baseline_executable is None:
-            result_entry['error'] = f'Baseline executable not found for {baseline_cu_path.name}'
-            benchmark_results.append(result_entry)
-            failed_error += 1
-            reset_cuda_state()  # Reset after failure
-            if cold_start:
-                reset_gpu_state()
-            continue
-        
-        # Benchmark baseline with explicit timeout
-        # Smoke test mode still runs multiple iterations (5) to reduce timing jitter while staying quick
-        # Note: Some CUDA benchmarks (like memory transfer) can take 3-5 seconds per run
-        # So we need longer timeouts for these benchmarks
-        cuda_iterations = 5 if smoke_test else 3
-        if smoke_test and chapter_name in SMOKE_CUDA_ITERATION_OVERRIDES:
-            cuda_iterations = max(cuda_iterations, SMOKE_CUDA_ITERATION_OVERRIDES[chapter_name])
-        cuda_warmup = 0
-        cuda_timeout = 20 if smoke_test else 30  # Longer timeout for CUDA benchmarks that do heavy I/O
-        logger.info(
-            f"    Running baseline executable {baseline_executable.name} "
-            f"(runs={cuda_iterations}, timeout={cuda_timeout}s per run)"
-        )
-        baseline_result = benchmark_cuda_executable(baseline_executable, iterations=cuda_iterations, warmup=cuda_warmup, timeout=cuda_timeout)
-        if baseline_result is None:
-            result_entry['error'] = f'Baseline execution failed or timed out ({cuda_timeout}s timeout)'
-            benchmark_results.append(result_entry)
-            failed_error += 1
-            reset_cuda_state()  # Reset after failure
-            if cold_start:
-                reset_gpu_state()
-            continue
-        if baseline_result.skip_reason:
-            reason = baseline_result.skip_reason
-            logger.warning(f"    Baseline executable {baseline_executable.name} SKIPPED: {reason}")
-            result_entry['status'] = 'skipped'
-            result_entry['error'] = reason
-            result_entry['skip_reason'] = reason
-            benchmark_results.append(result_entry)
-            skipped_hw += 1
-            reset_cuda_state()
-            if cold_start:
-                reset_gpu_state()
-            continue
-        
-        baseline_time = baseline_result.mean_ms
-        result_entry['baseline_time_ms'] = baseline_time
-        
-        # Enhanced baseline metrics display with emojis and formatting (same as Python)
-        logger.info(f"    Baseline: {format_time_ms(baseline_time)} ms")
-        logger.info(f"      📊 Timing Stats: median={format_time_ms(baseline_result.median_ms)}ms, "
-              f"min={format_time_ms(baseline_result.min_ms)}ms, max={format_time_ms(baseline_result.max_ms)}ms, "
-              f"std={format_time_ms(baseline_result.std_ms)}ms")
-        if baseline_result.percentiles:
-            p99 = baseline_result.percentiles.get(99.0, 0)
-            p75 = baseline_result.percentiles.get(75.0, 0)
-            p50 = baseline_result.percentiles.get(50.0, baseline_result.median_ms)
-            logger.info(f"      📈 Percentiles: p99={format_time_ms(p99)}ms, p75={format_time_ms(p75)}ms, p50={format_time_ms(p50)}ms")
-        
-        # Profile baseline if profiling is enabled (nsys, ncu)
-        if enable_profiling and profiling_output_dir:
-            logger.info(f"    Profiling baseline...")
-            profiler_results = []
-            baseline_metrics = {}
-            
-            # nsys profiling
-            if check_nsys_available():
-                logger.info(f"      nsys...")
-                nsys_path = profile_cuda_executable(
-                    baseline_executable, chapter_dir, profiling_output_dir, variant="baseline"
-                )
-                if nsys_path:
-                    result_entry['baseline_nsys_rep'] = str(nsys_path.relative_to(chapter_dir.parent))
-                    profiler_results.append("nsys✓")
-                    # Extract metrics
-                    nsys_metrics = extract_from_nsys_report(nsys_path)
-                    if nsys_metrics:
-                        baseline_metrics['nsys'] = nsys_metrics
-                else:
-                    profiler_results.append("nsys✗")
             else:
-                profiler_results.append("nsys-")
-            
-            # ncu profiling
-            if check_ncu_available():
-                logger.info(f"ncu...")
-                ncu_path = profile_cuda_executable_ncu(
-                    baseline_executable, chapter_dir, profiling_output_dir, variant="baseline"
-                )
-                if ncu_path:
-                    result_entry['baseline_ncu_rep'] = str(ncu_path.relative_to(chapter_dir.parent))
-                    profiler_results.append("ncu✓")
-                    # Extract metrics
-                    ncu_metrics = extract_from_ncu_report(ncu_path)
-                    if ncu_metrics:
-                        baseline_metrics['ncu'] = ncu_metrics
-                else:
-                    profiler_results.append("ncu✗")
-            else:
-                profiler_results.append("ncu-")
-            
-            logger.info(f" ({', '.join(profiler_results)})")
-            
-            # Display extracted metrics
-            if baseline_metrics:
-                logger.info(f"      📈 Profiler Metrics:")
-                if 'nsys' in baseline_metrics:
-                    for key, value in baseline_metrics['nsys'].items():
-                        logger.info(f"        nsys.{key}: {value:.2f}")
-                if 'ncu' in baseline_metrics:
-                    for key, value in baseline_metrics['ncu'].items():
-                        logger.info(f"        ncu.{key}: {value:.2f}")
-                result_entry['baseline_profiler_metrics'] = baseline_metrics
-        
-        # Test each optimization
-        for optimized_cu_path in optimized_cu_paths:
-            opt_name = optimized_cu_path.name
-            technique = opt_name.replace(f'optimized_{example_name}_', '').replace('.cu', '')
-            if technique == opt_name.replace('optimized_', '').replace('.cu', ''):
-                technique = 'default'
+                result_entry['status'] = 'failed_error'
+                if not result_entry.get('error'):
+                    result_entry['error'] = 'Baseline or optimization failed'
+                failed_error += 1
 
-            if num_gpus < 2 and cuda_binary_requires_multi_gpu(optimized_cu_path):
-                reason = (
-                    f"SKIPPED: {opt_name} requires >=2 GPUs (e.g., NVLink/C2C) but only {num_gpus} GPU present"
-                )
-                logger.warning(f"    WARNING: {reason}")
-                result_entry['optimizations'].append({
-                    'file': opt_name,
-                    'technique': technique,
-                    'status': 'skipped',
-                    'skip_reason': reason,
-                })
-                skipped_hw += 1
-                continue
-            
-            optimized_executable = find_cuda_executable(optimized_cu_path, chapter_dir)
-            if optimized_executable is None:
-                logger.error(f"    Testing: {opt_name}... FAILED (executable not found)")
-                result_entry['optimizations'].append({
-                    'file': opt_name,
-                    'technique': technique,
-                    'status': 'failed_error',
-                    'error': 'Executable not found',
-                })
-                continue
-
-            logger.info(
-                f"    Running {opt_name} "
-                f"(runs={cuda_iterations}, timeout={cuda_timeout}s per run)"
-            )
-            optimized_result = benchmark_cuda_executable(optimized_executable, iterations=cuda_iterations, warmup=cuda_warmup, timeout=cuda_timeout)
-            if optimized_result is None:
-                logger.error(f"    Testing: {opt_name}... FAILED (execution or timeout)")
-                result_entry['optimizations'].append({
-                    'file': opt_name,
-                    'technique': technique,
-                    'status': 'failed_error',
-                    'error': f'Execution failed or timed out ({cuda_timeout}s timeout)',
-                })
-                continue
-            if optimized_result.skip_reason:
-                reason = optimized_result.skip_reason
-                logger.warning(f"    Testing: {opt_name}... WARNING: SKIPPED: {reason}")
-                result_entry['optimizations'].append({
-                    'file': opt_name,
-                    'technique': technique,
-                    'status': 'skipped',
-                    'skip_reason': reason,
-                    'error': f'HARDWARE/SOFTWARE LIMITATION: {reason}',
-                })
-                skipped_hw += 1
-                continue
-            
-            optimized_time = optimized_result.mean_ms
-            speedup = baseline_time / optimized_time if optimized_time > 0 else 1.0
-            
-            # Enhanced metrics display with emojis and formatting (same as Python)
-            emoji = "🚀" if speedup > 1.0 else "⚠️" if speedup < 1.0 else "="
-            logger.info(f"    Testing: {opt_name}... {format_time_ms(optimized_time)} ms ({speedup:.2f}x) {emoji}")
-            
-            logger.info(f"        📊 Timing: median={format_time_ms(optimized_result.median_ms)}ms, "
-                  f"min={format_time_ms(optimized_result.min_ms)}ms, max={format_time_ms(optimized_result.max_ms)}ms, "
-                  f"std={format_time_ms(optimized_result.std_ms)}ms")
-            
-            if optimized_result.percentiles:
-                p99 = optimized_result.percentiles.get(99.0, 0)
-                p75 = optimized_result.percentiles.get(75.0, 0)
-                p50 = optimized_result.percentiles.get(50.0, optimized_result.median_ms)
-                p99_speedup = ""
-                if baseline_result.percentiles and 99.0 in baseline_result.percentiles:
-                    p99_baseline = baseline_result.percentiles[99.0]
-                    if p99_baseline > 0:
-                        p99_speedup = f" ({p99_baseline/p99:.2f}x)" if p99 > 0 else ""
-                logger.info(f"        📈 Percentiles: p99={format_time_ms(p99)}ms{p99_speedup}, p75={format_time_ms(p75)}ms, p50={format_time_ms(p50)}ms")
-            
-            # Visual speedup bar (always show for consistency, same as Python)
-            bar_length = 40
-            if speedup > 1.0:
-                # Improvement: fill bar proportionally to speedup
-                filled = min(int((speedup - 1.0) / max(speedup, 10.0) * bar_length), bar_length)
-                bar = "█" * filled + "░" * (bar_length - filled)
-                logger.info(f"        [{bar}] {speedup:.2f}x speedup")
-            elif speedup < 1.0:
-                # Regression: show how much slower (distance from 1.0)
-                regress_ratio = (1.0 - speedup)  # e.g., 0.93x = 0.07 (7% slower)
-                # Normalize: 0.5x (50% slower) = full bar, scale linearly
-                filled = min(int(regress_ratio / 0.5 * bar_length), bar_length)
-                bar = "█" * filled + "░" * (bar_length - filled)
-                logger.info(f"        [{bar}] {speedup:.2f}x slowdown")
-            else:
-                # No change
-                bar = "░" * bar_length
-                logger.info(f"        [{bar}] {speedup:.2f}x (no change)")
-            
-            opt_result = {
-                'file': opt_name,
-                'technique': technique,
-                'status': 'succeeded',
-                'time_ms': optimized_time,
-                'speedup': speedup,
-            }
-            
-            # Profile optimized if profiling is enabled (nsys, ncu)
-            if enable_profiling and profiling_output_dir:
-                logger.info(f"\n    Profiling optimized...")
-                profiler_results = []
-                optimized_metrics = {}
-                
-                # nsys profiling
-                if check_nsys_available():
-                    logger.info(f"      nsys...")
-                    nsys_path = profile_cuda_executable(
-                        optimized_executable, chapter_dir, profiling_output_dir,
-                        variant=f"optimized_{technique}"
-                    )
-                    if nsys_path:
-                        opt_result['optimized_nsys_rep'] = str(nsys_path.relative_to(chapter_dir.parent))
-                        profiler_results.append("nsys✓")
-                        # Extract metrics
-                        nsys_metrics = extract_from_nsys_report(nsys_path)
-                        if nsys_metrics:
-                            optimized_metrics['nsys'] = nsys_metrics
-                    else:
-                        profiler_results.append("nsys✗")
-                else:
-                    profiler_results.append("nsys-")
-                
-                # ncu profiling
-                if check_ncu_available():
-                    logger.info(f"ncu...")
-                    ncu_path = profile_cuda_executable_ncu(
-                        optimized_executable, chapter_dir, profiling_output_dir,
-                        variant=f"optimized_{technique}"
-                    )
-                    if ncu_path:
-                        opt_result['optimized_ncu_rep'] = str(ncu_path.relative_to(chapter_dir.parent))
-                        profiler_results.append("ncu✓")
-                        # Extract metrics
-                        ncu_metrics = extract_from_ncu_report(ncu_path)
-                        if ncu_metrics:
-                            optimized_metrics['ncu'] = ncu_metrics
-                    else:
-                        profiler_results.append("ncu✗")
-                else:
-                    profiler_results.append("ncu-")
-                
-                logger.info(f" ({', '.join(profiler_results)})")
-                
-                # Display extracted metrics
-                if optimized_metrics:
-                    logger.info(f"        📈 Profiler Metrics:")
-                    if 'nsys' in optimized_metrics:
-                        for key, value in optimized_metrics['nsys'].items():
-                            logger.info(f"          nsys.{key}: {value:.2f}")
-                    if 'ncu' in optimized_metrics:
-                        for key, value in optimized_metrics['ncu'].items():
-                            logger.info(f"          ncu.{key}: {value:.2f}")
-                    opt_result['optimized_profiler_metrics'] = optimized_metrics
-            
-            result_entry['optimizations'].append(opt_result)
-            
-            if speedup > result_entry['best_speedup']:
-                result_entry['best_speedup'] = speedup
-                speedups.append(speedup)
-        
-        if result_entry['status'] == 'skipped':
             benchmark_results.append(result_entry)
-            continue
+            mark_progress(example_name)
 
-        optimizations = result_entry.get('optimizations', [])
-        has_success = any(opt.get('status') == 'succeeded' for opt in optimizations)
-        all_skipped_opt = bool(optimizations) and all(opt.get('status') == 'skipped' for opt in optimizations)
-        baseline_ok = result_entry.get('baseline_time_ms') is not None
-
-        evaluation = None
-        if baseline_ok and has_success:
-            metrics, best_opt = collect_expectation_metrics(result_entry)
-            metadata = build_expectation_metadata(result_entry, best_opt, git_commit)
-            example_key = expectation_example_key(result_entry['example'], result_entry.get('type', 'python'))
-            evaluation = expectations_store.evaluate(example_key, metrics, metadata)
-            if evaluation:
-                result_entry['expectation'] = evaluation.to_dict()
-            log_expectation_evaluation(logger, evaluation, repo_root)
-            if evaluation and evaluation.regressed:
-                result_entry['status'] = 'failed_regression'
-                regression_details = evaluation.regressions[0] if evaluation.regressions else None
-                if regression_details:
-                    result_entry['error'] = (
-                        f"Expectation regression on {regression_details['metric']}: "
-                        f"observed {_format_metric_value(regression_details.get('observed'))} vs "
-                        f"expected {_format_metric_value(regression_details.get('expected'))}"
-                    )
-                else:
-                    result_entry['error'] = 'Expectation regression detected'
-                failed_regression += 1
-            else:
-                result_entry['status'] = 'succeeded'
-                successful += 1
-        elif baseline_ok and (all_skipped_opt or not optimizations):
-            result_entry['status'] = 'succeeded'
-            successful += 1
-        else:
-            result_entry['status'] = 'failed_error'
-            if not result_entry.get('error'):
-                result_entry['error'] = 'Baseline or optimization failed'
-            failed_error += 1
-        
-        benchmark_results.append(result_entry)
-    
+    logger.info(f"  Recorded benchmark entries: {len(benchmark_results)}")
     expectations_store.save()
 
     # Calculate summary statistics
@@ -2427,7 +2632,17 @@ def _test_chapter_impl(chapter_dir: Path, enable_profiling: bool = False, smoke_
     }
 
 
-def test_chapter(chapter_dir: Path, enable_profiling: bool = False, smoke_test: bool = False, timeout_multiplier: float = 1.0, reproducible: bool = False, cold_start: bool = False, iterations: Optional[int] = None, warmup: Optional[int] = None, only_examples: Optional[List[str]] = None) -> Dict[str, Any]:
+def test_chapter(
+    chapter_dir: Path,
+    enable_profiling: bool = False,
+    smoke_test: bool = False,
+    timeout_multiplier: float = 1.0,
+    reproducible: bool = False,
+    cold_start: bool = False,
+    iterations: Optional[int] = None,
+    warmup: Optional[int] = None,
+    only_examples: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """Wrapper to toggle smoke-test hint for downstream benchmarks."""
     previous_flag = os.environ.get("BENCHMARK_SMOKE_TEST")
     if smoke_test:
@@ -2592,9 +2807,12 @@ def main():
         epilog=__doc__
     )
     parser.add_argument(
-        '--chapter',
-        type=str,
-        help='Chapter to test (e.g., ch1) or "all" (default: all)'
+        '--targets',
+        nargs='+',
+        help=("Space-separated list of targets. "
+              "Use 'ch3' to test an entire chapter or 'ch3:resnet_50' "
+              "to run baseline_resnet_50 and optimized_resnet_50. "
+              "Omit this flag (or pass 'all') to run every chapter.")
     )
     parser.add_argument(
         '--output',
@@ -2614,15 +2832,31 @@ def main():
         help='Enable profiling (generates nsys .nsys-rep, ncu .ncu-rep, and PyTorch trace files for each benchmark)'
     )
     parser.add_argument(
-        '--only-examples',
-        type=str,
-        default=None,
-        help='Comma-separated list of example names to run (e.g., "moe,cutlass"). If not specified, runs all examples.'
-    )
-    parser.add_argument(
         '--smoke-test',
         action='store_true',
-        help='Run in smoke-test mode (fewer iterations, smaller timeouts) for quicker validation.'
+        help='Run in smoke-test mode (reduced iterations/warmup) for faster validation.'
+    )
+    parser.add_argument(
+        '--reproducible',
+        action='store_true',
+        help='Force deterministic seeds and algorithms for reproducible comparisons.'
+    )
+    parser.add_argument(
+        '--cold-start',
+        action='store_true',
+        help='Reset CUDA/GPU state aggressively between benchmarks to emulate cold-start runs.'
+    )
+    parser.add_argument(
+        '--iterations',
+        type=int,
+        default=None,
+        help='Override iteration count for Python benchmarks (default: 5 in smoke mode, else 20).'
+    )
+    parser.add_argument(
+        '--warmup',
+        type=int,
+        default=None,
+        help='Override warmup iteration count for Python benchmarks.'
     )
     parser.add_argument(
         '--timeout-multiplier',
@@ -2633,15 +2867,11 @@ def main():
     
     args = parser.parse_args()
     
-    # Parse --only-examples into a list
-    only_examples = None
-    if args.only_examples:
-        only_examples = [name.strip() for name in args.only_examples.split(",") if name.strip()]
-    
     logger.info("=" * 80)
     logger.info("TESTING ALL BENCHMARKS")
     logger.info("=" * 80)
     logger.info("")
+    logger.info(f"Target override: {args.targets}")
 
     dump_environment_and_capabilities()
     logger.info("")
@@ -2653,7 +2883,7 @@ def main():
         if dump_caps_path.exists():
             import subprocess
             result = subprocess.run(
-                [sys.executable, str(dump_caps_path)],
+                [sys.executable, str(dump_caps_path), "--fast"],
                 capture_output=True,
                 text=True,
                 timeout=15
@@ -2694,13 +2924,11 @@ def main():
     logger.info("")
     
     # Determine chapters to test
-    if args.chapter and args.chapter != 'all':
-        chapter_dirs = [repo_root / args.chapter]
-    else:
-        chapter_dirs = sorted([
-            d for d in repo_root.iterdir()
-            if d.is_dir() and d.name.startswith('ch') and d.name[2:].isdigit()
-        ])
+    try:
+        chapter_dirs, chapter_filters = resolve_target_chapters(args.targets)
+    except (ValueError, FileNotFoundError) as exc:
+        logger.error(f"ERROR: {exc}")
+        sys.exit(1)
     
     # Test all chapters
     all_results = []
@@ -2708,11 +2936,17 @@ def main():
         if not chapter_dir.exists():
             continue
         
+        example_filters = chapter_filters.get(chapter_dir.name)
+        only_examples = sorted(example_filters) if example_filters else None
         result = test_chapter(
             chapter_dir,
             enable_profiling=args.profile,
             smoke_test=args.smoke_test,
             timeout_multiplier=args.timeout_multiplier,
+            reproducible=args.reproducible,
+            cold_start=args.cold_start,
+            iterations=args.iterations,
+            warmup=args.warmup,
             only_examples=only_examples
         )
         all_results.append(result)

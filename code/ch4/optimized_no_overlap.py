@@ -16,7 +16,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 import torch
-from common.python.compile_utils import enable_tf32
+from common.python.compile_utils import enable_tf32, compile_model
 import torch.distributed as dist
 import torch.nn as nn
 import torch.optim as optim
@@ -101,10 +101,7 @@ class OptimizedOverlapDdpBenchmark:
         
         if torch.cuda.is_available():
             pass
-        try:
-            model = torch.compile(model, mode="reduce-overhead")
-        except Exception:
-            pass
+        model = compile_model(model, mode="reduce-overhead")
         
         if self.world_size > 1:
             self.model = nn.parallel.DistributedDataParallel(

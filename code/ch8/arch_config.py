@@ -16,6 +16,8 @@ import warnings
 from pathlib import Path
 
 import torch
+
+from common.python.compile_utils import compile_callable
 from common.python.compile_utils import enable_tf32
 
 
@@ -94,16 +96,4 @@ def maybe_compile(fn, *, default_mode: str = "reduce-overhead"):
         return fn
 
     mode = get_compile_mode(default_mode)
-    try:
-        return torch.compile(fn, mode=mode)
-    except Exception as exc:  # pragma: no cover - torch.compile failures are rare
-        error_msg = str(exc)
-        # Handle C++ compilation errors gracefully
-        if "CppCompileError" in error_msg or "torch._inductor" in error_msg or "No such file or directory" in error_msg:
-            warnings.warn(
-                f"torch.compile failed due to C++ compilation error in mode {mode!r}: {error_msg[:200]}. "
-                f"Running eager path. This may be due to missing cache directory or working directory issues."
-            )
-        else:
-            warnings.warn(f"torch.compile failed in mode {mode!r}: {exc}. Running eager path.")
-        return fn
+    return compile_callable(fn, mode=mode)

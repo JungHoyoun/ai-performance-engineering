@@ -34,14 +34,16 @@ class VectorizationBenchmark(Benchmark):
         self.output = None
         self.weights = None
         self.bias = None
-        self.vector_width = 32
-        self.num_rows = 32_768
+        self.vector_width = 64
+        self.num_rows = 65_536
+        self.repeats = 24
 
     def setup(self) -> None:
         """Setup: Initialize tensors."""
         torch.manual_seed(42)
         total = self.num_rows * self.vector_width
-        self.data = torch.randn(total, device=self.device, dtype=torch.float32).view(self.num_rows, self.vector_width)
+        base = torch.randn(total, device=self.device, dtype=torch.float32)
+        self.data = base.view(self.vector_width, self.num_rows).transpose(0, 1)
         self.output = torch.empty_like(self.data)
         self.weights = torch.randn(self.vector_width, device=self.device, dtype=torch.float32)
         self.bias = torch.randn(self.vector_width, device=self.device, dtype=torch.float32)
@@ -55,11 +57,12 @@ class VectorizationBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
         with nvtx_range("vectorization_memory", enable=enable_nvtx):
-            for lane in range(self.vector_width):
-                column = self.data[:, lane]
-                transformed = column * self.weights[lane] + self.bias[lane]
-                self.output[:, lane] = transformed
-                torch.cuda.synchronize()
+            for _ in range(self.repeats):
+                for lane in range(self.vector_width):
+                    column = self.data[:, lane].clone()
+                    transformed = torch.tanh(column * self.weights[lane] + self.bias[lane])
+                    self.output[:, lane] = transformed
+                    torch.cuda.synchronize()
 
 
     def teardown(self) -> None:
@@ -73,7 +76,7 @@ class VectorizationBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=100,
+            iterations=50,
             warmup=10,
         )
 

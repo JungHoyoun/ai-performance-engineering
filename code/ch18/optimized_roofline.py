@@ -9,7 +9,7 @@ from typing import Optional
 import torch
 
 from common.python.benchmark_harness import Benchmark, BenchmarkConfig
-from ch18.workload_config import WORKLOAD, is_smoke_test
+from ch18.workload_config import WORKLOAD
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -28,7 +28,6 @@ class OptimizedRooflineBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.workload = WORKLOAD
-        self.smoke_test = is_smoke_test()
         self.matrix_size = self.workload.roofline_matmul_size
         self.activation: Optional[torch.Tensor] = None
         self.weights: Optional[torch.Tensor] = None
@@ -61,7 +60,7 @@ class OptimizedRooflineBenchmark(Benchmark):
         assert self.weights is not None
 
         with nvtx_range("optimized_roofline", enable=enable_nvtx):
-            with torch.cuda.amp.autocast(dtype=torch.float16):
+            with torch.autocast("cuda", dtype=torch.float16):
                 output = torch.matmul(self.activation, self.weights)
             bytes_accessed = (self.activation.numel() + self.weights.numel() + output.numel()) * output.element_size()
             flops = 2 * (self.matrix_size ** 3)

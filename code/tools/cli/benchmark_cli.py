@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
 import signal
 import sys
 import time
 import warnings
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 try:
     import typer
-    from typer import Option, Argument, Context
+    from typer import Option
     TYPER_AVAILABLE = True
 except ImportError:
     TYPER_AVAILABLE = False
@@ -29,10 +30,39 @@ warnings.filterwarnings("ignore", message=".*Minimum and Maximum cuda capability
 repo_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(repo_root))
 
+def _expand_multi_value_option(option_names: List[str]) -> None:
+    """Allow passing `--option value1 value2` by rewriting argv."""
+    argv = sys.argv
+    if not set(option_names).intersection(argv):
+        return
+    new_argv = [argv[0]]
+    i = 1
+    option_set = set(option_names)
+    while i < len(argv):
+        token = argv[i]
+        if token in option_set:
+            option = token
+            i += 1
+            consumed = False
+            while i < len(argv) and not argv[i].startswith("-"):
+                new_argv.append(option)
+                new_argv.append(argv[i])
+                i += 1
+                consumed = True
+            if not consumed:
+                new_argv.append(option)
+            continue
+        new_argv.append(token)
+        i += 1
+    sys.argv = new_argv
+
+
+_expand_multi_value_option(["--targets", "-t"])
+
 from common.python.env_defaults import apply_env_defaults, dump_environment_and_capabilities
 from common.python.logger import setup_logging, get_logger, log_benchmark_start, log_benchmark_complete, log_benchmark_error
 from common.python.artifact_manager import ArtifactManager
-from common.python.discovery import discover_all_chapters
+from tools.verification.verify_all_benchmarks import resolve_target_chapters, run_verification
 
 apply_env_defaults()
 
@@ -103,17 +133,47 @@ def ensure_peak_benchmarks_exist():
 
 
 def _execute_benchmarks(
-    chapter: Optional[str] = None,
+    targets: Optional[List[str]] = None,
     output_format: str = "both",
     enable_profiling: bool = True,
     suite_timeout: Optional[int] = None,
     timeout_multiplier: float = 1.0,
     reproducible: bool = False,
     cold_start: bool = False,
-    smoke_test: bool = False,
     iterations: Optional[int] = None,
     warmup: Optional[int] = None,
-    only_examples: Optional[List[str]] = None,
+    force_pipeline: bool = False,
+    artifacts_dir: Optional[str] = None,
+    log_level: str = "INFO",
+    log_file: Optional[str] = None,
+):
+    _execute_benchmarks_impl(
+        targets=targets,
+        output_format=output_format,
+        enable_profiling=enable_profiling,
+        suite_timeout=suite_timeout,
+        timeout_multiplier=timeout_multiplier,
+        reproducible=reproducible,
+        cold_start=cold_start,
+        iterations=iterations,
+        warmup=warmup,
+        force_pipeline=force_pipeline,
+        artifacts_dir=artifacts_dir,
+        log_level=log_level,
+        log_file=log_file,
+    )
+
+
+def _execute_benchmarks_impl(
+    targets: Optional[List[str]] = None,
+    output_format: str = "both",
+    enable_profiling: bool = True,
+    suite_timeout: Optional[int] = None,
+    timeout_multiplier: float = 1.0,
+    reproducible: bool = False,
+    cold_start: bool = False,
+    iterations: Optional[int] = None,
+    warmup: Optional[int] = None,
     force_pipeline: bool = False,
     artifacts_dir: Optional[str] = None,
     log_level: str = "INFO",
@@ -156,8 +216,6 @@ def _execute_benchmarks(
     
     logger.info("=" * 80)
     logger.info("RUNNING ALL BENCHMARKS")
-    if smoke_test:
-        logger.info("SMOKE TEST MODE: Reduced iterations and warmup for quick validation")
     if enable_profiling:
         logger.info("PROFILING ENABLED: nsys/ncu/PyTorch profiling will run")
     else:
@@ -181,18 +239,11 @@ def _execute_benchmarks(
     logger.info("=" * 80)
     
     # Determine chapters to test
-    # Handle case where Typer might pass the command name as the chapter argument
-    if chapter == 'run':
-        chapter = None
-    
-    if chapter and chapter != 'all':
-        if chapter.isdigit():
-            chapter = f"ch{chapter}"
-        elif chapter.startswith('ch') and chapter[2:].isdigit():
-            pass
-        chapter_dirs = [repo_root / chapter]
-    else:
-        chapter_dirs = discover_all_chapters(repo_root)
+    try:
+        chapter_dirs, chapter_filters = resolve_target_chapters(targets)
+    except (ValueError, FileNotFoundError) as exc:
+        logger.error(str(exc))
+        sys.exit(1)
     
     logger.info(f"Found {len(chapter_dirs)} chapter directory(ies) to test")
     if chapter_dirs:
@@ -232,10 +283,11 @@ def _execute_benchmarks(
             
             logger.info(f"Testing chapter: {chapter_dir.name}")
             # Call test_chapter with all flags - it handles manifest generation internally
+            example_filters = chapter_filters.get(chapter_dir.name)
+            only_examples = sorted(example_filters) if example_filters else None
             result = test_chapter(
                 chapter_dir=chapter_dir,
                 enable_profiling=enable_profiling,
-                smoke_test=smoke_test,
                 timeout_multiplier=timeout_multiplier,
                 reproducible=reproducible,
                 cold_start=cold_start,
@@ -309,67 +361,17 @@ def _execute_benchmarks(
 
 
 if TYPER_AVAILABLE:
-    @app.callback(invoke_without_command=True)
-    def main_callback(
-        ctx: typer.Context,
-        chapter: Optional[str] = Argument(None, help="Chapter to run (e.g., 'ch12' or '12'), or 'all' for all chapters. Omit to run all chapters."),
-        output_format: str = Option("both", "--format", "-f", help="Output format: 'json', 'markdown', or 'both'"),
-        enable_profiling: bool = Option(False, "--profile/--no-profile", help="Enable profiling (nsys/ncu/PyTorch). Disabled by default to avoid long GPU stalls."),
-        suite_timeout: Optional[int] = Option(None, "--suite-timeout", help="Suite timeout in seconds (default: 14400 = 4 hours, 0 = disabled)"),
-        timeout_multiplier: float = Option(1.0, "--timeout-multiplier", help="Multiply all benchmark timeouts by this factor (e.g., 2.0 = double all timeouts)"),
-        reproducible: bool = Option(False, "--reproducible", help="Enable reproducible mode: set all seeds to 42 and enable deterministic algorithms (may impact performance)"),
-        cold_start: bool = Option(False, "--cold-start", help="Reset GPU state between benchmarks for cold start measurements"),
-        smoke_test: bool = Option(False, "--smoke-test", help="Smoke test mode: reduced iterations and warmup for quick validation (CI/development)"),
-        iterations: Optional[int] = Option(None, "--iterations", help="Number of benchmark iterations (default: 20, or 5 in smoke test mode)"),
-        warmup: Optional[int] = Option(None, "--warmup", help="Number of warmup iterations (default: 5, or 1 in smoke test mode)"),
-        only_examples: Optional[str] = Option(None, "--only-examples", help='Comma-separated list of example names to run (e.g., "moe,cutlass"). If not specified, runs all examples.'),
-        force_pipeline: bool = Option(False, "--force-pipeline", help="Force enable CUDA Pipeline API even on compute capability 12.0+ (may cause instability on Blackwell GPUs)"),
-        artifacts_dir: Optional[str] = Option(None, "--artifacts-dir", help="Directory for artifacts (default: ./artifacts)"),
-        log_level: str = Option("INFO", "--log-level", help="Log level: DEBUG, INFO, WARNING, ERROR"),
-        log_file: Optional[str] = Option(None, "--log-file", help="Path to log file (default: artifacts/<run_id>/logs/benchmark.log)"),
-    ):
-        """Default callback - runs benchmarks when no command is specified."""
-        # If a command was explicitly invoked, don't run the default
-        if ctx.invoked_subcommand is not None:
-            return
-        
-        # Parse --only-examples into a list
-        only_examples_list = None
-        if only_examples:
-            only_examples_list = [name.strip() for name in only_examples.split(",") if name.strip()]
-        
-        # Otherwise, execute benchmarks with provided arguments
-        _execute_benchmarks(
-            chapter=chapter,
-            output_format=output_format,
-            enable_profiling=enable_profiling,
-            suite_timeout=suite_timeout,
-            timeout_multiplier=timeout_multiplier,
-            reproducible=reproducible,
-            cold_start=cold_start,
-            smoke_test=smoke_test,
-            iterations=iterations,
-            warmup=warmup,
-            only_examples=only_examples_list,
-            force_pipeline=force_pipeline,
-            artifacts_dir=artifacts_dir,
-            log_level=log_level,
-            log_file=log_file,
-        )
-    
     @app.command()
     def run(
-        chapter: Optional[str] = Argument(None, help="Chapter to run (e.g., 'ch12' or '12'), or 'all' for all chapters. Omit to run all chapters."),
+        targets: Optional[List[str]] = Option(None, "--targets", "-t", help="Chapter(s) or chapter:example pairs to run. Repeat the flag for multiple targets. Omit or use 'all' for every chapter."),
         output_format: str = Option("both", "--format", "-f", help="Output format: 'json', 'markdown', or 'both'"),
         enable_profiling: bool = Option(False, "--profile/--no-profile", help="Enable profiling (nsys/ncu/PyTorch). Disabled by default to avoid long GPU stalls."),
         suite_timeout: Optional[int] = Option(None, "--suite-timeout", help="Suite timeout in seconds (default: 14400 = 4 hours, 0 = disabled)"),
         timeout_multiplier: float = Option(1.0, "--timeout-multiplier", help="Multiply all benchmark timeouts by this factor (e.g., 2.0 = double all timeouts)"),
         reproducible: bool = Option(False, "--reproducible", help="Enable reproducible mode: set all seeds to 42 and enable deterministic algorithms (may impact performance)"),
         cold_start: bool = Option(False, "--cold-start", help="Reset GPU state between benchmarks for cold start measurements"),
-        smoke_test: bool = Option(False, "--smoke-test", help="Smoke test mode: reduced iterations and warmup for quick validation (CI/development)"),
-        iterations: Optional[int] = Option(None, "--iterations", help="Number of benchmark iterations (default: 20, or 5 in smoke test mode)"),
-        warmup: Optional[int] = Option(None, "--warmup", help="Number of warmup iterations (default: 5, or 1 in smoke test mode)"),
-        only_examples: Optional[str] = Option(None, "--only-examples", help='Comma-separated list of example names to run (e.g., "moe,cutlass"). If not specified, runs all examples.'),
+        iterations: Optional[int] = Option(None, "--iterations", help="Number of benchmark iterations (default: 20)"),
+        warmup: Optional[int] = Option(None, "--warmup", help="Number of warmup iterations (default: 5)"),
         force_pipeline: bool = Option(False, "--force-pipeline", help="Force enable CUDA Pipeline API even on compute capability 12.0+ (may cause instability on Blackwell GPUs)"),
         artifacts_dir: Optional[str] = Option(None, "--artifacts-dir", help="Directory for artifacts (default: ./artifacts)"),
         log_level: str = Option("INFO", "--log-level", help="Log level: DEBUG, INFO, WARNING, ERROR"),
@@ -380,28 +382,29 @@ if TYPER_AVAILABLE:
         This is the main command for running benchmarks. It discovers baseline/optimized
         pairs, runs benchmarks with profiling, and generates reports.
         """
-        # Parse --only-examples into a list
-        only_examples_list = None
-        if only_examples:
-            only_examples_list = [name.strip() for name in only_examples.split(",") if name.strip()]
-        
         _execute_benchmarks(
-            chapter=chapter,
+            targets=list(targets) if targets else None,
             output_format=output_format,
             enable_profiling=enable_profiling,
             suite_timeout=suite_timeout,
             timeout_multiplier=timeout_multiplier,
             reproducible=reproducible,
             cold_start=cold_start,
-            smoke_test=smoke_test,
             iterations=iterations,
             warmup=warmup,
-            only_examples=only_examples_list,
             force_pipeline=force_pipeline,
             artifacts_dir=artifacts_dir,
             log_level=log_level,
             log_file=log_file,
         )
+
+    @app.command()
+    def verify(
+        targets: Optional[List[str]] = Option(None, "--targets", "-t", help="Chapter(s) or chapter:example pairs to verify. Repeat the flag for multiple targets. Omit or use 'all' for every chapter."),
+    ):
+        """Run the lightweight benchmark verification harness."""
+        exit_code = run_verification(list(targets) if targets else None)
+        raise typer.Exit(code=exit_code)
 
 
 def main():

@@ -318,6 +318,10 @@ class BenchmarkResult(BaseModel):
     device: Optional[str] = Field(None, description="Device used (e.g., 'cuda:0', 'cpu')")
     mode: Optional[str] = Field(None, description="Benchmark mode (e.g., 'triton', 'pytorch', 'custom')")
     custom_metrics: Dict[str, float] = Field(default_factory=dict, description="Benchmark-specific custom metrics")
+    gpu_metrics: Optional[Dict[str, Optional[float | str]]] = Field(
+        None,
+        description="Snapshot of GPU telemetry (temperature, power, utilization, timestamp)",
+    )
     
     schemaVersion: str = Field("1.0", description="Schema version for forward compatibility")
     

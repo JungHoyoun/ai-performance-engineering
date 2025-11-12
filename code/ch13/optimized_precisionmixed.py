@@ -22,7 +22,7 @@ from torch.amp import autocast
 
 from typing import Optional
 
-from common.python.compile_utils import enable_tf32
+from common.python.compile_utils import enable_tf32, compile_model
 from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
@@ -90,11 +90,11 @@ class OptimizedPrecisionMixedBenchmark(Benchmark):
         model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device)
         model.train()
         
-        # Compile model to optimize mixed precision path (fallback gracefully if unsupported)
-        try:
-            self.model = torch.compile(model, mode='reduce-overhead')
-        except Exception:
-            self.model = model
+        # Compile model to optimize mixed precision path
+        self.model = compile_model(
+            model,
+            mode="reduce-overhead",
+        )
         
         self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float16)
         self.targets = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float16)

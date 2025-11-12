@@ -19,7 +19,7 @@ except ImportError:
 
 from typing import Optional
 
-from common.python.compile_utils import enable_tf32
+from common.python.compile_utils import enable_tf32, compile_model
 from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
@@ -100,23 +100,26 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
         draft_model.eval()
         
         # Optimization: Compile models with torch.compile for better performance
-        try:
-            self.target_model = torch.compile(target_model, mode="reduce-overhead", backend="inductor")
-            self.draft_model = torch.compile(draft_model, mode="reduce-overhead", backend="inductor")
-            # Warmup compilation
-            dtype = torch.float16 if self.device.type == "cuda" else torch.float32
-            test_ids = torch.randint(0, vocab_size, (4, 10), device=self.device)
-            test_embedded = self.embedding(test_ids)
-            test_memory = torch.randn(4, 10, hidden_dim, device=self.device, dtype=dtype)
-            with torch.no_grad():
-                for _ in range(10):
-                    _ = self.target_model(test_embedded, test_memory)
-                    _ = self.draft_model(test_embedded, test_memory)
-            torch.cuda.synchronize()
-        except Exception:
-            # Fallback to non-compiled if compilation fails
-            self.target_model = target_model
-            self.draft_model = draft_model
+        self.target_model = compile_model(
+            target_model,
+            mode="reduce-overhead",
+            backend="inductor",
+        )
+        self.draft_model = compile_model(
+            draft_model,
+            mode="reduce-overhead",
+            backend="inductor",
+        )
+        # Warmup compilation
+        dtype = torch.float16 if self.device.type == "cuda" else torch.float32
+        test_ids = torch.randint(0, self.vocab_size, (4, 10), device=self.device)
+        test_embedded = self.embedding(test_ids)
+        test_memory = torch.randn(4, 10, hidden_dim, device=self.device, dtype=dtype)
+        with torch.no_grad():
+            for _ in range(10):
+                _ = self.target_model(test_embedded, test_memory)
+                _ = self.draft_model(test_embedded, test_memory)
+        torch.cuda.synchronize()
         
         torch.manual_seed(42)
         decode = torch.randint(

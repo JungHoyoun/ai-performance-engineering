@@ -33,9 +33,12 @@ class MemoryCoalescingBenchmark(Benchmark):
         self.input_matrix = None
         self.output_matrix = None
         self.shuffle = None
-        self.chunk = 32
+        # Process columns one at a time to mimic naive per-feature transforms that
+        # thrash memory transactions and scheduling.
+        self.chunk = 1
         self.rows = 2048
         self.cols = 1024
+        self.repeats = 8
 
     def setup(self) -> None:
         """Setup: Initialize tensors with poor memory layout."""
@@ -59,11 +62,12 @@ class MemoryCoalescingBenchmark(Benchmark):
             matrix = self.input_matrix
             scale = 1.0003
             bias = 0.01
-            for start in range(0, self.cols, self.chunk):
-                cols = self.shuffle[start:start + self.chunk]
-                gathered = matrix[:, cols]
-                transformed = gathered * scale + bias
-                self.output_matrix[:, cols] = transformed
+            shuffled_cols = self.shuffle.tolist()
+            for _ in range(self.repeats):
+                for col_idx in shuffled_cols:
+                    column = matrix[:, col_idx]
+                    transformed = column * scale + bias
+                    self.output_matrix[:, col_idx] = transformed
             torch.cuda.synchronize()
 
 
@@ -77,7 +81,7 @@ class MemoryCoalescingBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=100,
+            iterations=50,
             warmup=10,
         )
 

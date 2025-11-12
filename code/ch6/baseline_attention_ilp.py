@@ -20,7 +20,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
-from ch6.workload_config import WORKLOAD, is_smoke_test
+from ch6.workload_config import WORKLOAD
 
 
 def resolve_device() -> torch.device:
@@ -38,11 +38,10 @@ class BaselineAttentionILPBenchmark(Benchmark):
         self.model = None
         self.input = None
         self.workload = WORKLOAD
-        self.smoke_test = is_smoke_test()
         self.batch = self.workload.attention_batch
         self.embed_dim = self.workload.attention_embed_dim
-        self.tokens = self.workload.attention_tokens_for_mode(self.smoke_test)
-        self.query_chunk = self.workload.attention_chunk_for_mode(self.smoke_test)
+        self.tokens = self.workload.attention_tokens
+        self.query_chunk = self.workload.attention_chunk_tokens
 
     def setup(self) -> None:
         """Setup: Initialize attention model."""

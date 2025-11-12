@@ -30,6 +30,7 @@ def load_cuda_extension(
     build_dir: Optional[Path] = None,
     include_dirs: Optional[list[Path]] = None,
     extra_cuda_cflags: Optional[list[str]] = None,
+    extra_ldflags: Optional[list[str]] = None,
     verbose: bool = False,
 ) -> ModuleType:
     """Load a CUDA extension with automatic stale lock cleanup.
@@ -90,12 +91,18 @@ def load_cuda_extension(
         for include_dir in include_dirs:
             cuda_flags.append(f"-I{include_dir}")
         
+        load_kwargs = {
+            "name": extension_name,
+            "sources": [str(source_path)],
+            "extra_cuda_cflags": cuda_flags,
+            "verbose": verbose,
+            "build_directory": str(build_dir),
+        }
+        if extra_ldflags:
+            load_kwargs["extra_ldflags"] = extra_ldflags
+
         _EXTENSIONS[extension_name] = load(
-            name=extension_name,
-            sources=[str(source_path)],
-            extra_cuda_cflags=cuda_flags,
-            verbose=verbose,
-            build_directory=str(build_dir),
+            **load_kwargs
         )
         
         return _EXTENSIONS[extension_name]

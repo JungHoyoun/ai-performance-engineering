@@ -24,6 +24,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from common.python.compile_utils import compile_model
 
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
@@ -43,6 +44,9 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
         self.input_ids = None
         self.target_hidden = None
         self.draft_hidden = None
+        self.prev_tokens = None
+        self.current_lengths = None
+        self.target_lengths = None
         self.max_length = 64
         self.speculative_length = 4
         self.hidden_dim = 512
@@ -74,12 +78,18 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
         ).to(self.device, dtype=dtype).eval()
         self.output_head = nn.Linear(self.hidden_dim, self.vocab_size, device=self.device, dtype=dtype)
 
-        try:
-            self.target_decoder = torch.compile(self.target_decoder, mode="reduce-overhead")
-            self.draft_decoder = torch.compile(self.draft_decoder, mode="reduce-overhead")
-            self.output_head = torch.compile(self.output_head, mode="reduce-overhead")
-        except Exception:
-            pass
+        self.target_decoder = compile_model(
+            self.target_decoder,
+            mode="reduce-overhead",
+        )
+        self.draft_decoder = compile_model(
+            self.draft_decoder,
+            mode="reduce-overhead",
+        )
+        self.output_head = compile_model(
+            self.output_head,
+            mode="reduce-overhead",
+        )
 
         self.input_ids = torch.randint(
             0,
@@ -88,6 +98,14 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
             device=self.device,
             dtype=torch.long,
         )
+        self.prev_tokens = self.input_ids[:, -1:].clone()
+        self.current_lengths = torch.full(
+            (self.batch_size,),
+            self.seq_len,
+            device=self.device,
+            dtype=torch.int32,
+        )
+        self.target_lengths = self.current_lengths + self.max_length
         prompt_embeds = self.embedding(self.input_ids)
         self.target_hidden = torch.zeros(
             self.target_layers,
@@ -120,53 +138,73 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
 
         with nvtx_range("optimized_speculative_decoding", enable=enable_nvtx):
             with torch.no_grad():
-                generated = self.input_ids.clone()
+                prev_tokens = self.prev_tokens.clone()
                 target_hidden = self.target_hidden.clone()
                 draft_hidden = self.draft_hidden.clone()
-                target_len = generated.size(1) + self.max_length
 
-                while generated.size(1) < target_len:
-                    proposals = []
-                    proposal_states = []
+                while bool((self.current_lengths < self.target_lengths).any()):
+                    proposals: list[torch.Tensor] = []
+                    proposal_states: list[torch.Tensor] = []
                     running_hidden = draft_hidden
-                    prev_token = generated[:, -1:]
+                    token_seed = prev_tokens
+
                     for _ in range(self.speculative_length):
-                        draft_embed = self.embedding(prev_token)
+                        draft_embed = self.embedding(token_seed)
                         draft_out, running_hidden = self.draft_decoder(draft_embed, running_hidden)
                         logits = self.output_head(draft_out[:, -1, :])
                         next_token = logits.argmax(dim=-1, keepdim=True)
                         proposals.append(next_token)
                         proposal_states.append(running_hidden.clone())
-                        prev_token = next_token
+                        token_seed = next_token
 
                     proposal_tensor = torch.cat(proposals, dim=1)
                     proposal_embeds = self.embedding(proposal_tensor)
                     target_seq, seq_hidden = self.target_decoder(proposal_embeds, target_hidden)
                     target_logits = self.output_head(target_seq)
+                    target_choice = target_logits.argmax(dim=-1, keepdim=True)
 
-                    accepted_tokens = 0
-                    for idx in range(proposal_tensor.size(1)):
-                        proposal = proposal_tensor[:, idx : idx + 1]
-                        target_choice = target_logits[:, idx, :].argmax(dim=-1, keepdim=True)
-                        if torch.all(target_choice == proposal):
-                            generated = torch.cat([generated, proposal], dim=1)
-                            draft_hidden = proposal_states[idx]
-                            target_hidden = target_seq[:, idx, :].unsqueeze(0)
-                            accepted_tokens += 1
-                        else:
-                            generated = torch.cat([generated, target_choice], dim=1)
-                            prev_state = proposal_states[idx - 1] if idx > 0 else draft_hidden
-                            correction_embed = self.embedding(target_choice)
-                            _, draft_hidden = self.draft_decoder(correction_embed, prev_state)
-                            target_hidden = target_seq[:, idx, :].unsqueeze(0)
-                            break
-                        if generated.size(1) >= target_len:
-                            break
+                    active = (self.current_lengths < self.target_lengths)
+                    new_prev = prev_tokens.clone()
 
-                    if accepted_tokens == proposal_tensor.size(1):
-                        target_hidden = seq_hidden
-                        if generated.size(1) >= target_len:
+                    for idx in range(self.speculative_length):
+                        if not active.any():
                             break
+                        proposal = proposal_tensor[:, idx:idx + 1]
+                        choice = target_choice[:, idx:idx + 1]
+                        matches = (proposal == choice).squeeze(1)
+
+                        accept_mask = active & matches
+                        fallback_mask = active & (~matches)
+
+                        accept_idx = torch.nonzero(accept_mask, as_tuple=False).flatten()
+                        if accept_idx.numel() > 0:
+                            self.current_lengths[accept_idx] += 1
+                            new_prev.index_copy_(0, accept_idx, proposal[accept_idx])
+                            draft_hidden[:, accept_idx, :] = proposal_states[idx][:, accept_idx, :]
+                            target_hidden[:, accept_idx, :] = target_seq[accept_idx, idx, :].unsqueeze(0)
+
+                        fallback_idx = torch.nonzero(fallback_mask, as_tuple=False).flatten()
+                        if fallback_idx.numel() > 0:
+                            fallback_tokens = choice[fallback_idx, idx, :]
+                            new_prev.index_copy_(0, fallback_idx, fallback_tokens)
+                            self.current_lengths[fallback_idx] += 1
+                            target_slice = target_seq[fallback_idx, idx, :].unsqueeze(0)
+                            target_hidden[:, fallback_idx, :] = target_slice
+                            draft_hidden[:, fallback_idx, :] = target_slice
+                            active[fallback_idx] = False
+
+                        active = active & matches
+
+                    active_idx = torch.nonzero(active, as_tuple=False).flatten()
+                    if active_idx.numel() > 0:
+                        draft_hidden[:, active_idx, :] = proposal_states[-1][:, active_idx, :]
+                        target_hidden[:, active_idx, :] = seq_hidden[:, active_idx, :]
+                        new_prev[active_idx] = proposal_tensor[active_idx, -1].unsqueeze(1)
+
+                    prev_tokens = new_prev
+
+                self.current_lengths = torch.minimum(self.current_lengths, self.target_lengths)
+                self.prev_tokens = prev_tokens
         torch.cuda.synchronize()
 
     

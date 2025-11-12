@@ -10,7 +10,9 @@ This script outputs all hardware capabilities including:
 - Memory and bandwidth specifications
 """
 
-from common.python import compile_utils as _compile_utils_patch  # noqa: F401
+from __future__ import annotations
+
+import argparse
 import sys
 from pathlib import Path
 
@@ -18,8 +20,11 @@ repo_root = Path(__file__).parent.parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-import torch
-import importlib_metadata
+from common.python import compile_utils as _compile_utils_patch  # noqa: F401
+from common.python.hardware_capabilities import detect_capabilities, format_capability_report
+import arch_config  # noqa: E402
+import importlib_metadata  # noqa: E402
+import torch  # noqa: E402
 
 
 def print_section(title: str):
@@ -29,40 +34,34 @@ def print_section(title: str):
     print("=" * 80)
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Dump GPU hardware capabilities.")
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Skip slow validation steps (CUDA extensions + torch.compile).",
+    )
+    return parser.parse_args()
+
+
 def dump_gpu_info():
     """Dump GPU hardware information."""
     print_section("GPU Hardware")
     
-    if not torch.cuda.is_available():
+    cap = detect_capabilities()
+    if cap is None:
         print("ERROR: CUDA not available")
         return
     
-    device = torch.cuda.current_device()
-    props = torch.cuda.get_device_properties(device)
-    
-    print(f"GPU Name: {props.name}")
-    print(f"Compute Capability: {props.major}.{props.minor}")
-    print(f"SM Version: sm_{props.major}{props.minor}")
-    print(f"Total Memory: {props.total_memory / (1024**3):.2f} GB")
-    print(f"Number of SMs: {props.multi_processor_count}")
-    print(f"Max Threads per Block: {getattr(props, 'max_threads_per_block', 1024)}")
-    print(f"Max Threads per SM: {props.max_threads_per_multi_processor}")
-    print(f"Warp Size: {props.warp_size}")
-    print(f"Shared Memory per Block: {props.shared_memory_per_block / 1024:.1f} KB")
-    print(f"Shared Memory per SM: {props.shared_memory_per_multiprocessor / 1024:.1f} KB")
-    print(f"L2 Cache Size: {props.L2_cache_size / 1024:.1f} KB")
-    
-    # Architecture-specific features
-    if props.major == 12:
-        print("\nArchitecture: Grace-Blackwell GB10")
-        print("Features: TMA, NVLink-C2C, Stream-ordered memory APIs")
-    elif props.major == 10:
-        print("\nArchitecture: Blackwell B200/B300")
-        print("Features: HBM3e, TMA, NVLink-C2C, 5th Gen Tensor Cores")
-        print("Memory Bandwidth: ~8 TB/s")
-    elif props.major >= 9:
-        print("\nArchitecture: Hopper or newer")
-        print("Features: TMA support")
+    print(format_capability_report(cap))
+    print("")
+    print(f"Max Threads per Block: {cap.max_threads_per_block}")
+    print(f"Max Threads per SM: {cap.max_threads_per_sm}")
+    print(f"Warp Size: {cap.warp_size}")
+    print(f"Shared Memory per Block: {cap.max_shared_mem_per_block / 1024:.1f} KB")
+    print(f"Shared Memory per SM: {cap.max_shared_mem_per_sm / 1024:.1f} KB")
+    l2_cache = f"{cap.l2_cache_kb:.1f} KB" if cap.l2_cache_kb else "Unknown"
+    print(f"L2 Cache Size: {l2_cache}")
 
 
 def dump_cuda_info():
@@ -158,15 +157,18 @@ def dump_triton_info():
         print(f"WARNING: Could not check arch_config: {e}")
 
 
-def dump_cuda_extensions_info():
+def dump_cuda_extensions_info(run_check: bool):
     """Dump CUDA extension compilation support."""
     print_section("CUDA Extensions")
+    
+    if not run_check:
+        print("SKIPPED: CUDA extension build check disabled (--fast).")
+        return
     
     if not torch.cuda.is_available():
         print("ERROR: CUDA not available - extensions cannot be compiled")
         return
     
-    # Check if extensions can be compiled
     print("Testing CUDA extension compilation support...")
     
     try:
@@ -182,9 +184,13 @@ def dump_cuda_extensions_info():
         print(f"WARNING: Could not import extension loader: {e}")
 
 
-def dump_torch_compile_info():
+def dump_torch_compile_info(run_check: bool):
     """Dump torch.compile capabilities."""
     print_section("torch.compile Support")
+    
+    if not run_check:
+        print("SKIPPED: torch.compile smoke test disabled (--fast).")
+        return
     
     if not torch.cuda.is_available():
         print("ERROR: CUDA not available - torch.compile requires GPU")
@@ -192,7 +198,6 @@ def dump_torch_compile_info():
     
     print(f"PyTorch Version: {torch.__version__}")
     
-    # Test basic compilation
     print("\nTesting basic torch.compile...")
     try:
         device = torch.device('cuda')
@@ -215,14 +220,25 @@ def dump_summary():
     """Print summary of capabilities."""
     print_section("Capability Summary")
     
+    cap = detect_capabilities()
     capabilities = []
     
-    if torch.cuda.is_available():
-        capabilities.append("[OK] CUDA Available")
-        props = torch.cuda.get_device_properties(0)
-        capabilities.append(f"[OK] GPU: {props.name} (SM {props.major}.{props.minor})")
+    if cap is None:
+        capabilities.append("ERROR: CUDA not available")
     else:
-        capabilities.append("ERROR: CUDA Not Available")
+        capabilities.append(f"[OK] GPU: {cap.device_name} ({cap.compute_capability})")
+        if cap.tma_ready:
+            capabilities.append("[OK] TMA hardware + compiler support")
+        elif cap.tma_supported:
+            capabilities.append("WARNING: TMA hardware present but compiler support disabled")
+        else:
+            capabilities.append("WARNING: TMA unsupported on this GPU")
+        if cap.cluster.has_dsmem:
+            capabilities.append("[OK] Thread block clusters with DSMEM")
+        elif cap.cluster.supports_clusters:
+            capabilities.append("WARNING: Clusters available but DSMEM disabled")
+        else:
+            capabilities.append("WARNING: Thread block clusters unavailable")
     
     try:
         import cutlass
@@ -236,23 +252,14 @@ def dump_summary():
     except ImportError:
         capabilities.append("ERROR: Triton Compiler Not Available")
     
-    # Check CUDA extensions
-    try:
-        from ch12.cuda_extensions import load_graph_bandwidth_extension
-        try:
-            load_graph_bandwidth_extension()
-            capabilities.append("[OK] CUDA Extensions: Can Compile")
-        except:
-            capabilities.append("WARNING: CUDA Extensions: Compilation Issues")
-    except ImportError:
-        capabilities.append("WARNING: CUDA Extensions: Not Tested")
-    
     for cap in capabilities:
         print(cap)
 
 
-def main():
+def main() -> None:
     """Main function to dump all hardware capabilities."""
+    args = parse_args()
+    
     print("=" * 80)
     print("  Hardware Capabilities Report")
     print("=" * 80)
@@ -261,8 +268,8 @@ def main():
     dump_cuda_info()
     dump_cutlass_info()
     dump_triton_info()
-    dump_cuda_extensions_info()
-    dump_torch_compile_info()
+    dump_cuda_extensions_info(run_check=not args.fast)
+    dump_torch_compile_info(run_check=not args.fast)
     dump_summary()
     
     print("\n" + "=" * 80)
@@ -272,4 +279,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

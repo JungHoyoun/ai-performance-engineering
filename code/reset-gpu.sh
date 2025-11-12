@@ -41,6 +41,10 @@ require_cmd() {
 declare -a GPU_IDS=()
 declare -A GPU_PERSISTENCE_STATE=()
 PERSISTENCED_WAS_ACTIVE=0
+declare -a DISPLAY_MANAGER_CANDIDATES=(display-manager gdm gdm3 lightdm sddm lxdm)
+declare -a STOPPED_DISPLAY_SERVICES=()
+declare -a GPU_HELPER_SERVICES=(nvidia-dcgm nvidia-powerd nvidia-fabricmanager nvidia-vgpu-mgr nvidia-vgpud nvidia-gridd nvidia-vgpu-dma)
+declare -a STOPPED_GPU_HELPERS=()
 
 discover_gpus() {
   mapfile -t GPU_IDS < <(
@@ -83,6 +87,46 @@ start_persistenced_if_needed() {
   fi
 }
 
+stop_gpu_helper_services() {
+  local svc svc_unit
+  if ! command -v systemctl >/dev/null 2>&1; then
+    return
+  fi
+
+  for svc in "${GPU_HELPER_SERVICES[@]}"; do
+    svc_unit=""
+    if systemctl is-active --quiet "$svc" 2>/dev/null; then
+      svc_unit="$svc"
+    elif systemctl is-active --quiet "${svc}.service" 2>/dev/null; then
+      svc_unit="${svc}.service"
+    else
+      continue
+    fi
+
+    if systemctl stop "$svc_unit" >/dev/null 2>&1; then
+      STOPPED_GPU_HELPERS+=("$svc_unit")
+      log "Stopped NVIDIA helper service $svc_unit"
+    else
+      warn "Failed to stop NVIDIA helper service $svc_unit"
+    fi
+  done
+}
+
+restart_gpu_helper_services() {
+  local svc
+  if ! command -v systemctl >/dev/null 2>&1; then
+    return
+  fi
+
+  for svc in "${STOPPED_GPU_HELPERS[@]}"; do
+    if systemctl start "$svc" >/dev/null 2>&1; then
+      log "Restarted NVIDIA helper service $svc"
+    else
+      warn "Failed to restart NVIDIA helper service $svc"
+    fi
+  done
+}
+
 disable_persistence_mode() {
   for id in "${GPU_IDS[@]}"; do
     if nvidia-smi -i "$id" -pm 0 >/dev/null 2>&1; then
@@ -104,6 +148,81 @@ restore_persistence_mode() {
       log "Restored persistence mode ($original) on GPU $id"
     else
       warn "Failed to restore persistence mode on GPU $id"
+    fi
+  done
+}
+
+terminate_residual_display_processes() {
+  local -a targets=(Xorg X Xwayland gnome-shell kwin_x11 kwin_wayland sway weston)
+  local proc
+
+  if ! command -v pgrep >/dev/null 2>&1; then
+    return
+  fi
+
+  for proc in "${targets[@]}"; do
+    mapfile -t pids < <(pgrep -x "$proc" 2>/dev/null || true)
+    if (( ${#pids[@]} == 0 )); then
+      continue
+    fi
+    log "Terminating lingering display process $proc (PIDs: ${pids[*]})"
+    for pid in "${pids[@]}"; do
+      kill -TERM "$pid" >/dev/null 2>&1 || true
+    done
+  done
+
+  sleep 1
+
+  for proc in "${targets[@]}"; do
+    mapfile -t pids < <(pgrep -x "$proc" 2>/dev/null || true)
+    if (( ${#pids[@]} == 0 )); then
+      continue
+    fi
+    warn "Force killing stubborn display process $proc (PIDs: ${pids[*]})"
+    for pid in "${pids[@]}"; do
+      kill -KILL "$pid" >/dev/null 2>&1 || true
+    done
+  done
+}
+
+stop_display_stack() {
+  local svc svc_unit
+  if ! command -v systemctl >/dev/null 2>&1; then
+    return
+  fi
+
+  for svc in "${DISPLAY_MANAGER_CANDIDATES[@]}"; do
+    svc_unit=""
+    if systemctl is-active --quiet "$svc" 2>/dev/null; then
+      svc_unit="$svc"
+    elif systemctl is-active --quiet "${svc}.service" 2>/dev/null; then
+      svc_unit="${svc}.service"
+    else
+      continue
+    fi
+
+    if systemctl stop "$svc_unit" >/dev/null 2>&1; then
+      STOPPED_DISPLAY_SERVICES+=("$svc_unit")
+      log "Stopped display manager service $svc_unit"
+    else
+      warn "Failed to stop display manager service $svc_unit"
+    fi
+  done
+
+  terminate_residual_display_processes
+}
+
+restart_display_stack() {
+  local svc
+  if ! command -v systemctl >/dev/null 2>&1; then
+    return
+  fi
+
+  for svc in "${STOPPED_DISPLAY_SERVICES[@]}"; do
+    if systemctl start "$svc" >/dev/null 2>&1; then
+      log "Restarted display manager service $svc"
+    else
+      warn "Failed to restart display manager service $svc"
     fi
   done
 }
@@ -203,7 +322,8 @@ normalize_bus_id() {
   local domain="${bdf%%:*}"
   local rest="${bdf#*:}"
   domain="${domain: -4}"
-  printf '%s:%s\n' "$domain" "$rest"
+  local normalized="${domain}:${rest}"
+  printf '%s\n' "${normalized,,}"
 }
 
 pci_function_level_reset() {
@@ -263,6 +383,8 @@ cleanup() {
   if (( ${#GPU_IDS[@]} )); then
     restore_persistence_mode || true
   fi
+  restart_gpu_helper_services || true
+  restart_display_stack || true
   start_persistenced_if_needed || true
   exit "$rc"
 }
@@ -275,6 +397,8 @@ main() {
   trap 'rc=$?; trap - EXIT; cleanup "$rc"' EXIT
 
   stop_persistenced
+  stop_gpu_helper_services
+  stop_display_stack
   disable_persistence_mode
   drain_gpu_processes || warn "Some processes could not be stopped; GPU reset may fail"
   gpu_reset_via_nvml || warn "NVML reset did not complete; attempting kernel module reload"

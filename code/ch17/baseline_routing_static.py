@@ -46,6 +46,7 @@ class BaselineRoutingStaticBenchmark(Benchmark):
         self.batch_size = 16
         self.hidden_dim = 2048
         self.num_layers = 24
+        self.requests_per_iteration = 10
 
     def setup(self) -> None:
         torch.backends.cudnn.benchmark = True
@@ -69,7 +70,8 @@ class BaselineRoutingStaticBenchmark(Benchmark):
 
         with nvtx_range("routing", enable=enable_nvtx):
             with torch.no_grad():
-                _ = self.model(self.inputs)
+                for _ in range(self.requests_per_iteration):
+                    _ = self.model(self.inputs)
 
     def teardown(self) -> None:
         self.model = None

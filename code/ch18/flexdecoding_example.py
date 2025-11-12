@@ -29,14 +29,13 @@ except Exception:
 
 import math
 import time
-import warnings
 from dataclasses import dataclass
 from typing import Iterable, List, Optional
 
 import torch
 import torch.nn.functional as F
 
-from common.python.compile_utils import enable_tf32
+from common.python.compile_utils import enable_tf32, compile_callable
 
 try:
     from torch.nn.attention import flex_attention
@@ -126,7 +125,7 @@ class FlexDecodingModule(torch.nn.Module):
         q_decode = torch.randn(1, heads, 1, head_dim, device=device)
         compile_kwargs = {"mode": self.compile_mode, "dynamic": None}
 
-        def configure_sdpa_fallback() -> None:
+        def configure_sdpa_backend() -> None:
             def sdpa(q, k, v):
                 # Inputs expected as [batch, seq, heads, head_dim]
                 qh = q.transpose(1, 2)
@@ -144,24 +143,16 @@ class FlexDecodingModule(torch.nn.Module):
                 out = torch.matmul(probs, vh)
                 return out.transpose(1, 2)
 
-            try:
-                compiled_prefill = torch.compile(sdpa, **compile_kwargs)
-                compiled_decode = torch.compile(sdpa, **compile_kwargs)
+            compiled_prefill = compile_callable(sdpa, **compile_kwargs)
+            compiled_decode = compile_callable(sdpa, **compile_kwargs)
 
-                q_prefill_eager = q_prefill.transpose(1, 2)
-                kv_prefill_eager = kv_prefill.transpose(1, 2)
-                compiled_prefill(q_prefill_eager, kv_prefill_eager, kv_prefill_eager)
-                compiled_decode(q_prefill_eager[:, :1], kv_prefill_eager, kv_prefill_eager)
+            q_prefill_eager = q_prefill.transpose(1, 2)
+            kv_prefill_eager = kv_prefill.transpose(1, 2)
+            compiled_prefill(q_prefill_eager, kv_prefill_eager, kv_prefill_eager)
+            compiled_decode(q_prefill_eager[:, :1], kv_prefill_eager, kv_prefill_eager)
 
-                self.prefill_impl = compiled_prefill
-                self.decode_impl = compiled_decode
-            except Exception as exc:
-                warnings.warn(
-                    f"torch.compile failed for SDPA fallback; using eager execution: {exc}",
-                    stacklevel=2,
-                )
-                self.prefill_impl = sdpa
-                self.decode_impl = sdpa
+            self.prefill_impl = compiled_prefill
+            self.decode_impl = compiled_decode
             self.flex_enabled = False
 
         if HAS_FLEX:
@@ -173,21 +164,14 @@ class FlexDecodingModule(torch.nn.Module):
             def decode(q, k, v):
                 return flex_attention.flex_attention(q, k, v, score_mod=score_mod)
 
-            try:
-                self.prefill_impl = torch.compile(prefill, **compile_kwargs)
-                self.decode_impl = torch.compile(decode, **compile_kwargs)
+            self.prefill_impl = compile_callable(prefill, **compile_kwargs)
+            self.decode_impl = compile_callable(decode, **compile_kwargs)
 
-                self.prefill_impl(q_prefill, kv_prefill, kv_prefill)
-                self.decode_impl(q_decode, kv_prefill, kv_prefill)
-                self.flex_enabled = True
-            except Exception as exc:
-                warnings.warn(
-                    f"FlexAttention torch.compile failed; falling back to eager mode: {exc}",
-                    stacklevel=2,
-                )
-                configure_sdpa_fallback()
+            self.prefill_impl(q_prefill, kv_prefill, kv_prefill)
+            self.decode_impl(q_decode, kv_prefill, kv_prefill)
+            self.flex_enabled = True
         else:
-            configure_sdpa_fallback()
+            configure_sdpa_backend()
 
     def ensure_compiled(self) -> None:
         if self.prefill_impl is None or self.decode_impl is None:

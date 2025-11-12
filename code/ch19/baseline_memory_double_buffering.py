@@ -38,6 +38,8 @@ class MemoryDoubleBufferingBenchmark(Benchmark):
         self.batch_size = 4
         self.seq_len = 1024
         self.hidden_dim = 1024
+        self.host_batches: list[torch.Tensor] = []
+        self.micro_batches = 16
 
     def setup(self) -> None:
         """Setup: Initialize single-GPU tensors."""
@@ -49,7 +51,7 @@ class MemoryDoubleBufferingBenchmark(Benchmark):
             nn.ReLU(),
             nn.Linear(self.hidden_dim * 4, self.hidden_dim),
         ).to(self.device).half().eval()
-        self.buffer = torch.randn(
+        self.buffer = torch.empty(
             self.batch_size,
             self.seq_len,
             self.hidden_dim,
@@ -57,10 +59,17 @@ class MemoryDoubleBufferingBenchmark(Benchmark):
             dtype=torch.float16,
         )
         self.output = torch.empty_like(self.buffer)
+        self.host_batches = [
+            torch.randn(
+                self.batch_size,
+                self.seq_len,
+                self.hidden_dim,
+                device="cpu",
+                dtype=torch.float16,
+            ).pin_memory()
+            for _ in range(self.micro_batches)
+        ]
         self.stream = torch.cuda.Stream()
-        with torch.cuda.stream(self.stream):
-            self.output.copy_(self.buffer, non_blocking=True)
-        self.stream.synchronize()
 
     def benchmark_fn(self) -> None:
         """Benchmark: Single-GPU stream-ordered operations."""
@@ -73,12 +82,19 @@ class MemoryDoubleBufferingBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        assert self.model is not None and self.buffer is not None and self.stream is not None
+        assert (
+            self.model is not None
+            and self.buffer is not None
+            and self.stream is not None
+            and self.host_batches
+        )
         with nvtx_range("baseline_memory_double_buffering", enable=enable_nvtx):
             with torch.no_grad():
-                with torch.cuda.stream(self.stream):
-                    self.output = self.model(self.buffer)
-            self.stream.synchronize()
+                for host_batch in self.host_batches:
+                    self.buffer.copy_(host_batch, non_blocking=False)
+                    with torch.cuda.stream(self.stream):
+                        self.output = self.model(self.buffer)
+                    self.stream.synchronize()
 
 
     def teardown(self) -> None:

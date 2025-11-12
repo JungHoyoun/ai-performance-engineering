@@ -80,9 +80,8 @@ class OptimizedRoutingBenchmark(Benchmark):
         self.x_large = None
         self.batch_size = 16
         self.hidden_dim = 2048
-        self.easy_batches = 25  # 50% of 50 iterations
-        self.medium_batches = 15  # 30% of 50 iterations
-        self.hard_batches = 10  # 20% of 50 iterations
+        self.routing_order = ["small"] * 5 + ["medium"] * 3 + ["large"] * 2
+        self._schedule_index = 0
     
     def setup(self) -> None:
         """Setup: initialize models and data."""
@@ -95,11 +94,20 @@ class OptimizedRoutingBenchmark(Benchmark):
         self.small_model = SimpleModel(hidden_dim=1024, num_layers=8).to(self.device).eval()
         self.medium_model = SimpleModel(hidden_dim=1536, num_layers=16).to(self.device).eval()
         self.large_model = SimpleModel(hidden_dim=2048, num_layers=24).to(self.device).eval()
+
+        if self.device.type == "cuda":
+            self.small_model = self.small_model.half()
+            self.medium_model = self.medium_model.half()
+            self.large_model = self.large_model.half()
         
+        dtype_small = next(self.small_model.parameters()).dtype
+        dtype_medium = next(self.medium_model.parameters()).dtype
+        dtype_large = next(self.large_model.parameters()).dtype
+
         # Create input tensors
-        self.x_small = torch.randn(self.batch_size, 1024, device=self.device)
-        self.x_medium = torch.randn(self.batch_size, 1536, device=self.device)
-        self.x_large = torch.randn(self.batch_size, 2048, device=self.device)
+        self.x_small = torch.randn(self.batch_size, 1024, device=self.device, dtype=dtype_small)
+        self.x_medium = torch.randn(self.batch_size, 1536, device=self.device, dtype=dtype_medium)
+        self.x_large = torch.randn(self.batch_size, 2048, device=self.device, dtype=dtype_large)
         
         # Set random seed for reproducibility
         import random
@@ -123,24 +131,18 @@ class OptimizedRoutingBenchmark(Benchmark):
 
         with nvtx_range("routing", enable=enable_nvtx):
             with torch.no_grad():
-                        # Use a simple counter approach: cycle through models based on distribution
-                        # This simulates the cost savings from routing easy requests to small models
-                        # In practice, each iteration would route to one model, but we average over iterations
-            
-                        # Simplified: run average-cost operation
-                        # Average cost = 0.5*small + 0.3*medium + 0.2*large
-                        # To simulate this efficiently, we'll alternate patterns
-            
-                        # Pattern alternates: small (cheap), small, medium, large
-                        # This gives us roughly the right distribution
-                        import random
-                        r = random.random()
-                        if r < 0.5:
-                            _ = self.small_model(self.x_small)  # 50% easy -> small
-                        elif r < 0.8:
-                            _ = self.medium_model(self.x_medium)  # 30% medium -> medium
-                        else:
-                            _ = self.large_model(self.x_large)  # 20% hard -> large
+                idx = self._schedule_index
+                order_len = len(self.routing_order)
+                for _ in range(order_len):
+                    tier = self.routing_order[idx]
+                    if tier == "small":
+                        _ = self.small_model(self.x_small)
+                    elif tier == "medium":
+                        _ = self.medium_model(self.x_medium)
+                    else:
+                        _ = self.large_model(self.x_large)
+                    idx = (idx + 1) % order_len
+                self._schedule_index = idx
 
     def teardown(self) -> None:
         """Cleanup."""

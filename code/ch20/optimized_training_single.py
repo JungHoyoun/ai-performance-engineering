@@ -60,6 +60,7 @@ class OptimizedTrainingDistributedBenchmark(Benchmark):
         self.scaler = None
         self.batch_size = 8
         self.hidden_dim = 4096
+        self.train_steps = 4
     
     def setup(self) -> None:
         """Setup: Initialize optimized single-GPU training stack."""
@@ -81,13 +82,15 @@ class OptimizedTrainingDistributedBenchmark(Benchmark):
         self.scaler = torch.cuda.amp.GradScaler(enabled=True)
         
         for _ in range(3):
-            self.optimizer.zero_grad(set_to_none=True)
-            with torch.cuda.amp.autocast(dtype=torch.float16):
-                outputs = self.model(self.inputs)
-                loss = self.criterion(outputs, self.targets)
-            self.scaler.scale(loss).backward()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+            for _ in range(self.train_steps):
+                self.optimizer.zero_grad(set_to_none=True)
+                with torch.autocast("cuda", dtype=torch.float16):
+                    outputs = self.model(self.inputs)
+                    loss = self.criterion(outputs, self.targets)
+                self.scaler.scale(loss).backward()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            torch.cuda.synchronize()
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -99,7 +102,7 @@ class OptimizedTrainingDistributedBenchmark(Benchmark):
 
         with nvtx_range("training", enable=enable_nvtx):
             self.optimizer.zero_grad(set_to_none=True)
-            with torch.cuda.amp.autocast(dtype=torch.float16):
+            with torch.autocast("cuda", dtype=torch.float16):
                 outputs = self.model(self.inputs)
                 loss = self.criterion(outputs, self.targets)
             self.scaler.scale(loss).backward()

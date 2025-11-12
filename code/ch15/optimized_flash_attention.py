@@ -102,7 +102,7 @@ class OptimizedFlashAttentionBenchmark(Benchmark):
             raise RuntimeError("Inputs not initialized")
 
         with nvtx_range("optimized_flash_attention", enable=enable_nvtx):
-            with torch.no_grad(), torch.cuda.amp.autocast(dtype=torch.bfloat16):
+            with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
                 q, k, v = self._project_qkv(self.inputs)
                 q = self._reshape_heads(q)
                 k = self._reshape_heads(k)

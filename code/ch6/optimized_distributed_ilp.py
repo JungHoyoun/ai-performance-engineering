@@ -20,7 +20,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
-from ch6.workload_config import WORKLOAD, is_smoke_test
+from ch6.workload_config import WORKLOAD
 
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
@@ -36,9 +36,8 @@ class OptimizedDistributedILPBenchmark(Benchmark):
         self.input = None
         self.output = None
         self.workload = WORKLOAD
-        self.smoke_test = is_smoke_test()
-        self.N = self.workload.distributed_elements_for_mode(self.smoke_test)
-        self.micro_chunks = self.workload.distributed_chunks_for_mode(self.smoke_test)
+        self.N = self.workload.distributed_elements
+        self.micro_chunks = self.workload.distributed_micro_chunks
         self.streams = [
             torch.cuda.Stream() for _ in range(self.workload.distributed_streams)
         ]

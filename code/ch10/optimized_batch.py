@@ -25,7 +25,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
-from ch10.workload_config import WORKLOAD, is_smoke_test
+from ch10.workload_config import WORKLOAD
 
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
@@ -45,8 +45,7 @@ class OptimizedBatchBenchmark(Benchmark):
         self.model: nn.Sequential | None = None
         self.input: torch.Tensor | None = None
         self.workload = WORKLOAD
-        self.smoke_test = is_smoke_test()
-        self.total_batch_size = self.workload.optimized_batch_for_mode(self.smoke_test)
+        self.total_batch_size = self.workload.optimized_batch_size
         self.hidden_dim = self.workload.hidden_dim
         self.ffn_dim = self.workload.ffn_dim
     

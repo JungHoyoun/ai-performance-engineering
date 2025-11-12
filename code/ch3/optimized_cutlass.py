@@ -59,7 +59,7 @@ class OptimizedCutlassBenchmark(Benchmark):
             self.compiled_op = fused_op
 
         # Warm up Lt heuristics so later iterations stay steady.
-        with torch.cuda.amp.autocast(dtype=torch.float16):
+        with torch.autocast("cuda", dtype=torch.float16):
             for _ in range(5):
                 _ = self.compiled_op(self.A, self.B, self.bias)
         torch.cuda.synchronize()
@@ -72,7 +72,7 @@ class OptimizedCutlassBenchmark(Benchmark):
         assert self.A is not None and self.B is not None and self.bias is not None
         op = self.compiled_op
         with nvtx_range("optimized_cutlass", enable=enable_nvtx):
-            with torch.cuda.amp.autocast(dtype=torch.float16):
+            with torch.autocast("cuda", dtype=torch.float16):
                 _ = op(self.A, self.B, self.bias)
 
     def teardown(self) -> None:

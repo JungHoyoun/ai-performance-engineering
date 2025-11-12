@@ -12,16 +12,15 @@ NOTE: Distributed benchmarks are ONLY skipped if num_gpus == 1 (single GPU syste
 This is clearly logged when it happens.
 
 Usage:
-    python3 tools/verification/verify_all_benchmarks.py [--chapter ch1]
+    Prefer running via: python tools/cli/benchmark_cli.py verify [--targets ...]
 """
 
 import sys
 import os
-import argparse
 import importlib.util
 import traceback
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 repo_root = Path(__file__).parent.parent.parent
 if str(repo_root) not in sys.path:
@@ -36,6 +35,89 @@ except ImportError:
 
 # Default timeout constant (15 seconds - required for all benchmarks)
 DEFAULT_TIMEOUT = 15
+
+
+def normalize_chapter_name(raw: str) -> str:
+    chapter = raw.strip().lower()
+    if chapter == 'capstone':
+        return chapter
+    if not chapter.startswith('ch') or not chapter[2:].isdigit():
+        raise ValueError(f"Invalid chapter identifier '{raw}'. Expected format like 'ch3'.")
+    return chapter
+
+
+def normalize_example_name(raw: str) -> str:
+    example = raw.strip()
+    if not example:
+        raise ValueError("Example name cannot be empty.")
+    if example.endswith('.py'):
+        example = example[:-3]
+    for prefix in ('baseline_', 'optimized_'):
+        if example.startswith(prefix):
+            example = example[len(prefix):]
+            break
+    if not example:
+        raise ValueError(f"Invalid example identifier '{raw}'.")
+    return example
+
+
+def resolve_target_chapters(target_args: Optional[List[str]]) -> Tuple[List[Path], Dict[str, Optional[Set[str]]]]:
+    """Return ordered chapter directories and per-chapter example filters.
+    
+    Args:
+        target_args: List of chapter or chapter:example tokens. Use None or ['all']
+            to select every chapter.
+    """
+    if not target_args:
+        chapter_dirs = sorted(
+            [
+                d for d in repo_root.iterdir()
+                if d.is_dir() and d.name.startswith('ch') and d.name[2:].isdigit()
+            ],
+            key=lambda d: int(d.name[2:])
+        )
+        capstone_dir = repo_root / "capstone"
+        if capstone_dir.is_dir():
+            chapter_dirs.append(capstone_dir)
+        if not chapter_dirs:
+            raise FileNotFoundError("No chapter directories found.")
+        chapter_filters = {d.name: None for d in chapter_dirs}
+        return chapter_dirs, chapter_filters
+    
+    normalized = [token.strip().lower() for token in target_args]
+    if 'all' in normalized:
+        if len(normalized) > 1:
+            raise ValueError("'all' cannot be combined with other targets.")
+        return resolve_target_chapters(None)
+    
+    chapter_order, chapter_filters = parse_target_args(target_args)
+    chapter_dirs: List[Path] = []
+    for chapter_name in chapter_order:
+        chapter_dir = repo_root / chapter_name
+        if not chapter_dir.exists():
+            raise FileNotFoundError(f"Chapter directory '{chapter_name}' not found.")
+        chapter_dirs.append(chapter_dir)
+    return chapter_dirs, chapter_filters
+
+
+def parse_target_args(target_args: List[str]) -> Tuple[List[str], Dict[str, Optional[Set[str]]]]:
+    """Return chapter order and mapping from chapter -> set of example names (or None for all)."""
+    chapter_order: List[str] = []
+    chapter_filters: Dict[str, Optional[Set[str]]] = {}
+    for raw_target in target_args:
+        chapter_part, example_part = (raw_target.split(':', 1) + [None])[:2]
+        chapter = normalize_chapter_name(chapter_part)
+        if chapter not in chapter_filters:
+            chapter_order.append(chapter)
+            chapter_filters[chapter] = set()
+        if example_part is None or example_part.strip() == '':
+            chapter_filters[chapter] = None  # Whole chapter requested; overrides specifics
+            continue
+        if chapter_filters[chapter] is None:
+            continue  # Already targeting entire chapter; ignore narrower filters
+        normalized_example = normalize_example_name(example_part)
+        chapter_filters[chapter].add(normalized_example)
+    return chapter_order, chapter_filters
 
 
 def check_syntax(file_path: Path) -> Tuple[bool, Optional[str]]:
@@ -281,7 +363,7 @@ def is_distributed_benchmark(file_path: Path) -> bool:
         return False
 
 
-def verify_chapter(chapter_dir: Path) -> Dict[str, Any]:
+def verify_chapter(chapter_dir: Path, target_examples: Optional[Set[str]] = None) -> Dict[str, Any]:
     """Verify all benchmarks in a chapter.
     
     Runs ALL tests. Only skips distributed benchmarks if num_gpus == 1,
@@ -305,7 +387,42 @@ def verify_chapter(chapter_dir: Path) -> Dict[str, Any]:
     # Find all baseline and optimized files
     baseline_files = list(chapter_dir.glob("baseline_*.py"))
     optimized_files = list(chapter_dir.glob("optimized_*.py"))
-    all_files = baseline_files + optimized_files
+    all_files: List[Path]
+    if target_examples is None:
+        all_files = baseline_files + optimized_files
+    else:
+        baseline_index = {
+            file_path.stem[len("baseline_"):]: file_path
+            for file_path in baseline_files
+            if file_path.stem.startswith("baseline_")
+        }
+        optimized_index = {
+            file_path.stem[len("optimized_"):]: file_path
+            for file_path in optimized_files
+            if file_path.stem.startswith("optimized_")
+        }
+        missing_files: List[str] = []
+        selected: List[Path] = []
+        for example in sorted(target_examples):
+            baseline_key = f"baseline_{example}.py"
+            optimized_key = f"optimized_{example}.py"
+            baseline_path = baseline_index.get(example)
+            optimized_path = optimized_index.get(example)
+            if baseline_path is None:
+                missing_files.append(baseline_key)
+            else:
+                selected.append(baseline_path)
+            if optimized_path is None:
+                missing_files.append(optimized_key)
+            else:
+                selected.append(optimized_path)
+        if missing_files:
+            missing_csv = ", ".join(missing_files)
+            raise FileNotFoundError(f"{chapter_dir.name}: missing {missing_csv}")
+        all_files = selected
+    
+    if not all_files:
+        raise FileNotFoundError(f"{chapter_dir.name}: no benchmark files found matching the requested targets")
     
     results['total'] = len(all_files)
     
@@ -326,11 +443,18 @@ def verify_chapter(chapter_dir: Path) -> Dict[str, Any]:
         # Load benchmark
         benchmark, load_err = load_benchmark(file_path)
         if benchmark is None:
-            results['failures'].append({
-                'file': file_name,
-                'stage': 'load',
-                'error': load_err
-            })
+            if load_err and "SKIPPED:" in load_err:
+                results['skipped'].append({
+                    'file': file_name,
+                    'reason': load_err
+                })
+                print(f"    WARNING: {file_name}: {load_err}")
+            else:
+                results['failures'].append({
+                    'file': file_name,
+                    'stage': 'load',
+                    'error': load_err
+                })
             continue
         results['load_pass'] += 1
         
@@ -350,24 +474,33 @@ def verify_chapter(chapter_dir: Path) -> Dict[str, Any]:
         # Test execution (ALL benchmarks run - no skipping except single-GPU distributed)
         exec_ok, exec_err = test_benchmark(benchmark, timeout=DEFAULT_TIMEOUT)
         if not exec_ok:
-            results['failures'].append({
-                'file': file_name,
-                'stage': 'execution',
-                'error': exec_err
-            })
+            if exec_err and "SKIPPED:" in exec_err:
+                results['skipped'].append({
+                    'file': file_name,
+                    'reason': exec_err
+                })
+                print(f"    WARNING: {file_name}: {exec_err}")
+            else:
+                results['failures'].append({
+                    'file': file_name,
+                    'stage': 'execution',
+                    'error': exec_err
+                })
             continue
         results['exec_pass'] += 1
     
     return results
 
 
-def main():
+def run_verification(target_args: Optional[List[str]] = None) -> int:
     import torch
     import subprocess
     
-    parser = argparse.ArgumentParser(description='Verify all baseline/optimized benchmarks')
-    parser.add_argument('--chapter', type=str, help='Chapter to test (e.g., ch1) or "all"')
-    args = parser.parse_args()
+    try:
+        chapter_dirs, chapter_filters = resolve_target_chapters(target_args)
+    except (ValueError, FileNotFoundError) as exc:
+        print(f"ERROR: {exc}")
+        return 1
     
     print("=" * 80)
     print("VERIFYING ALL BASELINE/OPTIMIZED BENCHMARKS")
@@ -413,15 +546,6 @@ def main():
         print("WARNING: NOTE: All GPU benchmarks will likely fail")
     print()
     
-    # Determine chapters to test
-    if args.chapter and args.chapter != 'all':
-        chapter_dirs = [repo_root / args.chapter]
-    else:
-        # Sort chapters numerically (ch1, ch2, ..., ch10, ch11, ...) instead of lexicographically
-        chapter_dirs = sorted([d for d in repo_root.iterdir() 
-                              if d.is_dir() and d.name.startswith('ch') and d.name[2:].isdigit()],
-                             key=lambda d: int(d.name[2:]))
-    
     all_results = []
     total_files = 0
     total_syntax_pass = 0
@@ -434,7 +558,11 @@ def main():
             continue
         
         print(f"Testing {chapter_dir.name}...")
-        results = verify_chapter(chapter_dir)
+        try:
+            results = verify_chapter(chapter_dir, chapter_filters[chapter_dir.name])
+        except FileNotFoundError as exc:
+            print(f"ERROR: {exc}")
+            return 1
         all_results.append(results)
         
         total_files += results['total']
@@ -503,6 +631,12 @@ def main():
         if total_skipped > 0:
             print(f"(Note: {total_skipped} distributed benchmarks skipped on single-GPU system)")
         return 0
+
+
+def main():
+    raise SystemExit(
+        "This entrypoint moved. Run 'python tools/cli/benchmark_cli.py verify [--targets ...]' instead."
+    )
 
 
 if __name__ == "__main__":

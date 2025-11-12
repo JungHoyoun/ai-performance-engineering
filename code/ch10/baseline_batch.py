@@ -24,7 +24,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
-from ch10.workload_config import WORKLOAD, is_smoke_test
+from ch10.workload_config import WORKLOAD
 
 
 def resolve_device() -> torch.device:
@@ -46,9 +46,8 @@ class BaselineBatchBenchmark(Benchmark):
         self.model: nn.Sequential | None = None
         self.inputs: torch.Tensor | None = None
         self.workload = WORKLOAD
-        self.smoke_test = is_smoke_test()
-        self.micro_batch_size = self.workload.baseline_micro_batch_for_mode(self.smoke_test)
-        self.micro_batches = self.workload.baseline_micro_batches_for_mode(self.smoke_test)
+        self.micro_batch_size = self.workload.baseline_micro_batch_size
+        self.micro_batches = self.workload.baseline_micro_batches
         self.hidden_dim = self.workload.hidden_dim
         self.ffn_dim = self.workload.ffn_dim
         self._last_total = 0.0

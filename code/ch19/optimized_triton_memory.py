@@ -17,6 +17,13 @@ if str(repo_root) not in sys.path:
 import torch
 
 try:
+    from common.python.triton_compat import ensure_triton_compat
+except ImportError:
+    ensure_triton_compat = None  # type: ignore[assignment]
+else:
+    ensure_triton_compat()
+
+try:
     import triton
     import triton.language as tl
     TRITON_AVAILABLE = True
@@ -52,10 +59,10 @@ if TRITON_AVAILABLE:
         offsets = block_start + tl.arange(0, BLOCK_SIZE)
         mask = offsets < n_elements
         
-        x = tl.load(x_ptr + offsets, mask=mask)
-        y = tl.load(y_ptr + offsets, mask=mask)
+        x = tl.load(x_ptr + offsets, mask=mask).to(tl.float32)
+        y = tl.load(y_ptr + offsets, mask=mask).to(tl.float32)
         fused = x * y + tl.sin(x)
-        tl.store(output_ptr + offsets, fused, mask=mask)
+        tl.store(output_ptr + offsets, fused.to(tl.float16), mask=mask)
 
 class OptimizedTritonMemoryBenchmark(Benchmark):
     """Optimized: Memory management with Triton kernels."""
@@ -67,6 +74,7 @@ class OptimizedTritonMemoryBenchmark(Benchmark):
         self.output = None
         self.N = 1_000_000
         self.use_triton = TRITON_AVAILABLE
+        self.repeats = 8
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
@@ -81,9 +89,15 @@ class OptimizedTritonMemoryBenchmark(Benchmark):
         # Provides Python-like syntax for optimizing memory access patterns
         # Enables explicit optimization of memory management
         
-        self.input_a = torch.randn(self.N, device=self.device, dtype=torch.float32).contiguous()
-        self.input_b = torch.randn(self.N, device=self.device, dtype=torch.float32).contiguous()
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        if not self.use_triton:
+            raise RuntimeError(
+                "SKIPPED: optimized_triton_memory requires the Triton runtime. "
+                "Install Triton (pip install triton) to run the optimized kernel."
+            )
+
+        self.input_a = torch.randn(self.N, device=self.device, dtype=torch.float16).contiguous()
+        self.input_b = torch.randn(self.N, device=self.device, dtype=torch.float16).contiguous()
+        self.output = torch.empty(self.N, device=self.device, dtype=torch.float16)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -97,18 +111,19 @@ class OptimizedTritonMemoryBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
         with nvtx_range("optimized_triton_memory", enable=enable_nvtx):
-            if self.use_triton:
-                grid = lambda meta: (triton.cdiv(self.N, meta['BLOCK_SIZE']),)
-                triton_fma_kernel[grid](
-                    self.input_a,
-                    self.input_b,
-                    self.output,
-                    self.N,
-                    BLOCK_SIZE=4096,
-                )
-            else:
-                torch.mul(self.input_a, self.input_b, out=self.output)
-                self.output.add_(torch.sin(self.input_a))
+            for _ in range(self.repeats):
+                if self.use_triton:
+                    grid = lambda meta: (triton.cdiv(self.N, meta['BLOCK_SIZE']),)
+                    triton_fma_kernel[grid](
+                        self.input_a,
+                        self.input_b,
+                        self.output,
+                        self.N,
+                        BLOCK_SIZE=4096,
+                    )
+                else:
+                    torch.mul(self.input_a, self.input_b, out=self.output)
+                    self.output.add_(torch.sin(self.input_a))
             torch.cuda.synchronize()
 
     
@@ -122,8 +137,8 @@ class OptimizedTritonMemoryBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=100,
-            warmup=10,
+            iterations=10,
+            warmup=2,
         )
     
     def validate_result(self) -> Optional[str]:

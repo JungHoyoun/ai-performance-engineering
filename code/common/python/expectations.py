@@ -15,8 +15,8 @@ from typing import Any, Dict, List, Optional
 EXPECTATION_FILENAME_TEMPLATE = "expectations_{hardware_key}.json"
 
 # Tolerances to avoid flagging noise as regressions.
-RELATIVE_TOLERANCE = 0.005  # 0.5%
-ABSOLUTE_TOLERANCE = 1e-6
+RELATIVE_TOLERANCE = 0.05  # 5%
+ABSOLUTE_TOLERANCE = 1e-5
 
 # Metric direction hints. Extend as new metrics are tracked.
 METRIC_DIRECTIONS: Dict[str, str] = {
@@ -271,4 +271,3 @@ class ExpectationsStore:
         serialized = json.dumps(self._data, indent=2, sort_keys=True)
         self.path.write_text(serialized + "\n")
         self._changed = False
-

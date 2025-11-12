@@ -31,7 +31,7 @@ from torch.nn.attention.flex_attention import flex_attention, create_block_mask
 import time
 from typing import Optional, Tuple
 
-from common.python.compile_utils import enable_tf32
+from common.python.compile_utils import enable_tf32, compile_model
 
 QUICK_MODE = any(
     os.getenv(flag, "0") == "1"
@@ -204,22 +204,16 @@ class DynamicSlidingWindowAttention(nn.Module):
 
 
 def compile_module(module: nn.Module, label: str) -> Tuple[nn.Module, bool]:
-    """Compile module with torch.compile, falling back to eager when needed."""
+    """Compile module with torch.compile and propagate failures."""
     try:
+        module_to_compile = copy.deepcopy(module)
+    except Exception:
         module_to_compile = module
-        try:
-            module_to_compile = copy.deepcopy(module)
-        except Exception:
-            module_to_compile = module
-        compiled = torch.compile(module_to_compile, **COMPILE_KWARGS)
-        return compiled, True
-    except Exception as exc:  # noqa: BLE001 - surface and handle compile issues
-        summary = _summarize_error_text(str(exc))
-        print(f"  Compilation failed for {label}: {summary}")
-        if not QUICK_MODE and not _is_known_compile_failure(str(exc)):
-            raise
-        print("  Falling back to eager execution for this pattern.")
-        return module, False
+    compiled = compile_model(
+        module_to_compile,
+        **COMPILE_KWARGS,
+    )
+    return compiled, True
 
 
 def benchmark_attention(
@@ -231,7 +225,6 @@ def benchmark_attention(
     *,
     num_warmup: int = 50,
     num_iters: int = 200,
-    eager_fallback=None,
 ):
     """Benchmark attention implementation. Returns (time_ms, used_compiled)."""
     print(f"\nBenchmarking: {name}")
@@ -239,47 +232,16 @@ def benchmark_attention(
         num_warmup = min(num_warmup, BASE_WARMUP)
         num_iters = min(num_iters, BASE_ITERS)
 
-    try:
-        with torch.inference_mode():
-            for _ in range(num_warmup):
-                _ = model(Q, K, V)
-        torch.cuda.synchronize()
+    with torch.inference_mode():
+        for _ in range(num_warmup):
+            _ = model(Q, K, V)
+    torch.cuda.synchronize()
 
-        start = time.perf_counter()
-        with torch.inference_mode():
-            for _ in range(num_iters):
-                _ = model(Q, K, V)
-        torch.cuda.synchronize()
-    except NotImplementedError as exc:
-        fallback_allowed = eager_fallback is not None
-        if fallback_allowed:
-            print("  Compiled path raised NotImplementedError; falling back to eager execution.")
-            return benchmark_attention(
-                eager_fallback,
-                Q,
-                K,
-                V,
-                name,
-                num_warmup=num_warmup,
-                num_iters=num_iters,
-                eager_fallback=None,
-            )
-        raise exc
-    except Exception as exc:  # noqa: BLE001
-        fallback_allowed = eager_fallback is not None and (QUICK_MODE or _is_known_compile_failure(str(exc)))
-        if fallback_allowed:
-            print("  Compiled path raised an exception; falling back to eager execution.")
-            return benchmark_attention(
-                eager_fallback,
-                Q,
-                K,
-                V,
-                name,
-                num_warmup=num_warmup,
-                num_iters=num_iters,
-                eager_fallback=None,
-            )
-        raise
+    start = time.perf_counter()
+    with torch.inference_mode():
+        for _ in range(num_iters):
+            _ = model(Q, K, V)
+    torch.cuda.synchronize()
 
     elapsed = time.perf_counter() - start
     avg_time_ms = (elapsed / num_iters) * 1000
@@ -378,7 +340,6 @@ def main():
         V,
         "Sliding Window + Causal",
         num_warmup=COMPILED_WARMUP,
-        eager_fallback=model1,
     )
     results["sliding_window"] = {"time": time1, "compiled": model1_compiled_ok and used_compiled1}
     if baseline_time:
@@ -398,7 +359,6 @@ def main():
         V,
         "Local + Global Sparse",
         num_warmup=COMPILED_WARMUP,
-        eager_fallback=model2,
     )
     results["local_global"] = {"time": time2, "compiled": model2_compiled_ok and used_compiled2}
     if baseline_time:
@@ -414,19 +374,14 @@ def main():
         results["dynamic_windows"] = {"time": None, "compiled": False}
     else:
         model3 = DynamicSlidingWindowAttention(num_heads=num_heads, base_window=256).cuda().eval()
-        model3_compiled = model3
-        model3_compiled_ok = False
         candidate_module, candidate_ok = compile_module(copy.deepcopy(model3).cuda().eval(), "Dynamic Windows")
+        model3_compiled = candidate_module
+        model3_compiled_ok = candidate_ok
         if candidate_ok:
-            try:
-                with torch.inference_mode():
-                    candidate_module(Q[:, :, :1], K[:, :, :1], V[:, :, :1])
-                model3_compiled = candidate_module
-                model3_compiled_ok = True
-            except Exception:
-                print("  Dynamic windows compile smoke test failed; using eager kernel.")
+            with torch.inference_mode():
+                candidate_module(Q[:, :, :1], K[:, :, :1], V[:, :, :1])
         else:
-            print("  Dynamic windows compile unavailable; using eager kernel.")
+            raise RuntimeError("SKIPPED: Dynamic windows compilation unavailable.")
 
         time3, used_compiled3 = benchmark_attention(
             model3_compiled,
@@ -435,7 +390,6 @@ def main():
             V,
             "Dynamic Windows",
             num_warmup=COMPILED_WARMUP,
-            eager_fallback=model3,
         )
         results["dynamic_windows"] = {"time": time3, "compiled": model3_compiled_ok and used_compiled3}
         if baseline_time:

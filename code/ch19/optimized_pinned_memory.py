@@ -50,6 +50,7 @@ class OptimizedPinnedMemoryBenchmark(Benchmark):
         self.gpu_data = None
         self.active_slot = 0
         self.N = 10_000_000
+        self.repeats = 4
     
     def setup(self) -> None:
         """Setup: Initialize CPU tensor with pinned memory."""
@@ -79,23 +80,38 @@ class OptimizedPinnedMemoryBenchmark(Benchmark):
 
         with nvtx_range("optimized_pinned_memory_pinned", enable=enable_nvtx):
             slot = self.active_slot
-            host = self.cpu_buffers[slot]
-            device_buf = self.device_buffers[slot]
-            copy_stream = self.copy_streams[slot]
-            event = self.copy_events[slot]
+            prev_slot = 1 - slot
+            pipeline_ready = False
+            for _ in range(self.repeats):
+                host = self.cpu_buffers[slot]
+                device_buf = self.device_buffers[slot]
+                copy_stream = self.copy_streams[slot]
+                event = self.copy_events[slot]
 
-            # Start async H2D copy on dedicated stream
-            with torch.cuda.stream(copy_stream):
-                device_buf.copy_(host, non_blocking=True)
-                event.record(copy_stream)
+                with torch.cuda.stream(copy_stream):
+                    device_buf.copy_(host, non_blocking=True)
+                    event.record(copy_stream)
 
-            # Overlap compute on previous buffer while copy runs
-            with torch.cuda.stream(self.compute_stream):
-                self.compute_stream.wait_event(event)
-                device_buf.mul_(1.0001).add_(0.0001)
+                if pipeline_ready:
+                    prev_event = self.copy_events[prev_slot]
+                    prev_buf = self.device_buffers[prev_slot]
+                    with torch.cuda.stream(self.compute_stream):
+                        self.compute_stream.wait_event(prev_event)
+                        prev_buf.mul_(1.0001).add_(0.0001)
+                        self.gpu_data = prev_buf
 
-            self.gpu_data = device_buf
-            self.active_slot = 1 - slot
+                pipeline_ready = True
+                slot, prev_slot = prev_slot, slot
+
+            if pipeline_ready:
+                prev_event = self.copy_events[prev_slot]
+                prev_buf = self.device_buffers[prev_slot]
+                with torch.cuda.stream(self.compute_stream):
+                    self.compute_stream.wait_event(prev_event)
+                    prev_buf.mul_(1.0001).add_(0.0001)
+                    self.gpu_data = prev_buf
+
+            self.active_slot = slot
             torch.cuda.synchronize()
     
     def teardown(self) -> None:

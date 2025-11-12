@@ -41,6 +41,7 @@ class BaselinePinnedMemoryBenchmark(Benchmark):
         self.gpu_data = None
         self.device_buffer = None
         self.N = 10_000_000
+        self.repeats = 4
     
     def setup(self) -> None:
         """Setup: Initialize CPU tensor without pinning."""
@@ -61,12 +62,11 @@ class BaselinePinnedMemoryBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
         with nvtx_range("pinned_memory", enable=enable_nvtx):
-            # Baseline: Transfer unpinned memory to GPU
-            # This is slower because it requires CPU staging buffer
-            staging = self.cpu_data.clone()
-            self.gpu_data = staging.to(self.device, non_blocking=False)
-            self.device_buffer.copy_(self.gpu_data)
-            self.device_buffer.mul_(1.0001).add_(0.0001)
+            for _ in range(self.repeats):
+                staging = self.cpu_data.clone()
+                self.gpu_data = staging.to(self.device, non_blocking=False)
+                self.device_buffer.copy_(self.gpu_data)
+                self.device_buffer.mul_(1.0001).add_(0.0001)
             torch.cuda.synchronize()
     
     def teardown(self) -> None:

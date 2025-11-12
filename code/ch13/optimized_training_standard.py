@@ -17,6 +17,7 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
+from torch.amp import autocast
 
 from typing import Optional
 
@@ -65,8 +66,8 @@ class OptimizedCheckpointBenchmark(Benchmark):
 
         # Optimization: Compile model for kernel fusion and optimization
 
-        self.inputs = None
-        self.targets = None
+        self.inputs: Optional[torch.Tensor] = None
+        self.targets: Optional[torch.Tensor] = None
         self.optimizer = None
         self.criterion = None
         self.workload = WORKLOAD
@@ -76,6 +77,7 @@ class OptimizedCheckpointBenchmark(Benchmark):
         self.micro_batch = self.workload.micro_batch_size
         self.accum_steps = self.global_batch // self.micro_batch
         self.batch_size = self.micro_batch
+        self.dtype = torch.bfloat16
     
     def setup(self) -> None:
         """Setup: initialize model and data."""
@@ -86,15 +88,16 @@ class OptimizedCheckpointBenchmark(Benchmark):
             torch.backends.cudnn.deterministic = False
             # Enable TF32 for faster matmul on Ampere+ GPUs
             enable_tf32()
-        self.model = DeepModel(hidden_dim=self.hidden_dim, num_layers=self.num_layers, use_checkpoint=True)
-        self.model = self.model.to(self.device)
-        # Keep model in FP32 - checkpointing is about memory, not precision
-        # Converting to FP16 would require matching input dtype
-        self.model.train()
-        self.inputs = torch.randn(self.global_batch, self.hidden_dim, device=self.device, dtype=torch.float32)
-        self.targets = torch.randn(self.global_batch, self.hidden_dim, device=self.device, dtype=torch.float32)
+        model = DeepModel(hidden_dim=self.hidden_dim, num_layers=self.num_layers, use_checkpoint=True)
+        self.model = model.to(self.device, dtype=self.dtype).train()
+        self.inputs = torch.randn(self.global_batch, self.hidden_dim, device=self.device, dtype=self.dtype)
+        self.targets = torch.randn(self.global_batch, self.hidden_dim, device=self.device, dtype=self.dtype)
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01)
         self.criterion = nn.MSELoss()
+        self._chunks = zip(
+            self.inputs.view(self.accum_steps, self.micro_batch, self.hidden_dim),
+            self.targets.view(self.accum_steps, self.micro_batch, self.hidden_dim),
+        )
     
     def benchmark_fn(self) -> None:
         """Function to benchmark."""
@@ -108,14 +111,17 @@ class OptimizedCheckpointBenchmark(Benchmark):
 
         with nvtx_range("training_standard", enable=enable_nvtx):
             self.optimizer.zero_grad(set_to_none=True)
-            for start in range(0, self.global_batch, self.micro_batch):
-                end = start + self.micro_batch
-                inputs = self.inputs[start:end]
-                targets = self.targets[start:end]
-                outputs = self.model(inputs)
-                loss = self.criterion(outputs, targets) / self.accum_steps
+            chunk_iter = self._chunks
+            for inputs, targets in chunk_iter:
+                with autocast("cuda", dtype=self.dtype):
+                    outputs = self.model(inputs)
+                    loss = self.criterion(outputs, targets) / self.accum_steps
                 loss.backward()
             self.optimizer.step()
+            self._chunks = zip(
+                self.inputs.view(self.accum_steps, self.micro_batch, self.hidden_dim),
+                self.targets.view(self.accum_steps, self.micro_batch, self.hidden_dim),
+            )
 
     
     def teardown(self) -> None:

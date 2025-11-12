@@ -53,7 +53,7 @@ class OptimizedAutotuningBenchmark(Benchmark):
         self.model = module
         self.inputs = torch.randn(32, 64, 96, 96, device=self.device, dtype=torch.float16)
 
-        with torch.cuda.amp.autocast(dtype=torch.float16):
+        with torch.autocast("cuda", dtype=torch.float16):
             with torch.no_grad():
                 for _ in range(5):
                     _ = self.model(self.inputs)
@@ -66,7 +66,7 @@ class OptimizedAutotuningBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
         assert self.model is not None and self.inputs is not None
         with nvtx_range("optimized_autotuning", enable=enable_nvtx):
-            with torch.cuda.amp.autocast(dtype=torch.float16):
+            with torch.autocast("cuda", dtype=torch.float16):
                 with torch.no_grad():
                     _ = self.model(self.inputs)
 

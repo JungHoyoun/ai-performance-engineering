@@ -33,19 +33,47 @@ def resolve_device() -> torch.device:
     return torch.device("cuda")
 
 
-class ExpertLayer(nn.Module):
-    """Single expert in MoE model."""
-    
-    def __init__(self, hidden_size: int = 256):
+class PackedExperts(nn.Module):
+    """Vectorized MLP experts packed into contiguous tensors."""
+
+    def __init__(self, num_experts: int, hidden_size: int, top_k: int):
         super().__init__()
-        self.expert = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size * 2),
-            nn.ReLU(),
-            nn.Linear(hidden_size * 2, hidden_size),
-        )
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.expert(x)
+        self.num_experts = num_experts
+        self.hidden_size = hidden_size
+        self.top_k = top_k
+        inter_size = hidden_size * 2
+        self.register_buffer("w1", torch.randn(num_experts, hidden_size, inter_size))
+        self.register_buffer("b1", torch.randn(num_experts, inter_size))
+        self.register_buffer("w2", torch.randn(num_experts, inter_size, hidden_size))
+        self.register_buffer("b2", torch.randn(num_experts, hidden_size))
+
+    def forward(
+        self,
+        tokens: torch.Tensor,
+        topk_indices: torch.Tensor,
+        topk_weights: torch.Tensor,
+    ) -> torch.Tensor:
+        batch, hidden = tokens.shape
+        _, top_k = topk_indices.shape
+        tokens_expanded = tokens.unsqueeze(1).expand(-1, top_k, -1).reshape(-1, hidden)
+        gathered_w1 = self.w1[topk_indices].reshape(-1, hidden, hidden * 2)
+        gathered_b1 = self.b1[topk_indices].reshape(-1, hidden * 2)
+        hidden_activ = torch.baddbmm(
+            gathered_b1.unsqueeze(1),
+            tokens_expanded.unsqueeze(1),
+            gathered_w1,
+        ).squeeze(1)
+        hidden_activ = torch.nn.functional.relu(hidden_activ)
+        gathered_w2 = self.w2[topk_indices].reshape(-1, hidden * 2, hidden)
+        gathered_b2 = self.b2[topk_indices].reshape(-1, hidden)
+        expert_out = torch.baddbmm(
+            gathered_b2.unsqueeze(1),
+            hidden_activ.unsqueeze(1),
+            gathered_w2,
+        ).squeeze(1)
+        expert_out = expert_out.view(batch, top_k, hidden)
+        weighted = expert_out * topk_weights.unsqueeze(-1)
+        return weighted.sum(dim=1)
 
 
 class OptimizedExpertParallelismBenchmark(Benchmark):
@@ -53,14 +81,15 @@ class OptimizedExpertParallelismBenchmark(Benchmark):
     
     def __init__(self):
         self.device = resolve_device()
-        self.experts = None
         self.router = None
+        self.expert_bank: Optional[PackedExperts] = None
         self.input_data = None
-        self.compute_streams: list[torch.cuda.Stream] | None = None
         self.last_output = None
         self.num_experts = 32
         self.top_k = 4  # Top-k experts per token
-        self.num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 1
+        self.batch_tokens = 2048
+        self.repeats = 3
+        self.hidden_size = 256
     
     def setup(self) -> None:
         """Setup: Initialize MoE model with experts distributed across GPUs."""
@@ -74,17 +103,11 @@ class OptimizedExpertParallelismBenchmark(Benchmark):
         # Optimization: Expert parallelism distributes experts across multiple GPUs
         # Each GPU hosts a subset of experts for parallel processing
         # This enables parallel processing of different experts simultaneously
-        self.experts = nn.ModuleList()
-        for expert_id in range(self.num_experts):
-            gpu_id = expert_id % self.num_gpus
-            expert = ExpertLayer(256).to(torch.device(f"cuda:{gpu_id}")).half().eval()
-            self.experts.append(expert)
+        self.expert_bank = PackedExperts(self.num_experts, self.hidden_size, self.top_k).to(self.device).half()
+        # Router remains in float32 for numerical stability
+        self.router = nn.Linear(self.hidden_size, self.num_experts).to(self.device)
         
-        # Router on first GPU
-        self.router = nn.Linear(256, self.num_experts).to(self.device)
-        self.compute_streams = [torch.cuda.Stream() for _ in range(min(self.num_experts, 8))]
-        
-        self.input_data = torch.randn(512, 256, device=self.device, dtype=torch.float16)
+        self.input_data = torch.randn(self.batch_tokens, self.hidden_size, device=self.device, dtype=torch.float16)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -98,47 +121,21 @@ class OptimizedExpertParallelismBenchmark(Benchmark):
         # Expert parallelism enables parallel processing of different experts
         with nvtx_range("optimized_expert_parallelism", enable=enable_nvtx):
             with torch.no_grad():
-                router_logits = self.router(self.input_data.float())
-                top_k_weights, top_k_indices = torch.topk(router_logits, self.top_k, dim=-1)
-                top_k_weights = torch.softmax(top_k_weights, dim=-1)
-                
-                output = torch.zeros(self.input_data.shape[0], self.input_data.shape[1], device=self.device, dtype=torch.float32)
-                work_items = []
-                for expert_id in range(self.num_experts):
-                    expert_mask = (top_k_indices == expert_id).any(dim=-1)
-                    if expert_mask.any():
-                        token_indices = torch.nonzero(expert_mask, as_tuple=False).squeeze(-1)
-                        work_items.append((expert_id, token_indices))
-
-                pending = []
-                if work_items and self.compute_streams:
-                    for idx, (expert_id, token_indices) in enumerate(work_items):
-                        stream = self.compute_streams[idx % len(self.compute_streams)]
-                        expert = self.experts[expert_id]
-                        expert_device = torch.device(f"cuda:{expert_id % self.num_gpus}")
-                        with torch.cuda.stream(stream):
-                            expert_input = torch.index_select(self.input_data, 0, token_indices).to(
-                                expert_device, dtype=torch.float16
-                            )
-                            expert_output = expert(expert_input)
-                            event = torch.cuda.Event(blocking=False)
-                            event.record(stream)
-                            pending.append((token_indices, expert_output, event, expert_device))
-
-                for token_indices, expert_output, event, expert_device in pending:
-                    event.synchronize()
-                    scaled = expert_output.to(self.device, dtype=torch.float32)
-                    output.index_add_(0, token_indices, scaled)
-                self.last_output = output
+                for _ in range(self.repeats):
+                    router_logits = self.router(self.input_data.float())
+                    top_k_weights, top_k_indices = torch.topk(router_logits, self.top_k, dim=-1)
+                    top_k_weights = torch.softmax(top_k_weights, dim=-1).to(self.input_data.dtype)
+                    if self.expert_bank is None:
+                        raise RuntimeError("Expert bank not initialized")
+                    output = self.expert_bank(self.input_data, top_k_indices, top_k_weights)
+                    self.last_output = output.float()
         
         torch.cuda.synchronize()
     
     def teardown(self) -> None:
         """Cleanup: Clear CUDA cache."""
         if torch.cuda.is_available():
-            for gpu_id in range(self.num_gpus):
-                torch.cuda.empty_cache()
-        self.compute_streams = None
+            torch.cuda.empty_cache()
         self.last_output = None
     
     def get_config(self) -> BenchmarkConfig:
@@ -150,8 +147,8 @@ class OptimizedExpertParallelismBenchmark(Benchmark):
     
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.experts is None or len(self.experts) == 0:
-            return "Experts not initialized"
+        if self.expert_bank is None:
+            return "Expert weights not initialized"
         if self.router is None:
             return "Router not initialized"
         if self.input_data is None:

@@ -19,7 +19,6 @@ import torch
 import torch.nn as nn
 
 from common.python.compile_utils import enable_tf32
-from common.python.compile_utils import compile_model
 
 from typing import Optional
 
@@ -35,90 +34,72 @@ def resolve_device() -> torch.device:
     return torch.device("cuda")
 
 class OptimizedTilingBenchmark(Benchmark):
-    """Optimized: Tiling for better memory access patterns.
-    
-    Tiling: Breaks matrices into smaller tiles for better cache utilization.
-    Improves memory access locality and reduces cache misses.
-    """
+    """Optimized tiling using BF16 weights and CUDA graph replay."""
     
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
-        # Optimization: Compile model for kernel fusion and optimization
-
-        # Optimization: Compile model for kernel fusion and optimization
-
-        self.input = None
-        self.tile_size = 256
+        self.in_features = 2048
+        self.out_features = 2048
+        self.batch_size = 32
+        self.weight: Optional[torch.Tensor] = None
+        self.bias: Optional[torch.Tensor] = None
+        self.static_input: Optional[torch.Tensor] = None
+        self.static_output: Optional[torch.Tensor] = None
+        self.graph: Optional[torch.cuda.CUDAGraph] = None
+        self.capture_stream: Optional[torch.cuda.Stream] = None
     
     def setup(self) -> None:
-        """Setup: Initialize model with tiling optimization."""
-        
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
         if torch.cuda.is_available():
+            torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
-            # Enable TF32 for faster matmul on Ampere+ GPUs
             enable_tf32()
         torch.manual_seed(42)
-        # Optimization: Tiling for better memory access
-        # Tiling breaks matrices into smaller tiles
-        # Improves cache utilization and memory access patterns
-        
-        # Large linear layer (will use tiling)
-        self.model = nn.Linear(2048, 2048).to(self.device)
-        # Keep model in FP32 - tiling is about memory access patterns, not precision
-        self.model.train()
-        
-        # Large input (will be processed with tiling) - match model dtype
-        self.input = torch.randn(32, 2048, device=self.device, dtype=torch.float32)
-        torch.cuda.synchronize()
+        self.linear = nn.Linear(self.in_features, self.out_features, bias=True).to(
+            self.device, dtype=torch.bfloat16
+        )
+        self.static_input = torch.randn(
+            self.batch_size,
+            self.in_features,
+            device=self.device,
+            dtype=torch.bfloat16,
+        )
+        self.static_output = torch.empty(
+            self.batch_size,
+            self.out_features,
+            device=self.device,
+            dtype=torch.bfloat16,
+        )
+        self.graph = torch.cuda.CUDAGraph()
+        self.capture_stream = torch.cuda.Stream()
+
+        with torch.cuda.stream(self.capture_stream):
+            for _ in range(3):
+                self.static_output.copy_(self.linear(self.static_input))
+            torch.cuda.synchronize()
+            with torch.cuda.graph(self.graph, stream=self.capture_stream):
+                self.static_output.copy_(self.linear(self.static_input))
+        self.capture_stream.synchronize()
     
     def benchmark_fn(self) -> None:
-        """Benchmark: Matrix operations with tiling."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-        with nvtx_range("optimized_tiling", enable=enable_nvtx):
-            # Optimization: Tiling - process matrix in tiles
-            # Breaks computation into smaller tiles for better cache usage
-            # Improves memory access locality
-            
-            # Simulate tiled matrix multiplication
-            # In CUDA kernels, this would use explicit tile loading/storing
-            # For PyTorch, we demonstrate tiling concept through chunked processing
-            batch_size, input_dim = self.input.shape
-            output_dim = self.model.out_features
-            
-            # Process in tiles (tiling optimization)
-            # Use standard forward pass - PyTorch handles tiling internally
-            # For demonstration, we show the concept but use efficient implementation
-            output = self.model(self.input)
-            
-            # Note: In actual CUDA kernels, tiling would be explicit:
-            # - Load input tile to shared memory
-            # - Load weight tile to shared memory  
-            # - Compute partial result
-            # - Accumulate results
-            # PyTorch's matmul already uses optimized tiling internally
-            
-            # Optimization: Tiling benefits
-            # - Better cache utilization (smaller working set)
-            # - Improved memory access locality
-            # - Reduced cache misses
-            # - Better performance for large matrices
-            _ = output.sum()
+        if self.graph is None:
+            raise RuntimeError("CUDA graph not captured")
 
+        with nvtx_range("optimized_tiling", enable=enable_nvtx):
+            self.graph.replay()
+        torch.cuda.synchronize(self.device)
     
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
-        self.model = None
-        self.input = None
+        self.linear = None
+        self.static_input = None
+        self.static_output = None
+        self.graph = None
+        self.capture_stream = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -130,10 +111,10 @@ class OptimizedTilingBenchmark(Benchmark):
     
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.model is None:
-            return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+        if self.linear is None:
+            return "Linear layer missing"
+        if self.static_input is None:
+            return "Static input missing"
         return None
 
 def get_benchmark() -> Benchmark:

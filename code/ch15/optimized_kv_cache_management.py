@@ -17,8 +17,9 @@ if str(repo_root) not in sys.path:
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
-from typing import Optional, Tuple
+from typing import Optional
 
 from common.python.benchmark_harness import (
     Benchmark,
@@ -40,9 +41,16 @@ class OptimizedKVCacheManagementBenchmark(Benchmark):
     
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
+        self.q_proj: Optional[nn.Linear] = None
+        self.k_proj: Optional[nn.Linear] = None
+        self.v_proj: Optional[nn.Linear] = None
+        self.out_proj: Optional[nn.Linear] = None
         self.inputs = None
         self.cache_buffer = None
+        self.batch_size = 4
+        self.hidden_dim = 256
+        self.num_heads = 8
+        self.head_dim = self.hidden_dim // self.num_heads
     
     def setup(self) -> None:
         """Setup: Initialize model with KV cache management."""
@@ -55,25 +63,18 @@ class OptimizedKVCacheManagementBenchmark(Benchmark):
         # Optimization: KV cache management - reuse cached values
         # KV cache management stores and reuses keys/values
         
-        hidden_dim = 256
-        num_heads = 8
-        head_dim = hidden_dim // num_heads
+        self.q_proj = nn.Linear(self.hidden_dim, self.hidden_dim, bias=False).to(self.device, dtype=torch.bfloat16)
+        self.k_proj = nn.Linear(self.hidden_dim, self.hidden_dim, bias=False).to(self.device, dtype=torch.bfloat16)
+        self.v_proj = nn.Linear(self.hidden_dim, self.hidden_dim, bias=False).to(self.device, dtype=torch.bfloat16)
+        self.out_proj = nn.Linear(self.hidden_dim, self.hidden_dim, bias=False).to(self.device, dtype=torch.bfloat16)
+        for module in (self.q_proj, self.k_proj, self.v_proj, self.out_proj):
+            module.eval()
         
-        self.model = nn.MultiheadAttention(
-            embed_dim=hidden_dim,
-            num_heads=num_heads,
-            batch_first=True
-        ).to(self.device).eval()
-        
-        # KV cache for management
-        batch_size = 4
         max_seq_len = 32
-        self.cache_buffer = torch.zeros(batch_size, max_seq_len, hidden_dim, device=self.device)
-        
-        # Simulate autoregressive generation
+        self.cache_buffer = torch.zeros(self.batch_size, max_seq_len, self.hidden_dim, device=self.device, dtype=torch.bfloat16)
         self.inputs = [
-            torch.randn(batch_size, 1, hidden_dim, device=self.device)
-            for _ in range(32)
+            torch.randn(self.batch_size, 1, self.hidden_dim, device=self.device, dtype=torch.bfloat16)
+            for _ in range(max_seq_len)
         ]
         torch.cuda.synchronize()
     
@@ -89,16 +90,25 @@ class OptimizedKVCacheManagementBenchmark(Benchmark):
 
         with nvtx_range("optimized_kv_cache_management", enable=enable_nvtx):
             with torch.no_grad():
-                # Optimization: KV cache management
-                # Reuse cached keys/values instead of recomputing
-                # Efficient KV cache management reduces computation
+                assert self.q_proj and self.k_proj and self.v_proj and self.out_proj
+                queries = torch.cat(self.inputs, dim=1)
+                k_cache = self.cache_buffer.clone()
                 
-                for step, query in enumerate(self.inputs):
-                    # Write current token into the cache buffer (avoids cat each step)
-                    self.cache_buffer[:, step:step+1, :] = query
-                    
-                    cached_tokens = self.cache_buffer[:, :step+1, :]
-                    _ = self.model(query, cached_tokens, cached_tokens, need_weights=False)
+                q = self.q_proj(queries)
+                k = self.k_proj(k_cache)
+                v = self.v_proj(k_cache)
+                
+                q = q.view(self.batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
+                k = k.view(self.batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
+                v = v.view(self.batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
+                
+                attn = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+                attn = attn.transpose(1, 2).contiguous().view(self.batch_size, -1, self.hidden_dim)
+                output = self.out_proj(attn)
+                
+                # Update cache with the newest token block without reallocation.
+                self.cache_buffer.copy_(torch.cat([self.cache_buffer[:, 1:, :], queries[:, -1:, :]], dim=1))
+                _ = output[:, -1, :].sum()
 
     
     def teardown(self) -> None:
@@ -117,8 +127,8 @@ class OptimizedKVCacheManagementBenchmark(Benchmark):
     
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.model is None:
-            return "Model not initialized"
+        if self.q_proj is None or self.k_proj is None or self.v_proj is None or self.out_proj is None:
+            return "Projection layers not initialized"
         if self.inputs is None or self.cache_buffer is None:
             return "Inputs/cache not initialized"
         return None

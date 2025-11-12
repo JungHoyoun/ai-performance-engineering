@@ -58,7 +58,9 @@ class BaselineExpertParallelismBenchmark(Benchmark):
         self.input_data = None
         self.num_experts = 32
         self.top_k = 4  # Top-k experts per token
-        self.batch_tokens = 512
+        self.batch_tokens = 2048
+        self.cpu_projection: Optional[nn.Linear] = None
+        self.repeats = 3
     
     def setup(self) -> None:
         """Setup: Initialize MoE model with all experts on single GPU."""
@@ -73,6 +75,7 @@ class BaselineExpertParallelismBenchmark(Benchmark):
         # Simple router (gating network) to select top-k experts
         self.router = nn.Linear(256, self.num_experts).to(self.device)
         
+        self.cpu_projection = nn.Linear(256, 256, bias=False).to("cpu")
         self.input_data = torch.randn(self.batch_tokens, 256, device=self.device)
         torch.cuda.synchronize()
     
@@ -87,24 +90,24 @@ class BaselineExpertParallelismBenchmark(Benchmark):
         # No expert parallelism - all experts on one device
         with nvtx_range("baseline_expert_parallelism", enable=enable_nvtx):
             with torch.no_grad():
-                router_logits = self.router(self.input_data)  # [batch, num_experts]
-                top_k_weights, top_k_indices = torch.topk(router_logits, self.top_k, dim=-1)
-                top_k_weights = torch.softmax(top_k_weights, dim=-1)
-                
-                # Process each expert sequentially
-                output = torch.zeros_like(self.input_data)
-                for expert_id in range(self.num_experts):
-                    expert_mask = (top_k_indices == expert_id).any(dim=-1)
-                    if expert_mask.any():
-                        expert_input = self.input_data[expert_mask]
-                        # Naive dispatch copies activations to host between experts
-                        host_copy = expert_input.to("cpu", non_blocking=False)
-                        host_copy = F.relu(host_copy * 1.0001)
-                        torch.cuda.synchronize()
-                        staged = host_copy.to(self.device, non_blocking=False)
-                        expert_output = self.experts[expert_id](staged)
-                        output[expert_mask] += expert_output
-                        torch.cuda.synchronize()
+                for _ in range(self.repeats):
+                    router_logits = self.router(self.input_data)  # [batch, num_experts]
+                    top_k_weights, top_k_indices = torch.topk(router_logits, self.top_k, dim=-1)
+                    top_k_weights = torch.softmax(top_k_weights, dim=-1)
+                    
+                    # Process each expert sequentially
+                    output = torch.zeros_like(self.input_data)
+                    for expert_id in range(self.num_experts):
+                        expert_mask = (top_k_indices == expert_id).any(dim=-1)
+                        if expert_mask.any():
+                            expert_input = self.input_data[expert_mask]
+                            host_copy = expert_input.to("cpu", non_blocking=False).float()
+                            host_copy = self.cpu_projection(host_copy)
+                            host_copy = F.gelu(host_copy)
+                            staged = host_copy.to(self.device, dtype=self.input_data.dtype, non_blocking=False)
+                            expert_output = self.experts[expert_id](staged)
+                            output[expert_mask] += expert_output
+                            torch.cuda.synchronize()
         
         torch.cuda.synchronize()
     

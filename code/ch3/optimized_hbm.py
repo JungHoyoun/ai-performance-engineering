@@ -56,7 +56,7 @@ class OptimizedHbmBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
         assert self.model is not None and self.inputs is not None
         with nvtx_range("optimized_hbm", enable=enable_nvtx):
-            with torch.cuda.amp.autocast(dtype=torch.float16):
+            with torch.autocast("cuda", dtype=torch.float16):
                 _ = self.model(self.inputs)
 
     def teardown(self) -> None:

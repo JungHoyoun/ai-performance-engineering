@@ -35,7 +35,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
-from ch18.workload_config import WORKLOAD, is_smoke_test
+from ch18.workload_config import WORKLOAD
 
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
@@ -50,13 +50,12 @@ class OptimizedWarpSpecializationAttentionBenchmark(Benchmark):
         self.device = resolve_device()
         self.triton_available = self._triton_supported()
         self.workload = WORKLOAD
-        self.smoke_test = is_smoke_test()
         self.hidden_dim = self.workload.attention_hidden_dim
         self.num_heads = self.workload.attention_num_heads
         self.head_dim = self.hidden_dim // self.num_heads
         self.batch_size = self.workload.attention_batch_size
-        self.sequence_length = self.workload.seq_len(self.smoke_test)
-        self.micro_batches = self.workload.micro_batches_for_mode(self.smoke_test)
+        self.sequence_length = self.workload.attention_seq_len
+        self.micro_batches = self.workload.micro_batches
         self.q_proj: Optional[nn.Linear] = None
         self.k_proj: Optional[nn.Linear] = None
         self.v_proj: Optional[nn.Linear] = None
