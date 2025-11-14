@@ -21,7 +21,12 @@ __device__ void compute_stage(const float* a, const float* b, float* c, int thre
     for (int idx = thread_idx; idx < kTileElems; idx += stride) {
         float x = a[idx];
         float y = b[idx];
-        c[idx] = x + y;
+        float acc = x + y;
+#pragma unroll 8
+        for (int i = 0; i < 8; ++i) {
+            acc = fmaf(acc, 1.0f, 0.0f);
+        }
+        c[idx] = acc;
     }
 }
 

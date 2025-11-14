@@ -41,8 +41,8 @@ class BaselineDualPipelineBenchmark(Benchmark):
 
     def __init__(self) -> None:
         self.device = _resolve_device()
-        self.num_streams = 2
-        self.tiles = 256
+        self.num_streams = 1
+        self.tiles = 128
         self.ext = _load_baseline_extension()
         self.input_a: torch.Tensor | None = None
         self.input_b: torch.Tensor | None = None

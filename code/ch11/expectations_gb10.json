@@ -319,22 +319,22 @@
       "metadata": {
         "best_optimization": "optimized_warp_specialized_two_pipelines_multistream",
         "best_optimization_file": "optimized_warp_specialized_two_pipelines_multistream.py",
-        "best_optimization_speedup": 1.119,
-        "best_optimization_time_ms": 0.13264,
+        "best_optimization_speedup": 1.057,
+        "best_optimization_time_ms": 0.13217,
         "git_commit": "7e5cca3e64c02bba39840d80118cd98b3b172ebd",
-        "updated_at": "2025-11-13T20:14:25.000000"
+        "updated_at": "2025-11-13T20:21:07.000000"
       },
       "metrics": {
-        "baseline_p75_ms": 0.14963,
-        "baseline_throughput.latency_ms": 0.14848,
-        "baseline_throughput.requests_per_s": 6734.72,
-        "baseline_time_ms": 0.14848,
-        "best_optimized_p75_ms": 0.13686,
-        "best_optimized_speedup": 1.119,
-        "best_optimized_throughput.latency_ms": 0.13264,
-        "best_optimized_throughput.requests_per_s": 7539.20,
-        "best_optimized_time_ms": 0.13264,
-        "best_speedup": 1.119
+        "baseline_p75_ms": 0.13942399621009827,
+        "baseline_throughput.latency_ms": 0.13969493359327317,
+        "baseline_throughput.requests_per_s": 7158.455745514264,
+        "baseline_time_ms": 0.13969493359327317,
+        "best_optimized_p75_ms": 0.13232,
+        "best_optimized_speedup": 1.057,
+        "best_optimized_throughput.latency_ms": 0.13217,
+        "best_optimized_throughput.requests_per_s": 7565.98,
+        "best_optimized_time_ms": 0.13217,
+        "best_speedup": 1.057
       },
       "type": "python"
     }
