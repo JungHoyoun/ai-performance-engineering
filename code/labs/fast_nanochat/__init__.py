@@ -10,6 +10,7 @@ __all__ = [
     "optimized_fast_nanochat_fp8",
     "optimized_fast_nanochat_fp4",
     "optimized_fast_nanochat_warp_specialized",
+    "optimized_fast_nanochat_double_buffer_tma_cuda",
     "optimized_fast_nanochat_8xgpu",
     "nanochat_common",
 ]

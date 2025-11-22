@@ -7,6 +7,7 @@ import os
 import random
 from functools import partial
 from pathlib import Path
+from contextlib import nullcontext
 
 import torch
 import torch.distributed as dist
@@ -20,6 +21,13 @@ from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from torch.utils.data import DataLoader, DistributedSampler
 from transformers import AutoConfig, AutoModelForCausalLM
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer
+
+try:
+    from arch_config import prefer_sdpa_backends  # type: ignore
+    from common.python.compile_utils import enable_tf32  # type: ignore
+except Exception:  # pragma: no cover - defensive import
+    prefer_sdpa_backends = None  # type: ignore
+    enable_tf32 = None  # type: ignore
 
 from labs.train_distributed.training_utils.torchrun_harness import TorchrunScriptBenchmark
 from labs.train_distributed.utils import (
@@ -132,16 +140,28 @@ def main():
     rank, world_size, local_rank = _init_distributed()
     _set_seed(777 + rank)
 
-    torch.backends.cuda.matmul.allow_tf32 = True
+    if enable_tf32 is not None:
+        enable_tf32(set_global_precision=True)
+    else:
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True  # type: ignore[attr-defined]
     torch.backends.cudnn.benchmark = True
 
     dataloader, sampler = _build_dataloader(args.sequence_length, args.micro_batch_size, rank, world_size)
 
-    config = AutoConfig.from_pretrained(MODEL_ID, use_cache=False, attn_implementation="eager")
+    config = AutoConfig.from_pretrained(
+        MODEL_ID,
+        use_cache=False,
+        attn_implementation="flash_attention_2",
+    )
     config.gradient_checkpointing = True
-    model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.bfloat16, attn_implementation="eager")
+    model = AutoModelForCausalLM.from_config(
+        config,
+        torch_dtype=torch.bfloat16,
+        attn_implementation="flash_attention_2",
+    )
 
-    model = model.to(torch.cuda.current_device(), dtype=torch.float16)
+    model = model.to(torch.cuda.current_device(), dtype=torch.bfloat16)
     fp8_recipe = Float8LinearConfig(enable_fsdp_float8_all_gather=True)
     model = convert_to_float8_training(model, config=fp8_recipe)
 
@@ -161,7 +181,8 @@ def main():
         sampler.set_epoch(epoch)
         for batch in dataloader:
             batch = {k: v.cuda(non_blocking=True) for k, v in batch.items()}
-            with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+            sdpa_ctx = prefer_sdpa_backends() if prefer_sdpa_backends is not None else nullcontext()
+            with sdpa_ctx, torch.cuda.amp.autocast(dtype=torch.bfloat16):
                 outputs = fsdp_model(**batch)
                 loss = outputs.loss / args.grad_accum
 

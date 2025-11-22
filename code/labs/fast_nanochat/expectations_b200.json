@@ -1,0 +1,27 @@
+{
+  "examples": {
+    "fast_nanochat": {
+      "example": "fast_nanochat",
+      "metadata": {
+        "best_optimization": "graph_full",
+        "best_optimization_file": "optimized_fast_nanochat_graph_full.py",
+        "best_optimization_speedup": 4.280539595577595,
+        "best_optimization_time_ms": 9.996448040008545,
+        "git_commit": "4b54602288ae53d2f7e59eb7272be6ba8e236199",
+        "updated_at": "2025-11-22T18:04:14.298510"
+      },
+      "metrics": {
+        "baseline_p75_ms": 0.0,
+        "baseline_p90_ms": 42.32294464111328,
+        "baseline_time_ms": 42.790191650390625,
+        "best_optimized_p75_ms": 0.0,
+        "best_optimized_p90_ms": 9.892352104187012,
+        "best_optimized_speedup": 4.690064449079868,
+        "best_optimized_time_ms": 9.996448040008545,
+        "best_speedup": 4.690064449079868
+      },
+      "type": "python"
+    }
+  },
+  "hardware_key": "b200"
+}

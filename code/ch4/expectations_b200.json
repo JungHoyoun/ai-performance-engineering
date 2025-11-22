@@ -1,0 +1,25 @@
+{
+  "examples": {
+    "nvshmem_ibgda_microbench": {
+      "example": "nvshmem_ibgda_microbench",
+      "metadata": {
+        "best_optimization": "optimized_nvshmem_ibgda_microbench",
+        "best_optimization_file": "optimized_nvshmem_ibgda_microbench.py",
+        "best_optimization_speedup": 1.0192362508567459,
+        "best_optimization_time_ms": 354.9121398925781,
+        "git_commit": "4b54602288ae53d2f7e59eb7272be6ba8e236199",
+        "updated_at": "2025-11-22T20:40:34.563573"
+      },
+      "metrics": {
+        "baseline_p75_ms": 361.73931884765625,
+        "baseline_time_ms": 361.73931884765625,
+        "best_optimized_p75_ms": 354.9121398925781,
+        "best_optimized_speedup": 1.0192362508567459,
+        "best_optimized_time_ms": 354.9121398925781,
+        "best_speedup": 1.0192362508567459
+      },
+      "type": "python"
+    }
+  },
+  "hardware_key": "b200"
+}

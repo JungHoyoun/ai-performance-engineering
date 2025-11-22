@@ -27,7 +27,8 @@ def _canonicalize_triton_arch(arch: str) -> str:
     suffix = lowered[2:]
     if suffix.startswith("_"):
         suffix = suffix[1:]
-    if suffix.endswith("a"):
+    # Keep the 'a' suffix for Blackwell (sm_100a) where ptxas requires it for TMA.
+    if suffix.endswith("a") and not suffix.startswith("100"):
         suffix = suffix[:-1]
     if suffix == "121":
         suffix = "120"
@@ -98,7 +99,8 @@ def ensure_triton_compat() -> None:
 
     def _safe_sm_arch_from_capability(capability: int, _orig=original_sm_arch) -> str:
         arch = _orig(capability)
-        if arch.endswith("a"):
+        # Preserve 'a' suffix for sm_100a so ptxas accepts TMA/tensormap.
+        if arch.endswith("a") and not arch.endswith("100a"):
             arch = arch[:-1]
         if arch == "sm_121":
             # CUDA 13.0's ptxas still lacks native sm_121 support. Clamp to sm_120
@@ -121,6 +123,7 @@ def ensure_triton_compat() -> None:
         def _clamp_capability(capability: int) -> int:
             # Triton passes major * 10 + minor here (e.g., 121). Clamp GB10 to 120
             # so both ptxas flags and PTX headers agree on a supported target.
+            # Preserve 100a by leaving 100 untouched.
             return 120 if capability == 121 else capability
 
         def _make_ptx_with_clamp(self, src, metadata, opt, capability, _orig=original_make_ptx):

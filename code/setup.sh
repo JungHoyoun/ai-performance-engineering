@@ -108,7 +108,7 @@ if [ "${VLLM_WHEEL_ARCH}" = "arm64" ]; then
 fi
 VLLM_WHEEL_PATTERN="${VLLM_WHEEL_PATTERN:-${VLLM_WHEEL_DIR}/vllm-*-${PYTHON_ABI_TAG}-${PYTHON_ABI_TAG}-linux_${VLLM_WHEEL_ARCH}.whl}"
 TE_REPO_URL="${TE_REPO_URL:-https://github.com/NVIDIA/TransformerEngine.git}"
-TE_GIT_COMMIT="${TE_GIT_COMMIT:-e4bfa628632e15ef8bc1fae9b2e89686f6a097ea}"
+TE_GIT_COMMIT="${TE_GIT_COMMIT:-f8cb598c9f3af2bc512a051abec75590b25f54c4}"
 TE_SRC_DIR="${TE_SRC_DIR:-${THIRD_PARTY_DIR}/TransformerEngine}"
 PIP_ROOT_USER_ACTION="ignore"
 SOURCE_BUILD_ALLOWED=0
@@ -1061,6 +1061,18 @@ if [ -f "${nvshmem_alt_file}" ] && grep -q "${nvshmem_bad_ibgda}" "${nvshmem_alt
 fi
 if [ ! -e "/usr/lib/x86_64-linux-gnu/nvshmem_transport_ibgda.so.3" ] && [ -e "${nvshmem_good_ibgda}.0.0" ]; then
     ln -sf "${nvshmem_good_ibgda}.0.0" "/usr/lib/x86_64-linux-gnu/nvshmem_transport_ibgda.so.3"
+fi
+
+# Ensure nvshmemrun is on PATH for IBGDA/NVSHMEM binaries
+NVSHMEM_BIN_CANDIDATES=(
+    "${NVSHMEM_HOME:-/usr/lib/x86_64-linux-gnu}/bin"
+    "/usr/local/nvshmem/bin"
+    "/opt/nvidia/nvshmem/bin"
+    "/usr/lib/nvshmem/bin"
+    "/usr/lib/x86_64-linux-gnu/nvshmem/bin"
+)
+if ! ensure_tool_on_path "nvshmemrun" "${NVSHMEM_BIN_CANDIDATES[@]}"; then
+    echo "WARNING: nvshmemrun not found on system PATH; set NVSHMEM_HOME or install nvshmemrun to enable NVSHMEM multi-GPU launchers"
 fi
 
 # Install GPUDirect Storage (GDS) for high-performance I/O
@@ -2960,6 +2972,94 @@ pip_install --no-cache-dir --force-reinstall --ignore-installed --no-deps \
     einops==0.8.0 || {
     echo "Warning: final dependency pinning failed"
 }
+
+# ------------------------------------------------------------------------------
+# Transformer Engine (FP8/FP4/TMA) rebuild for Blackwell (sm_100a)
+# ------------------------------------------------------------------------------
+echo ""
+echo "Rebuilding Transformer Engine for sm_100a with FP8/FP4/TMA..."
+
+# Ensure CUDA 13-only runtime is visible to cudnn-frontend (avoid multiple libcudart)
+disable_cuda12_cudart() {
+    local cuda12_libdir="/usr/local/cuda-12/targets/x86_64-linux/lib"
+    if [ -d "${cuda12_libdir}" ]; then
+        for lib in libcudart.so libcudart.so.12 libcudart.so.12.*; do
+            if [ -f "${cuda12_libdir}/${lib}" ] && [ ! -f "${cuda12_libdir}/${lib}.bak" ]; then
+                mv "${cuda12_libdir}/${lib}" "${cuda12_libdir}/${lib}.bak"
+            fi
+        done
+    fi
+}
+disable_cuda12_cudart
+
+TE_ENV_VARS_BASE=(
+    "TRITON_CODEGEN_ARCH=sm_100a"
+    "TRITON_OVERRIDE_ARCH=sm100"
+    "CMAKE_CUDA_ARCHITECTURES=100a"
+    "NVTE_ENABLE_FP8=1"
+    "NVTE_ENABLE_FP4=1"
+    "NVTE_ENABLE_TMA=1"
+)
+
+TE_WHEEL_DIR="${THIRD_PARTY_DIR}/wheels"
+mkdir -p "${TE_WHEEL_DIR}"
+
+# Keep torch on nightly cu130 and required deps for TE
+pip_install --upgrade --pre torch --index-url https://download.pytorch.org/whl/nightly/cu130
+pip_install --upgrade nvidia-cusparselt-cu13==0.8.0
+pip_install --upgrade pydantic==2.12.4 pydantic-core==2.41.5
+
+# Clone/update TransformerEngine source under third_party
+if [ ! -d "${TE_SRC_DIR}" ]; then
+    git clone "${TE_REPO_URL}" "${TE_SRC_DIR}"
+fi
+git -C "${TE_SRC_DIR}" fetch --all
+git -C "${TE_SRC_DIR}" checkout "${TE_GIT_COMMIT}"
+git -C "${TE_SRC_DIR}" submodule update --init --recursive
+
+# Build a wheel and install it (stores wheel in third_party/wheels for reuse)
+(
+    cd "${TE_SRC_DIR}"
+    env "${TE_ENV_VARS_BASE[@]}" pip_wheel . -w "${TE_WHEEL_DIR}" --no-build-isolation
+)
+LATEST_TE_WHEEL="$(ls -t "${TE_WHEEL_DIR}"/transformer_engine-*.whl | head -n 1)"
+if [ -z "${LATEST_TE_WHEEL}" ]; then
+    echo "ERROR: TransformerEngine wheel not built."
+    exit 1
+fi
+env "${TE_ENV_VARS_BASE[@]}" pip_install --force-reinstall --no-build-isolation "${LATEST_TE_WHEEL}"
+
+# Persist runtime environment for future shells
+TE_ENV_FILE="${THIRD_PARTY_DIR}/te_sm100a_env.sh"
+CU13_LIBDIR="$(python3 - <<'PY'
+import sys, pathlib
+base = pathlib.Path(sys.prefix) / 'lib/python3.12/dist-packages/nvidia'
+cu13 = base / 'cu13' / 'lib'
+print(cu13 if cu13.exists() else '')
+PY
+)"
+CUSPARSELT_LIBDIR="$(python3 - <<'PY'
+import sys, pathlib
+base = pathlib.Path(sys.prefix) / 'lib/python3.12/dist-packages/nvidia'
+cusparse = base / 'cusparselt' / 'lib'
+print(cusparse if cusparse.exists() else '')
+PY
+)"
+if [ -z "${CU13_LIBDIR}" ] || [ -z "${CUSPARSELT_LIBDIR}" ]; then
+    echo "ERROR: Could not locate cu13 or cusparselt library paths."
+    exit 1
+fi
+cat > "${TE_ENV_FILE}" <<EOF
+# TransformerEngine sm_100a FP8/FP4/TMA environment
+export TRITON_CODEGEN_ARCH=sm_100a
+export TRITON_OVERRIDE_ARCH=sm100
+export NVTE_ENABLE_FP8=1
+export NVTE_ENABLE_FP4=1
+export NVTE_ENABLE_TMA=1
+export LD_LIBRARY_PATH=${CUSPARSELT_LIBDIR}:${CU13_LIBDIR}:\${LD_LIBRARY_PATH}
+EOF
+chmod +x "${TE_ENV_FILE}"
+echo "To use TE FP8/FP4 fast paths on Blackwell, run: source ${TE_ENV_FILE}"
 
 # Final summary
 echo ""

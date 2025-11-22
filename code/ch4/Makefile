@@ -3,16 +3,19 @@
 
 include ../common/cuda_arch.mk
 
-NVSHMEM_HOME ?= /usr/lib/aarch64-linux-gnu
+NVSHMEM_HOME ?= $(if $(wildcard /usr/lib/x86_64-linux-gnu/libnvshmem_host.so),/usr/lib/x86_64-linux-gnu,/usr/lib/aarch64-linux-gnu)
 NVSHMEM_INCLUDE = -I/usr/include/nvshmem
 NVSHMEM_LIB = -L$(NVSHMEM_HOME) -lnvshmem_host $(NVSHMEM_HOME)/libnvshmem_device.a
-HAS_NVSHMEM := $(shell test -f /usr/lib/aarch64-linux-gnu/libnvshmem_host.so && echo yes || echo no)
+HAS_NVSHMEM := $(shell test -f $(NVSHMEM_HOME)/libnvshmem_host.so && echo yes || echo no)
 
 NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) -rdc=true
 SUFFIX = $(TARGET_SUFFIX)
 
 NVSHMEM_TARGETS = nvshmem_8gpu_examples nvshmem_advanced_8gpu nvshmem_multinode_example \
                   nvshmem_pipeline_patterns nvshmem_tensor_parallel
+ifeq ($(HAS_NVSHMEM),yes)
+NVSHMEM_TARGETS += nvshmem_ibgda_microbench
+endif
 TARGETS = $(addsuffix $(SUFFIX), $(NVSHMEM_TARGETS))
 
 .PHONY: all help nvshmem compare clean install-help b200 gb10 b300 gb300 $(TARGETS)
@@ -93,6 +96,16 @@ else
 	$(NVCC) $(NVCC_FLAGS) $< -o $@
 	@echo "Compiled in educational mode (no NVSHMEM library)"
 	@echo "This version shows API patterns but won't execute communication"
+endif
+
+nvshmem_ibgda_microbench$(SUFFIX): nvshmem_ibgda_microbench.cu
+ifeq ($(HAS_NVSHMEM),yes)
+	$(NVCC) $(NVCC_FLAGS) -DUSE_NVSHMEM $(NVSHMEM_INCLUDE) $< $(NVSHMEM_LIB) -o $@
+	@echo "✓ IBGDA microbenchmark compiled with NVSHMEM support"
+	@echo "  Run: nvshmemrun -np 2 ./nvshmem_ibgda_microbench$(SUFFIX) --mode=p --bytes=1024 --ctas=8 --iters=1000"
+else
+	@echo "Skipping nvshmem_ibgda_microbench: NVSHMEM not found (set NVSHMEM_HOME then re-run make)"
+	@false
 endif
 
 compare: clean

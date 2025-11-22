@@ -10,10 +10,13 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from labs.fast_nanochat.nanochat_common import NanoChatBenchmark, NanoChatConfig  # noqa: E402
+import os
 
 
 def get_benchmark() -> NanoChatBenchmark:
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True,max_split_size_mb:256")
     cfg = NanoChatConfig(
+        # Temporarily reduced shape to unblock runs; restore larger config once stable.
         batch_size=8,
         prompt_tokens=1024,
         decode_tokens=256,

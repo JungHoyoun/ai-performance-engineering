@@ -26,7 +26,9 @@ import torch
 import torch.nn as nn
 import triton.testing
 import time
-from common.python.compile_utils import compile_model
+from contextlib import nullcontext
+from common.python.compile_utils import compile_model, enable_tf32
+from arch_config import prefer_sdpa_backends
 
 from extras.ch14.torch_compile_large_model import create_model
 
@@ -40,7 +42,7 @@ def configure_for_blackwell_peak_performance():
     print("Configuring PyTorch for Blackwell B200 Peak Performance")
     print("=" * 80)
     
-    # TF32 already configured by arch_config
+    enable_tf32(set_global_precision=True)
     print("TF32 enabled (via arch_config)")
     
     # Flash Attention already configured by arch_config, but safe to call again
@@ -119,10 +121,12 @@ class OptimizedTransformerBlock(nn.Module):
 def benchmark_with_proper_warmup(model, x, name):
     """Benchmark using Triton's testing framework with automatic warmup."""
     print(f"\nBenchmarking: {name}")
+    sdpa_ctx_factory = prefer_sdpa_backends
 
     def run_model():
         with torch.no_grad():
-            return model(x)
+            with sdpa_ctx_factory():
+                return model(x)
     
     if QUICK_MODE:
         torch.cuda.synchronize()
@@ -158,7 +162,7 @@ def main():
     # Use existing large model infrastructure
     # Larger model highlights torch.compile benefits on compute-bound kernels
     model, config, total_params = create_model(model_size)
-    model = model.cuda().eval()
+    model = model.cuda().to(dtype=torch.bfloat16).eval()
     print(f"Model parameters: {total_params / 1e9:.2f}B")
     
     # 3. Create compiled version with proper settings
@@ -179,7 +183,7 @@ def main():
         batch_size = 8
         seq_len = 1024
     d_model = config['d_model']
-    x = torch.randn(batch_size, seq_len, d_model, device='cuda', dtype=torch.float32)
+    x = torch.randn(batch_size, seq_len, d_model, device='cuda', dtype=torch.bfloat16)
     
     print(f"\nInput shape: {x.shape}")
     print(f"Input size: {x.numel() * 4 / 1e6:.2f} MB")

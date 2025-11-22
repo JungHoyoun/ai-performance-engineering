@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import Optional
 
 import torch
 import torch.nn as nn
+
+try:
+    from arch_config import prefer_sdpa_backends  # type: ignore
+    from common.python.compile_utils import enable_tf32  # type: ignore
+except Exception:  # pragma: no cover - defensive import
+    prefer_sdpa_backends = None  # type: ignore
+    enable_tf32 = None  # type: ignore
 
 from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
@@ -39,6 +47,7 @@ class OptimizedTrainingDistributedBenchmark(BaseBenchmark):
         self.batch_size = 8
         self.hidden_dim = 4096
         self.train_steps = 4
+        self._sdpa_ctx_factory = prefer_sdpa_backends if prefer_sdpa_backends is not None else nullcontext
         tokens = self.batch_size * self.hidden_dim
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.batch_size),
@@ -49,43 +58,49 @@ class OptimizedTrainingDistributedBenchmark(BaseBenchmark):
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
+            if enable_tf32 is not None:
+                enable_tf32(set_global_precision=True)
+            else:
+                try:
+                    torch.set_float32_matmul_precision("high")
+                except Exception:
+                    pass
         torch.manual_seed(42)
         
-        base_model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device).half().train()
+        base_model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device, dtype=torch.bfloat16).train()
         self.model = torch.compile(base_model, mode="reduce-overhead")
         
-        self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float16)
-        self.targets = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float16)
+        self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.bfloat16)
+        self.targets = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.bfloat16)
         try:
             self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=0.01, fused=True)
         except TypeError:
             self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=0.01)
         self.criterion = nn.MSELoss()
-        self.scaler = torch.cuda.amp.GradScaler(enabled=True)
-        
-        for _ in range(3):
-            for _ in range(self.train_steps):
-                self.optimizer.zero_grad(set_to_none=True)
-                with torch.autocast("cuda", dtype=torch.float16):
-                    outputs = self.model(self.inputs)
-                    loss = self.criterion(outputs, self.targets)
-                self.scaler.scale(loss).backward()
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-            self._synchronize()
+        self.scaler = None
+
+        with self._sdpa_ctx_factory():
+            for _ in range(3):
+                for _ in range(self.train_steps):
+                    self.optimizer.zero_grad(set_to_none=True)
+                    with torch.autocast("cuda", dtype=torch.bfloat16):
+                        outputs = self.model(self.inputs)
+                        loss = self.criterion(outputs, self.targets)
+                    loss.backward()
+                    self.optimizer.step()
+                self._synchronize()
         self._synchronize()
     
     def benchmark_fn(self) -> None:
         assert self.model is not None and self.inputs is not None and self.targets is not None
-        assert self.optimizer is not None and self.criterion is not None and self.scaler is not None
+        assert self.optimizer is not None and self.criterion is not None
         with self._nvtx_range("training_optimized"):
             self.optimizer.zero_grad(set_to_none=True)
-            with torch.autocast("cuda", dtype=torch.float16):
+            with self._sdpa_ctx_factory(), torch.autocast("cuda", dtype=torch.bfloat16):
                 outputs = self.model(self.inputs)
                 loss = self.criterion(outputs, self.targets)
-            self.scaler.scale(loss).backward()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+            loss.backward()
+            self.optimizer.step()
             self._synchronize()
     
     def teardown(self) -> None:

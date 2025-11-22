@@ -20,12 +20,9 @@ _EXT_NAME = "persistent_decode_tma_ext"
 def _require_tma_hardware() -> None:
     if not torch.cuda.is_available():
         raise RuntimeError("SKIPPED: Native TMA path requires a CUDA GPU.")
-    name = torch.cuda.get_device_name(torch.cuda.current_device())
-    if "GB10" in name:
-        raise RuntimeError(f"SKIPPED: Native TMA path requires TMA-capable GPU; current device '{name}' reports no TMA.")
-    major, _ = torch.cuda.get_device_capability()
+    major, minor = torch.cuda.get_device_capability()
     if major < 9:
-        raise RuntimeError(f"SKIPPED: Native TMA path requires Hopper/Blackwell-class GPUs (got sm_{major}).")
+        raise RuntimeError(f"SKIPPED: Native TMA path requires Hopper/Blackwell-class GPUs (got sm_{major}{minor}).")
 
 
 def _try_build_extension() -> Optional[object]:
@@ -97,6 +94,11 @@ void tma_copy(torch::Tensor src, torch::Tensor dst) {
         extra_cuda_cflags=[
             "--std=c++17",
             "--use_fast_math",
+            "-lineinfo",
+            "-gencode=arch=compute_100,code=sm_100",
+            "-gencode=arch=compute_103,code=sm_103",
+            "-gencode=arch=compute_120,code=sm_120",
+            "-gencode=arch=compute_121,code=sm_121",
         ],
         verbose=False,
     )

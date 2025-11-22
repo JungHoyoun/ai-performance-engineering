@@ -12,33 +12,48 @@ import torch
 
 import triton
 import triton.language as tl
+try:
+    import triton.runtime._allocation as _triton_alloc  # type: ignore
+except Exception:
+    _triton_alloc = None
 
 from common.python.triton_compat import ensure_triton_compat
+
+# Configure Triton allocator at import time so kernels can allocate scratch.
+def _install_triton_allocator() -> None:
+    if _triton_alloc is None:
+        return
+    try:
+        class _TorchBuffer:
+            def __init__(self, size: int):
+                self.tensor = torch.empty(size, dtype=torch.uint8, device="cuda")
+
+            def data_ptr(self) -> int:
+                return self.tensor.data_ptr()
+
+        def _allocator(size: int, alignment: int, stream) -> _TorchBuffer:
+            return _TorchBuffer(size)
+
+        _triton_alloc.set_allocator(_allocator)  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+# Set allocator once at import time, but also re-install on demand.
+_install_triton_allocator()
 
 
 @triton.autotune(
     configs=[
         triton.Config(
             {
-                "BLOCK_M": 8,
-                "BLOCK_N": 128,
+                "BLOCK_M": 16,
+                "BLOCK_N": 256,
                 "BLOCK_K": 128,
                 "BLOCK_H1": 128,
                 "NUM_STAGES": 2,
             },
-            num_warps=4,
+            num_warps=8,
             num_stages=2,
-        ),
-        triton.Config(
-            {
-                "BLOCK_M": 8,
-                "BLOCK_N": 128,
-                "BLOCK_K": 64,
-                "BLOCK_H1": 128,
-                "NUM_STAGES": 3,
-            },
-            num_warps=4,
-            num_stages=3,
         ),
     ],
     key=["M", "H"],
@@ -176,6 +191,7 @@ def fused_decode_mlp(
         w2: [hidden, hidden] weight
         b2: [hidden] bias
     """
+    _install_triton_allocator()
     ensure_triton_compat()
     assert x.is_cuda and w1.is_cuda and w2.is_cuda
     assert x.dtype in (torch.float16, torch.bfloat16)

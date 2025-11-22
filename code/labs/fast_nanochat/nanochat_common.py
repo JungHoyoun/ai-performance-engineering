@@ -9,6 +9,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional, Tuple
+from contextlib import nullcontext
 
 import torch
 import torch.nn as nn
@@ -16,6 +17,13 @@ import torch.nn as nn
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+try:
+    from arch_config import prefer_sdpa_backends  # type: ignore
+    from common.python.compile_utils import enable_tf32  # type: ignore
+except Exception:  # pragma: no cover - defensive import
+    prefer_sdpa_backends = None  # type: ignore
+    enable_tf32 = None  # type: ignore
 
 from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig  # noqa: E402
 
@@ -60,7 +68,7 @@ class NanoChatBenchmark(BaseBenchmark):
     def __init__(self, cfg: NanoChatConfig):
         super().__init__()
         self.cfg = cfg
-        self.dtype = torch.float16
+        self.dtype = torch.bfloat16
         self.copy_stream: Optional[torch.cuda.Stream] = None
         self.compute_stream: Optional[torch.cuda.Stream] = None
         self.graph_stream: Optional[torch.cuda.Stream] = None
@@ -73,6 +81,7 @@ class NanoChatBenchmark(BaseBenchmark):
         self._fp4_enabled: bool = False
         self._graph_error: Optional[str] = None
         self._compile_error: Optional[str] = None
+        self.sdpa_ctx_factory = prefer_sdpa_backends if prefer_sdpa_backends is not None else nullcontext
         self.fp8_recipe = None
         if TE_AVAILABLE:
             if self.cfg.use_fp4 and getattr(te_constants, "NVFP4_BLOCK_SCALING_SIZE", None) is not None:
@@ -94,6 +103,13 @@ class NanoChatBenchmark(BaseBenchmark):
     def setup(self) -> None:
         torch.manual_seed(0)
         torch.cuda.manual_seed_all(0)
+        if enable_tf32 is not None:
+            enable_tf32(set_global_precision=True)
+        else:
+            try:
+                torch.set_float32_matmul_precision("high")
+            except Exception:
+                pass
         if self.cfg.use_copy_stream:
             self.copy_stream = torch.cuda.Stream()
         if self.cfg.use_compute_stream:
@@ -225,30 +241,33 @@ class NanoChatBenchmark(BaseBenchmark):
     # Core math
     def _prefill(self, tokens: torch.Tensor) -> torch.Tensor:
         if self._fp8_enabled and te is not None and self.fp8_recipe is not None:
-            with te.fp8_autocast(enabled=True, fp8_recipe=self.fp8_recipe):
+            with te.fp8_autocast(enabled=True, fp8_recipe=self.fp8_recipe), self.sdpa_ctx_factory():
                 embeds = self.embedding(tokens)
                 hidden = self.prefill_mlp(embeds)
         elif self._fp4_enabled and te is not None and self.fp8_recipe is not None:
-            with te.fp8_autocast(enabled=True, fp8_recipe=self.fp8_recipe):
+            with te.fp8_autocast(enabled=True, fp8_recipe=self.fp8_recipe), self.sdpa_ctx_factory():
                 embeds = self.embedding(tokens)
                 hidden = self.prefill_mlp(embeds)
         else:
-            embeds = self.embedding(tokens)
-            hidden = self.prefill_mlp(embeds)
+            with self.sdpa_ctx_factory():
+                embeds = self.embedding(tokens)
+                hidden = self.prefill_mlp(embeds)
         return hidden[:, -1, :]
 
     def _decode_step(
         self, tokens: torch.Tensor, state: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        token_hidden = self.embedding(tokens)
-        combined = token_hidden + state
+        with self.sdpa_ctx_factory():
+            token_hidden = self.embedding(tokens)
+            combined = token_hidden + state
         if (self._fp8_enabled or self._fp4_enabled) and te is not None and self.fp8_recipe is not None:
-            with te.fp8_autocast(enabled=True, fp8_recipe=self.fp8_recipe):
+            with te.fp8_autocast(enabled=True, fp8_recipe=self.fp8_recipe), self.sdpa_ctx_factory():
                 hidden = self.decode_mlp(combined)
                 logits = self.lm_head(hidden)
         else:
-            hidden = self.decode_mlp(combined)
-            logits = self.lm_head(hidden)
+            with self.sdpa_ctx_factory():
+                hidden = self.decode_mlp(combined)
+                logits = self.lm_head(hidden)
         next_token = torch.argmax(logits, dim=-1)
         return logits, hidden, next_token
 
@@ -269,56 +288,60 @@ class NanoChatBenchmark(BaseBenchmark):
         decode_start = torch.cuda.Event(enable_timing=True)
         decode_end = torch.cuda.Event(enable_timing=True)
 
+        # Choose streams for work/timing
+        prefill_stream = self.compute_stream or torch.cuda.current_stream()
+        decode_stream = self.graph_stream if self.decode_graph is not None else prefill_stream
+        timing_stream = decode_stream
+
         # NVTX ranges for profiling clarity
         try:
             import torch.cuda.nvtx as nvtx  # type: ignore
         except Exception:
             nvtx = None  # type: ignore
 
-        prefill_start.record()
+        prefill_start.record(prefill_stream)
         self._copy_prompts_to_device()
         if nvtx:
             nvtx.range_push("prefill")
 
+        # Prefill (or reset when full graph already contains it)
         if self.decode_graph is not None and self.graph_includes_prefill:
-            # Reset state each iteration to avoid cross-run contamination
             self.state_buffer.zero_()
             self.current_tokens.zero_()
-            decode_start.record()
-            self.decode_graph.replay()
-            decode_end.record()
-            torch.cuda.current_stream().wait_stream(self.graph_stream)  # ensure graph work is visible
-            prefill_end.record()  # best-effort TTFT when captured
         else:
-            # Prefill
             prefill_state = self.prefill_fn(self.gpu_prompt)
             self.state_buffer.copy_(prefill_state)
             self.current_tokens.copy_(self.gpu_prompt[:, -1])
-            prefill_end.record()
+        prefill_end.record(prefill_stream)
 
-            # Decode
-            if nvtx:
-                nvtx.range_pop()  # prefill
-                nvtx.range_push("decode")
-            decode_start.record()
-            if self.decode_graph is not None:
-                for _ in range(self.cfg.decode_tokens):
+        # Ensure decode stream waits for prefill when streams differ
+        if decode_stream is not prefill_stream:
+            decode_stream.wait_event(prefill_end)
+
+        if nvtx:
+            nvtx.range_pop()  # prefill
+            nvtx.range_push("decode")
+
+        # Decode
+        decode_start.record(timing_stream)
+        if self.decode_graph is not None:
+            # Replay once; graph already captures the decode loop
+            if self.graph_stream is not None:
+                with torch.cuda.stream(self.graph_stream):
                     self.decode_graph.replay()
-                    self.current_tokens.copy_(self.graph_next_token)
-                decode_end.record()
                 torch.cuda.current_stream().wait_stream(self.graph_stream)
             else:
-                stream = self.compute_stream or torch.cuda.current_stream()
-                with torch.cuda.stream(stream):
-                    for _ in range(self.cfg.decode_tokens):
-                        logits, next_state, next_token = self.decode_fn(self.current_tokens, self.state_buffer)
-                        self.state_buffer.copy_(next_state)
-                        self.current_tokens.copy_(next_token)
-                decode_end.record()
-                if self.compute_stream is not None:
-                    torch.cuda.current_stream().wait_stream(stream)
-            if nvtx:
-                nvtx.range_pop()
+                self.decode_graph.replay()
+        else:
+            with torch.cuda.stream(self.compute_stream or torch.cuda.current_stream()):
+                for _ in range(self.cfg.decode_tokens):
+                    logits, next_state, next_token = self.decode_fn(self.current_tokens, self.state_buffer)
+                    self.state_buffer.copy_(next_state)
+                    self.current_tokens.copy_(next_token)
+            if self.compute_stream is not None:
+                torch.cuda.current_stream().wait_stream(self.compute_stream)
+        decode_end.record(timing_stream)
+
         if nvtx:
             nvtx.range_pop()
 
@@ -327,11 +350,19 @@ class NanoChatBenchmark(BaseBenchmark):
         ttft_ms = prefill_end.elapsed_time(prefill_start) if prefill_end.query() else 0.0
         decode_ms = decode_end.elapsed_time(decode_start) if decode_end.query() else 0.0
         total_ms = decode_end.elapsed_time(prefill_start) if decode_end.query() else ttft_ms + decode_ms
+
+        # Defensive clamp to avoid negative/zero timing artifacts
+        eps_ms = 1e-6
+        ttft_ms = max(ttft_ms, eps_ms)
+        decode_ms = max(decode_ms, eps_ms)
+        total_ms = max(total_ms, ttft_ms + decode_ms)
+
         tpot_ms = decode_ms / max(self.cfg.decode_tokens, 1)
-        tokens_per_s = (self.cfg.batch_size * (self.cfg.prompt_tokens + self.cfg.decode_tokens)) / max(total_ms / 1000.0, 1e-6)
+        tokens_per_iter = float(self.cfg.batch_size * (self.cfg.prompt_tokens + self.cfg.decode_tokens))
+        tokens_per_s = tokens_per_iter / max(total_ms / 1000.0, 1e-6)
 
         self._custom_metrics = {
-            "tokens_per_iteration": float(self.cfg.batch_size * (self.cfg.prompt_tokens + self.cfg.decode_tokens)),
+            "tokens_per_iteration": tokens_per_iter,
             "prompt_tokens": float(self.cfg.prompt_tokens),
             "decode_tokens": float(self.cfg.decode_tokens),
             "hidden_size": float(self.cfg.hidden_size),

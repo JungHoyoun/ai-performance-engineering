@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 from typing import Optional
+from contextlib import nullcontext
 
 import torch
 import torch.nn as nn
+
+try:
+    from arch_config import prefer_sdpa_backends  # type: ignore
+    from common.python.compile_utils import enable_tf32  # type: ignore
+except Exception:  # pragma: no cover - defensive import
+    prefer_sdpa_backends = None  # type: ignore
+    enable_tf32 = None  # type: ignore
 
 try:
     import ch20.arch_config  # noqa: F401 - Apply chapter defaults
@@ -47,7 +55,14 @@ class OptimizedAutotuningBenchmark(BaseBenchmark):
 
     def setup(self) -> None:
         torch.manual_seed(0)
-        model = AutotuneModel(self.hidden_dim).to(self.device).half().eval()
+        if enable_tf32 is not None:
+            enable_tf32(set_global_precision=True)
+        else:
+            try:
+                torch.set_float32_matmul_precision("high")
+            except Exception:
+                pass
+        model = AutotuneModel(self.hidden_dim).to(self.device, dtype=torch.bfloat16).eval()
         # compile_model skips safely on unsupported architectures
         self.model = compile_model(
             model,
@@ -55,17 +70,19 @@ class OptimizedAutotuningBenchmark(BaseBenchmark):
             fullgraph=False,
             dynamic=False,
         )
-        self.inputs = torch.randn(self.batch, self.hidden_dim, device=self.device, dtype=torch.float16)
+        self.inputs = torch.randn(self.batch, self.hidden_dim, device=self.device, dtype=torch.bfloat16)
         # Warm a couple runs to trigger compile/autotune caches
+        sdpa_ctx = prefer_sdpa_backends() if prefer_sdpa_backends is not None else nullcontext()
         for _ in range(3):
-            with torch.no_grad():
+            with torch.no_grad(), sdpa_ctx:
                 _ = self.model(self.inputs)
         self._synchronize()
 
     def benchmark_fn(self) -> None:
         assert self.model is not None and self.inputs is not None
+        sdpa_ctx = prefer_sdpa_backends() if prefer_sdpa_backends is not None else nullcontext()
         with self._nvtx_range("optimized_autotuning"):
-            with torch.no_grad():
+            with torch.no_grad(), sdpa_ctx:
                 _ = self.model(self.inputs)
             self._synchronize()
 

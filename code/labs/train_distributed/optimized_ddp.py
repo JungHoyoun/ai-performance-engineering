@@ -5,14 +5,21 @@ from __future__ import annotations
 import argparse
 import math
 from time import perf_counter
+from contextlib import nullcontext
 
 import torch
 import torch.nn.functional as F
 import torch.distributed as dist
 from accelerate import PartialState
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed.algorithms.ddp_comm_hooks.default_hooks import fp16_compress_hook
 from pathlib import Path
+
+try:
+    from arch_config import prefer_sdpa_backends  # type: ignore
+    from common.python.compile_utils import enable_tf32  # type: ignore
+except Exception:  # pragma: no cover - defensive
+    prefer_sdpa_backends = None  # type: ignore
+    enable_tf32 = None  # type: ignore
 
 from labs.train_distributed.training_utils.utils import (
     build_dataloader,
@@ -58,7 +65,11 @@ def main():
     device = state.device
 
     set_seed(2025 + state.process_index)
-    torch.backends.cuda.matmul.allow_tf32 = True
+    if enable_tf32 is not None:
+        enable_tf32(set_global_precision=True)
+    else:
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True  # type: ignore[attr-defined]
     torch.backends.cudnn.benchmark = True
 
     tokenizer = build_tokenizer()
@@ -90,10 +101,9 @@ def main():
         bucket_cap_mb=50,
         gradient_as_bucket_view=True,
     )
-    ddp_model.register_comm_hook(state=torch.distributed.group.WORLD, hook=fp16_compress_hook)
 
     if args.compile:
-        ddp_model = torch.compile(ddp_model, mode="reduce-overhead")
+        ddp_model = torch.compile(ddp_model, mode="max-autotune", fullgraph=True, dynamic=False)
 
     optimizer = _maybe_fused_adamw(ddp_model.parameters(), args.learning_rate)
     grad_clip = 1.0
@@ -108,7 +118,8 @@ def main():
             break
 
         micro_step = step % args.grad_accum
-        with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+        sdpa_ctx = prefer_sdpa_backends() if prefer_sdpa_backends is not None else nullcontext()
+        with sdpa_ctx, torch.cuda.amp.autocast(dtype=torch.bfloat16):
             batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
             batch["labels"] = batch["input_ids"].clone()
             outputs = ddp_model(**batch)

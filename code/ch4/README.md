@@ -39,3 +39,23 @@ python tools/cli/benchmark_cli.py run --targets ch4 --profile minimal
 ## Notes
 - `symmetric_memory_*` helpers hold user-space allocators for pooling KV-cache lines across GPUs without NVSwitch penalties.
 - Use `nccl_blackwell_config.py` to seed NCCL env vars (min NRings, IB mapping) before launching multi-node tests.
+- `baseline_nvshmem_ibgda_microbench.py` / `optimized_nvshmem_ibgda_microbench.py` wrap the C++ IBGDA microbenchmark; run with `python tools/cli/benchmark_cli.py run --targets ch4:nvshmem_ibgda_microbench --profile none` once NVSHMEM is installed.
+
+### NVSHMEM IBGDA (GPUDirect Async) quick reference
+- Why: lets SMs ring NIC doorbells directly, removing the CPU proxy; blog data shows up to 9.5× higher throughput for sub-1 KiB puts and ~180 MOPS for register-level `nvshmem_p`.
+- Enable (InfiniBand + NVSHMEM 2.7+):
+  ```bash
+  export NVSHMEM_IB_ENABLE_IBGDA=1
+  export NVSHMEM_IBGDA_NIC_HANDLER=gpu
+  export NVSHMEM_IBGDA_FORCE_NIC_BUF_MEMTYPE=gpumem
+  # optional: NVSHMEM_IBGDA_ENABLE_MULTI_PORT=1 NVSHMEM_IBGDA_NUM_REQUESTS_IN_BATCH=1
+  # optional: NVSHMEM_DEBUG=INFO NVSHMEM_INFO=1
+  ```
+- Try it here: compare NCCL vs NVSHMEM symmetric memory with/without IBGDA:
+  ```bash
+  cd /mnt/dev-fin-03/ai-performance-engineering/code
+  NVSHMEM_IB_ENABLE_IBGDA=1 NVSHMEM_DEBUG=INFO NVSHMEM_INFO=1 \
+    torchrun --nproc_per_node=8 ch4/nvshmem_vs_nccl_benchmark.py \
+    --min-bytes 1024 --max-bytes 1048576 --steps 4
+  ```
+- Expect NVSHMEM columns to improve for ≤16 KiB payloads when IBGDA is active; if not, verify NVSHMEM version, IB firmware/driver, and GPUDirect RDMA.
