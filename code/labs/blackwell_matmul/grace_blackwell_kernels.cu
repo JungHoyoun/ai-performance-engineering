@@ -17,8 +17,8 @@ namespace {
 constexpr int BASELINE_BLOCK = 16;
 constexpr int PIPE_TILE_M = 64;
 constexpr int PIPE_TILE_N = 64;
-constexpr int PIPE_TILE_K = 32;
-constexpr int PIPE_THREADS = 3 * 32;  // load, compute, store warps
+constexpr int PIPE_TILE_K = 64;
+constexpr int PIPE_THREADS = 4 * 32;  // load, compute, store, extra compute warp
 constexpr int CLUSTER_THREADS = 3 * 32;
 constexpr int TMA_THREADS = 128;       // use more threads to feed memcpy_async
 
@@ -41,8 +41,8 @@ __global__ void baseline_kernel(const half* __restrict__ A,
   C[row * N + col] = __float2half(acc);
 }
 
-__device__ inline void zero_tile(float* tile, int elements, int lane_id) {
-  for (int idx = lane_id; idx < elements; idx += warpSize) {
+__device__ inline void zero_tile(float* tile, int elements) {
+  for (int idx = threadIdx.x; idx < elements; idx += blockDim.x) {
     tile[idx] = 0.0f;
   }
 }
@@ -53,14 +53,13 @@ __device__ inline void store_tile(const float* __restrict__ tile,
                                   int block_row,
                                   int block_col,
                                   int rows,
-                                  int cols,
-                                  int lane_id) {
-  for (int row = lane_id; row < rows; row += warpSize) {
-    for (int col = 0; col < cols; ++col) {
-      const int global_row = block_row + row;
-      const int global_col = block_col + col;
-      C[global_row * ld_c + global_col] = __float2half(tile[row * PIPE_TILE_N + col]);
-    }
+                                  int cols) {
+  for (int idx = threadIdx.x; idx < rows * cols; idx += blockDim.x) {
+    const int row = idx / cols;
+    const int col = idx - row * cols;
+    const int global_row = block_row + row;
+    const int global_col = block_col + col;
+    C[global_row * ld_c + global_col] = __float2half(tile[row * PIPE_TILE_N + col]);
   }
 }
 
@@ -69,19 +68,17 @@ __device__ inline void compute_rows(const half* __restrict__ A_tile,
                                     float* __restrict__ accum_tile,
                                     int rows,
                                     int cols,
-                                    int k_extent,
-                                    int lane_id) {
-  for (int row = lane_id; row < rows; row += warpSize) {
-    for (int col = 0; col < cols; ++col) {
-      float acc = accum_tile[row * PIPE_TILE_N + col];
-#pragma unroll 4
-      for (int k_it = 0; k_it < k_extent; ++k_it) {
-        float lhs = __half2float(A_tile[row * PIPE_TILE_K + k_it]);
-        float rhs = __half2float(B_tile[k_it * PIPE_TILE_N + col]);
-        acc += lhs * rhs;
-      }
-      accum_tile[row * PIPE_TILE_N + col] = acc;
+                                    int k_extent) {
+  for (int idx = threadIdx.x; idx < rows * cols; idx += blockDim.x) {
+    const int row = idx / cols;
+    const int col = idx - row * cols;
+    float acc = accum_tile[row * PIPE_TILE_N + col];
+    for (int k_it = 0; k_it < k_extent; ++k_it) {
+      float lhs = __half2float(A_tile[row * PIPE_TILE_K + k_it]);
+      float rhs = __half2float(B_tile[k_it * PIPE_TILE_N + col]);
+      acc += lhs * rhs;
     }
+    accum_tile[row * PIPE_TILE_N + col] = acc;
   }
 }
 
@@ -113,7 +110,7 @@ __global__ void pipeline_prefetch_kernel(const half* __restrict__ A,
   const int lane_id = threadIdx.x % warpSize;
 
   if (warp_id == 2) {
-    zero_tile(C_tile, TILE_M * TILE_N, lane_id);
+    zero_tile(C_tile, TILE_M * TILE_N);
   }
   cta.sync();
 
@@ -146,23 +143,19 @@ __global__ void pipeline_prefetch_kernel(const half* __restrict__ A,
         }
         B_tile[idx] = val;
       }
-    }
+  }
     pipe.producer_commit();
     pipe.consumer_wait();
     pipe.consumer_release();
 
     cta.sync();
 
-    if (warp_id == 1) {
-      compute_rows(A_tile, B_tile, C_tile, rows, cols, k_extent, lane_id);
-    }
+    compute_rows(A_tile, B_tile, C_tile, rows, cols, k_extent);
 
     cta.sync();
   }
 
-  if (warp_id == 2) {
-    store_tile(C_tile, C, N, block_row, block_col, rows, cols, lane_id);
-  }
+  store_tile(C_tile, C, N, block_row, block_col, rows, cols);
 }
 
 template <int TILE_M, int TILE_N, int TILE_K>
@@ -204,7 +197,7 @@ __global__ void cluster_kernel(const half* __restrict__ A,
   const int row_begin = min(cluster_rank * rows_per_block, rows);
   const int row_end = min(row_begin + rows_per_block, rows);
 
-  zero_tile(C_tile, TILE_M * TILE_N, lane_id);
+  zero_tile(C_tile, TILE_M * TILE_N);
   cta.sync();
 
   const int total_k_tiles = (K + TILE_K - 1) / TILE_K;
@@ -248,20 +241,7 @@ __global__ void cluster_kernel(const half* __restrict__ A,
     const half* A_src = cluster.map_shared_rank(A_tile, 0);
     const half* B_src = cluster.map_shared_rank(B_tile, 0);
 
-    if (warp_id == 1) {
-      for (int row = row_begin + lane_id; row < row_end; row += warpSize) {
-        for (int col = 0; col < cols; ++col) {
-          float acc = C_tile[row * TILE_N + col];
-#pragma unroll 4
-          for (int k_it = 0; k_it < k_extent; ++k_it) {
-            float lhs = __half2float(A_src[row * TILE_K + k_it]);
-            float rhs = __half2float(B_src[k_it * TILE_N + col]);
-            acc += lhs * rhs;
-          }
-          C_tile[row * TILE_N + col] = acc;
-        }
-      }
-    }
+    compute_rows(A_src, B_src, C_tile, rows, cols, k_extent);
 
     cta.sync();
     cluster.sync();
@@ -302,9 +282,7 @@ __global__ void tma_prefetch_kernel(const half* __restrict__ A,
     return;
   }
 
-  if (threadIdx.x == 0) {
-    zero_tile(C_tile, PIPE_TILE_M * PIPE_TILE_N, 0);
-  }
+  zero_tile(C_tile, PIPE_TILE_M * PIPE_TILE_N);
   cta.sync();
 
   const int total_k_tiles = (K + PIPE_TILE_K - 1) / PIPE_TILE_K;
@@ -312,30 +290,33 @@ __global__ void tma_prefetch_kernel(const half* __restrict__ A,
     const int global_k = tile_idx * PIPE_TILE_K;
     const int k_extent = min(PIPE_TILE_K, K - global_k);
 
-    // Producer threads issue memcpy_async; use thread-level pipeline for TMA.
+    pipe.producer_acquire();
     if (threadIdx.x < 32) {
-      pipe.producer_acquire();
-      cuda::memcpy_async(cta, A_tile, A + block_row * K + global_k,
-                         rows * k_extent * sizeof(half), pipe);
-      cuda::memcpy_async(cta, B_tile, B + global_k * N + block_col,
-                         k_extent * cols * sizeof(half), pipe);
-      pipe.producer_commit();
+      for (int row = threadIdx.x; row < rows; row += warpSize) {
+        cuda::memcpy_async(cta, A_tile + row * PIPE_TILE_K,
+                           A + (block_row + row) * K + global_k,
+                           k_extent * sizeof(half), pipe);
+      }
+      for (int row = threadIdx.x; row < k_extent; row += warpSize) {
+        cuda::memcpy_async(cta, B_tile + row * PIPE_TILE_N,
+                           B + (global_k + row) * N + block_col,
+                           cols * sizeof(half), pipe);
+      }
     }
+    pipe.producer_commit();
 
     pipe.consumer_wait();
     cta.sync();
 
     // Compute
-    const int lane_id = threadIdx.x % warpSize;
-    compute_rows(A_tile, B_tile, C_tile, rows, cols, k_extent, lane_id);
+    compute_rows(A_tile, B_tile, C_tile, rows, cols, k_extent);
 
     cta.sync();
     pipe.consumer_release();
   }
 
   // Store
-  const int lane_id = threadIdx.x % warpSize;
-  store_tile(C_tile, C, N, block_row, block_col, rows, cols, lane_id);
+  store_tile(C_tile, C, N, block_row, block_col, rows, cols);
 }
 
 inline bool cluster_launch_supported_impl() {
@@ -450,7 +431,6 @@ void launch_cluster(torch::Tensor a, torch::Tensor b, torch::Tensor c) {
 }
 
 void launch_tma(torch::Tensor a, torch::Tensor b, torch::Tensor c) {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 100
   if (!tma_supported_impl()) {
     TORCH_CHECK(false,
                 "Blackwell TMA unavailable on this device; "
@@ -471,10 +451,6 @@ void launch_tma(torch::Tensor a, torch::Tensor b, torch::Tensor c) {
       reinterpret_cast<half*>(c.data_ptr<at::Half>()), a.size(0), b.size(1),
       a.size(1));
   AT_CUDA_CHECK(cudaGetLastError());
-#else
-  TORCH_CHECK(false,
-              "Blackwell TMA unavailable in this build; recompile with SM100 support.");
-#endif
 }
 
 torch::Tensor run_kernel(torch::Tensor a,
@@ -506,7 +482,7 @@ TORCH_LIBRARY_IMPL(grace_blackwell_capstone, CUDA, m) {
          });
   m.impl("optimized_blackwell_matmul_tma",
          [](torch::Tensor a, torch::Tensor b) {
-           return run_kernel(a, b, launch_pipeline);
+           return run_kernel(a, b, launch_tma);
          });
   m.impl("optimized_blackwell_matmul_pipeline",
          [](torch::Tensor a, torch::Tensor b) {
@@ -527,7 +503,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   });
   m.def("optimized_blackwell_matmul_tma",
         [](torch::Tensor a, torch::Tensor b) {
-          return run_kernel(a, b, launch_pipeline);
+          return run_kernel(a, b, launch_tma);
         });
   m.def("optimized_blackwell_matmul_cluster",
         [](torch::Tensor a, torch::Tensor b) {
