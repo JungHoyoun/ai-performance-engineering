@@ -7,14 +7,20 @@ Basic MoE routing that doesn't consider GPU topology or NVLink locality.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import sys
 from pathlib import Path
 
 # Add common to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from common.python.benchmark_harness import BenchmarkHarness, BenchmarkConfig, BenchmarkMode
+from common.python.benchmark_harness import (
+    BaseBenchmark,
+    BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
+)
 from common.python.logger import get_logger
 
 logger = get_logger(__name__)
@@ -161,4 +167,71 @@ if __name__ == "__main__":
     print(f"Topology aware: {result['topology_aware']}")
     print(f"{'='*60}\n")
 
+
+#============================================================================
+# Benchmark Harness Integration
+#============================================================================
+
+class MoERoutingSimpleBenchmark(BaseBenchmark):
+    """Benchmark harness wrapper for baseline MoE routing."""
+
+    def __init__(self):
+        super().__init__()
+        self.moe = None
+        self.batch_size = 16
+        self.seq_length = 2048
+        self.hidden_size = 4096
+        self.num_experts = 64
+        self._last = 0.0
+        
+        tokens = self.batch_size * self.seq_length
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
+
+    def setup(self) -> None:
+        """Setup: Initialize baseline MoE routing."""
+        torch.manual_seed(42)
+        self.moe = BaselineMoERoutingSimple(
+            batch_size=self.batch_size,
+            seq_length=self.seq_length,
+            hidden_size=self.hidden_size,
+            num_experts=self.num_experts,
+            top_k=2,
+        )
+        self.moe.setup()
+
+    def benchmark_fn(self) -> None:
+        """Benchmark: Baseline MoE routing and forward pass."""
+        if self.moe is not None:
+            result = self.moe.run()
+            self._last = result
+        self._synchronize()
+
+    def teardown(self) -> None:
+        """Teardown: Clean up resources."""
+        if self.moe is not None:
+            self.moe.cleanup()
+            self.moe = None
+        torch.cuda.empty_cache()
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(iterations=20, warmup=5)
+    
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
+    def get_custom_metrics(self) -> Optional[dict]:
+        return {"moe_routing_simple.topology_aware": False}
+
+    def validate_result(self) -> Optional[str]:
+        if self.moe is None:
+            return "MoE routing not initialized"
+        return None
+
+
+def get_benchmark() -> BaseBenchmark:
+    """Factory function for benchmark discovery."""
+    return MoERoutingSimpleBenchmark()
 

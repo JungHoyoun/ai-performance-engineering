@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Tuple, Optional
 
@@ -13,18 +12,35 @@ from typing import Dict, Iterable, Tuple, Optional
 if __name__ not in sys.modules:
     sys.modules[__name__] = sys.modules.get(__name__, type(sys)(__name__))
 
+from dataclasses import dataclass
+
 import torch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from ch18.baseline_vllm_decode_graphs import (  # noqa: E402
-    DecodeMetrics,
-    default_trace,
-    export_prom_metrics,
-    format_metrics,
-)
+# Handle import robustly - baseline module may not be in sys.modules yet
+try:
+    from ch18.baseline_vllm_decode_graphs import (  # noqa: E402
+        DecodeMetrics,
+        default_trace,
+        export_prom_metrics,
+        format_metrics,
+    )
+except ImportError:
+    # Fallback: load baseline module directly
+    import importlib.util
+    _baseline_path = Path(__file__).parent / "baseline_vllm_decode_graphs.py"
+    _spec = importlib.util.spec_from_file_location("ch18.baseline_vllm_decode_graphs", _baseline_path)
+    _baseline_module = importlib.util.module_from_spec(_spec)
+    sys.modules["ch18.baseline_vllm_decode_graphs"] = _baseline_module
+    _spec.loader.exec_module(_baseline_module)
+    DecodeMetrics = _baseline_module.DecodeMetrics
+    default_trace = _baseline_module.default_trace
+    export_prom_metrics = _baseline_module.export_prom_metrics
+    format_metrics = _baseline_module.format_metrics
+
 from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig  # noqa: E402
 from common.python.smoke import is_smoke_mode  # noqa: E402
 from ch18.decode_kernels import DEVICE, build_decode_kernel  # noqa: E402

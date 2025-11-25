@@ -26,11 +26,26 @@ REQUIREMENTS:
   - Calibration dataset
 """
 
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+repo_root = Path(__file__).parent.parent
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
+
 import torch
 import torch.nn as nn
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 from contextlib import contextmanager
+
+from common.python.benchmark_harness import (
+    BaseBenchmark,
+    BenchmarkConfig,
+    WorkloadMetadata,
+)
 
 
 @dataclass
@@ -202,6 +217,83 @@ def benchmark():
     print(f"  Relative Error: {error:.4f}%")
     
     print("\nNote: Static FP8 avoids per-forward amax computation")
+
+
+#============================================================================
+# Benchmark Harness Integration
+#============================================================================
+
+class StaticFP8Benchmark(BaseBenchmark):
+    """Benchmark harness wrapper for static FP8 quantization."""
+
+    def __init__(self):
+        super().__init__()
+        self.static_linear = None
+        self.x = None
+        self.batch_size = 32
+        self.seq_len = 512
+        self.dim = 4096
+        self._last = 0.0
+        
+        tokens = self.batch_size * self.seq_len
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
+
+    def setup(self) -> None:
+        """Setup: Initialize and calibrate static FP8 linear."""
+        torch.manual_seed(42)
+        
+        self.static_linear = StaticFP8Linear(self.dim, self.dim, device=self.device)
+        
+        # Calibrate
+        with self.static_linear.calibration_mode():
+            for _ in range(50):
+                x = torch.randn(self.batch_size, self.seq_len, self.dim, device=self.device)
+                _ = self.static_linear(x)
+        
+        self.static_linear.freeze_scales()
+        
+        self.x = torch.randn(self.batch_size, self.seq_len, self.dim, device=self.device)
+        
+        # Warmup
+        for _ in range(3):
+            with torch.no_grad():
+                _ = self.static_linear(self.x)
+        torch.cuda.synchronize(self.device)
+
+    def benchmark_fn(self) -> None:
+        """Benchmark: Static FP8 forward pass."""
+        with torch.no_grad():
+            output = self.static_linear(self.x)
+            self._last = float(output.sum())
+            self._synchronize()
+
+    def teardown(self) -> None:
+        """Teardown: Clean up resources."""
+        self.static_linear = None
+        self.x = None
+        torch.cuda.empty_cache()
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(iterations=50, warmup=10)
+    
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
+    def get_custom_metrics(self) -> Optional[dict]:
+        return {"fp8_static.quantization_type": "static"}
+
+    def validate_result(self) -> Optional[str]:
+        if self.static_linear is None:
+            return "Linear layer not initialized"
+        return None
+
+
+def get_benchmark() -> BaseBenchmark:
+    """Factory function for benchmark discovery."""
+    return StaticFP8Benchmark()
 
 
 if __name__ == "__main__":

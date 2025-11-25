@@ -238,3 +238,4 @@ def ring_attention_forward(
     ring = RingAttention(world_size, causal=causal)
     return ring.forward(q, k, v, group)
 
+

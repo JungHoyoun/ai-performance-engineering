@@ -250,3 +250,4 @@ class PrefixCache:
             f"hit_rate={stats['hit_rate_pct']:.1f}%)"
         )
 
+

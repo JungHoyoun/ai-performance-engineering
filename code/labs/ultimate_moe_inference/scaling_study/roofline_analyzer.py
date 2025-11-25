@@ -296,3 +296,4 @@ if __name__ == "__main__":
     
     run_roofline_analysis(args.benchmark, args.output)
 
+

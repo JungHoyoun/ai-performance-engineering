@@ -6,7 +6,7 @@ Basic disaggregated serving with separate pools but no optimizations.
 
 import torch
 import torch.nn as nn
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import sys
 from pathlib import Path
 import time
@@ -14,7 +14,13 @@ import time
 # Add common to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from common.python.benchmark_harness import BenchmarkHarness, BenchmarkConfig, BenchmarkMode
+from common.python.benchmark_harness import (
+    BaseBenchmark,
+    BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
+)
 from common.python.logger import get_logger
 
 logger = get_logger(__name__)
@@ -177,4 +183,70 @@ if __name__ == "__main__":
     print(f"{'='*60}\n")
     print(f"NOTE: Transfer overhead can be eliminated with NVLink pooling")
 
+
+#============================================================================
+# Benchmark Harness Integration
+#============================================================================
+
+class DisaggregatedPrefillDecodeBenchmark(BaseBenchmark):
+    """Benchmark harness wrapper for baseline disaggregated serving."""
+
+    def __init__(self):
+        super().__init__()
+        self.serving = None
+        self.batch_size = 8
+        self.prefill_length = 1024
+        self.decode_length = 128
+        self._last = 0.0
+        
+        tokens = self.batch_size * (self.prefill_length + self.decode_length)
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
+
+    def setup(self) -> None:
+        """Setup: Initialize baseline disaggregated serving."""
+        torch.manual_seed(42)
+        self.serving = BaselineDisaggregatedPrefillDecode(
+            num_prefill_gpus=2,
+            num_decode_gpus=6,
+            batch_size=self.batch_size,
+            prefill_length=self.prefill_length,
+            decode_length=self.decode_length,
+        )
+        self.serving.setup()
+
+    def benchmark_fn(self) -> None:
+        """Benchmark: Baseline prefill-decode."""
+        if self.serving is not None:
+            result = self.serving.run()
+            self._last = result.get("total_latency_ms", 0.0) if isinstance(result, dict) else result
+        self._synchronize()
+
+    def teardown(self) -> None:
+        """Teardown: Clean up resources."""
+        if self.serving is not None:
+            self.serving.cleanup()
+            self.serving = None
+        torch.cuda.empty_cache()
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(iterations=10, warmup=3)
+    
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
+    def get_custom_metrics(self) -> Optional[dict]:
+        return {"disaggregated_prefill_decode.nvlink_pooling": False}
+
+    def validate_result(self) -> Optional[str]:
+        if self.serving is None:
+            return "Disaggregated serving not initialized"
+        return None
+
+
+def get_benchmark() -> BaseBenchmark:
+    """Factory function for benchmark discovery."""
+    return DisaggregatedPrefillDecodeBenchmark()
 

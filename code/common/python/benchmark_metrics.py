@@ -560,3 +560,4 @@ def compute_speedup_metrics(
         f"{prefix}improvement_pct": improvement_pct,
     }
 
+

@@ -16,7 +16,13 @@ from pathlib import Path
 # Add common to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from common.python.benchmark_harness import BenchmarkHarness, BenchmarkConfig, BenchmarkMode
+from common.python.benchmark_harness import (
+    BaseBenchmark,
+    BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
+)
 from common.python.logger import get_logger
 
 logger = get_logger(__name__)
@@ -312,4 +318,80 @@ if __name__ == "__main__":
     print(f"Output mean: {result['output_mean']:.6f}")
     print(f"{'='*60}\n")
     print(f"NOTE: No calibration required! Dynamic scaling adjusts automatically.")
+
+
+#============================================================================
+# Benchmark Harness Integration
+#============================================================================
+
+class FP8CalibrationFreeBenchmark(BaseBenchmark):
+    """Benchmark harness wrapper for calibration-free FP8."""
+
+    def __init__(self):
+        super().__init__()
+        self.fp8_serving = None
+        self.batch_size = 8
+        self.seq_length = 2048
+        self.hidden_size = 4096
+        self.num_layers = 4
+        self._last = 0.0
+        
+        tokens = self.batch_size * self.seq_length
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
+
+    def setup(self) -> None:
+        """Setup: Initialize calibration-free FP8 model."""
+        torch.manual_seed(42)
+        
+        self.fp8_serving = OptimizedFP8CalibrationFree(
+            batch_size=self.batch_size,
+            seq_length=self.seq_length,
+            hidden_size=self.hidden_size,
+            num_layers=self.num_layers,
+            use_te=TE_AVAILABLE,
+        )
+        self.fp8_serving.setup()
+        
+        # Warmup
+        for _ in range(3):
+            _ = self.fp8_serving.run()
+        torch.cuda.synchronize(self.device)
+
+    def benchmark_fn(self) -> None:
+        """Benchmark: Calibration-free FP8 inference."""
+        if self.fp8_serving is not None:
+            self._last = self.fp8_serving.run()
+        self._synchronize()
+
+    def teardown(self) -> None:
+        """Teardown: Clean up resources."""
+        if self.fp8_serving is not None:
+            self.fp8_serving.cleanup()
+            self.fp8_serving = None
+        torch.cuda.empty_cache()
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(iterations=30, warmup=5)
+    
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
+    def get_custom_metrics(self) -> Optional[dict]:
+        return {
+            "fp8_calibration_free.use_te": TE_AVAILABLE,
+            "fp8_calibration_free.calibration": False,
+        }
+
+    def validate_result(self) -> Optional[str]:
+        if self.fp8_serving is None:
+            return "FP8 serving not initialized"
+        return None
+
+
+def get_benchmark() -> BaseBenchmark:
+    """Factory function for benchmark discovery."""
+    return FP8CalibrationFreeBenchmark()
 

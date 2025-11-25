@@ -29,12 +29,11 @@ class VLLMDecodeKernel:
     """
     Small PagedAttention-backed decode step.
 
-    Uses vLLM's fused paged attention kernel when available. Falls back to
-    eager instantiation when CUDA or vLLM custom ops are missing.
+    Uses vLLM's fused paged attention kernel for efficient decode.
     """
 
     def __init__(self, hidden: int, max_batch: int = 32, device: str = DEVICE) -> None:
-        from vllm.attention.ops.paged_attn import PagedAttention  # type: ignore
+        from vllm.attention.ops.paged_attn import PagedAttention
 
         self.device = device
         self.hidden = hidden
@@ -46,9 +45,10 @@ class VLLMDecodeKernel:
         self.max_batch = max_batch
         # vLLM paged attention requires block_size >= 8 (typically 8, 16, or 32)
         self.block_size = 16
-        self.num_blocks = 4  # Enough blocks for small-scale demo
+        self.num_blocks = 4
+        self.max_seq_len = self.num_blocks * self.block_size  # Max sequence length
 
-        # Preallocate a tiny KV cache and the block tables/seq_lens used per call.
+        # Preallocate KV cache
         kv_shape = PagedAttention.get_kv_cache_shape(
             num_blocks=self.num_blocks,
             block_size=self.block_size,
@@ -61,30 +61,33 @@ class VLLMDecodeKernel:
             self.kv_cache, num_kv_heads=self.num_heads, head_size=self.head_size
         )
 
-        self.block_tables = torch.zeros(
-            (self.max_batch, self.num_blocks), dtype=torch.int32, device=self.device
+        # Block tables: each sequence gets assigned blocks
+        self.block_tables = torch.arange(
+            self.num_blocks, dtype=torch.int32, device=self.device
+        ).unsqueeze(0).expand(self.max_batch, -1).contiguous()
+        
+        # Sequence lengths (tokens per sequence)
+        self.seq_lens = torch.full(
+            (self.max_batch,), self.block_size, dtype=torch.int32, device=self.device
         )
-        self.seq_lens = torch.ones(
-            self.max_batch, dtype=torch.int32, device=self.device
-        )
+        
+        # K/V scale factors (1.0 = no scaling) - REQUIRED by vLLM API
+        self.k_scale = torch.tensor(1.0, dtype=torch.float32, device=self.device)
+        self.v_scale = torch.tensor(1.0, dtype=torch.float32, device=self.device)
 
         self._paged_attention = PagedAttention.forward_decode
 
     def ensure_capacity(self, batch: int) -> None:
         if batch <= self.max_batch:
             return
-        # Resize block tables / seq_lens for a larger batch.
-        new_bt = torch.zeros(
-            (batch, self.block_tables.shape[1]),
-            dtype=self.block_tables.dtype,
-            device=self.block_tables.device,
+        # Resize block tables / seq_lens for a larger batch
+        self.block_tables = torch.arange(
+            self.num_blocks, dtype=torch.int32, device=self.device
+        ).unsqueeze(0).expand(batch, -1).contiguous()
+        
+        self.seq_lens = torch.full(
+            (batch,), self.block_size, dtype=torch.int32, device=self.device
         )
-        new_bt[: self.block_tables.shape[0]] = self.block_tables
-        self.block_tables = new_bt
-
-        new_seq = torch.ones(batch, dtype=self.seq_lens.dtype, device=self.seq_lens.device)
-        new_seq[: self.seq_lens.shape[0]] = self.seq_lens
-        self.seq_lens = new_seq
         self.max_batch = batch
 
     def __call__(
@@ -93,21 +96,22 @@ class VLLMDecodeKernel:
         batch = tokens.size(0)
         self.ensure_capacity(batch)
 
-        query = tokens.view(batch, self.num_heads, self.head_size)
-        # Reuse preallocated block tables / seq_lens; they are trivial for the toy decode.
+        # Query shape: [batch, num_heads, head_size]
+        query = tokens.view(batch, self.num_heads, self.head_size).to(torch.float16)
+        
         out = self._paged_attention(
             query,
             self.key_cache,
             self.value_cache,
             self.block_tables[:batch],
             self.seq_lens[:batch],
-            self.block_size,
+            self.max_seq_len,      # max_seq_len (was missing!)
             self.kv_cache_dtype,
             self.num_heads,
             self.scale,
-            None,  # alibi_slopes
-            None,  # k_scale
-            None,  # v_scale
+            None,                  # alibi_slopes
+            self.k_scale,          # k_scale (required tensor, not None!)
+            self.v_scale,          # v_scale (required tensor, not None!)
         )
 
         flat = out.view(batch, self.hidden)
@@ -121,6 +125,7 @@ class VLLMDecodeKernel:
 
 
 def _torch_decode(hidden: int) -> Callable[[torch.Tensor, torch.Tensor, Optional[torch.Tensor]], torch.Tensor]:
+    """Fallback torch-based decode (for when vLLM unavailable)."""
     def _decode(tokens: torch.Tensor, kv: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         attn_scores = torch.tanh(tokens + kv)
         if mask is not None:
@@ -128,9 +133,7 @@ def _torch_decode(hidden: int) -> Callable[[torch.Tensor, torch.Tensor, Optional
         return attn_scores
 
     try:
-        return torch.compile(  # type: ignore[arg-type]
-            _decode, mode=COMPILE_MODE, fullgraph=False, dynamic=False
-        )
+        return torch.compile(_decode, mode=COMPILE_MODE, fullgraph=False, dynamic=False)
     except Exception:
         return _decode
 
@@ -143,19 +146,13 @@ def build_decode_kernel(
     device: str = DEVICE,
 ) -> DecodeKernel:
     """
-    Try to build a vLLM-backed decode kernel; fall back to torch.compile/eager.
+    Build a vLLM-backed decode kernel. Raises if vLLM unavailable.
     """
     if prefer_vllm:
-        try:
-            kernel = VLLMDecodeKernel(hidden=hidden, max_batch=max_batch, device=device)
-            # Test that it works with a small input
-            test_tokens = torch.randn(1, hidden, device=device, dtype=torch.float16)
-            test_kv = torch.randn(1, hidden, device=device, dtype=torch.float16)
-            _ = kernel(test_tokens, test_kv, None)
-            return DecodeKernel(fn=kernel, backend="vllm")
-        except Exception:
-            # vLLM kernel failed, fall back to torch
-            pass
+        # No fallback - fail fast if vLLM doesn't work
+        kernel = VLLMDecodeKernel(hidden=hidden, max_batch=max_batch, device=device)
+        return DecodeKernel(fn=kernel, backend="vllm")
 
+    # Only use torch if explicitly requested (prefer_vllm=False)
     torch_kernel = _torch_decode(hidden)
     return DecodeKernel(fn=torch_kernel, backend="torch")

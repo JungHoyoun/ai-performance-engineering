@@ -21,12 +21,27 @@ REQUIREMENTS:
   - torch.compile for kernel generation
 """
 
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+repo_root = Path(__file__).parent.parent
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
+
 import math
 from typing import Optional, Callable
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from common.python.benchmark_harness import (
+    BaseBenchmark,
+    BenchmarkConfig,
+    WorkloadMetadata,
+)
 
 # Check for FlexAttention availability
 HAS_FLEX_ATTENTION = False
@@ -223,6 +238,89 @@ def benchmark():
         print(f"  Sparsity: {sparsity*100:.1f}%")
     
     print("\nNote: Sliding window reduces O(n²) to O(n·w)")
+
+
+#============================================================================
+# Benchmark Harness Integration
+#============================================================================
+
+class FlexAttentionSparseBenchmark(BaseBenchmark):
+    """Benchmark harness wrapper for FlexAttention sparse patterns."""
+
+    def __init__(self):
+        super().__init__()
+        self.attn = None
+        self.x = None
+        self.batch_size = 2
+        self.num_heads = 32
+        self.head_dim = 128
+        self.seq_len = 4096
+        self.window_size = 512
+        self._last = 0.0
+        
+        tokens = self.batch_size * self.seq_len
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
+
+    def setup(self) -> None:
+        """Setup: Initialize sliding window causal attention."""
+        torch.manual_seed(42)
+        
+        embed_dim = self.num_heads * self.head_dim
+        self.attn = SlidingWindowCausalAttention(
+            embed_dim=embed_dim,
+            num_heads=self.num_heads,
+            window_size=self.window_size,
+        ).to(self.device)
+        
+        self.x = torch.randn(
+            self.batch_size, self.seq_len, embed_dim,
+            device=self.device,
+            dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
+        )
+        
+        # Warmup
+        for _ in range(3):
+            with torch.no_grad():
+                _ = self.attn(self.x)
+        torch.cuda.synchronize(self.device)
+
+    def benchmark_fn(self) -> None:
+        """Benchmark: FlexAttention sliding window forward pass."""
+        with torch.no_grad():
+            output = self.attn(self.x)
+            self._last = float(output.sum())
+            self._synchronize()
+
+    def teardown(self) -> None:
+        """Teardown: Clean up resources."""
+        self.attn = None
+        self.x = None
+        torch.cuda.empty_cache()
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(iterations=30, warmup=5)
+    
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
+    def get_custom_metrics(self) -> Optional[dict]:
+        return {
+            "flexattention_sparse.window_size": self.window_size,
+            "flexattention_sparse.has_flex_attention": HAS_FLEX_ATTENTION,
+        }
+
+    def validate_result(self) -> Optional[str]:
+        if self.attn is None:
+            return "Attention module not initialized"
+        return None
+
+
+def get_benchmark() -> BaseBenchmark:
+    """Factory function for benchmark discovery."""
+    return FlexAttentionSparseBenchmark()
 
 
 if __name__ == "__main__":

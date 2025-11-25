@@ -201,3 +201,4 @@ if __name__ == '__main__':
     print(f"  Error: {benchmark._error_sum * 100:.4f}%")
     print(f"  Note: Per-channel provides ~2x better accuracy than per-tensor")
 
+

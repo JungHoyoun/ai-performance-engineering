@@ -395,3 +395,4 @@ def load_synthetic_workload(
     loader = WorkloadLoader(config)
     return loader.get_prompts()
 
+

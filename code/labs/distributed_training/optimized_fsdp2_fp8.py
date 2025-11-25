@@ -248,6 +248,11 @@ def run_benchmark(
     }
 
 
+def get_benchmark() -> BaseBenchmark:
+    """Factory function for benchmark discovery."""
+    return OptimizedFSDP2FP8()
+
+
 if __name__ == "__main__":
     import argparse
     

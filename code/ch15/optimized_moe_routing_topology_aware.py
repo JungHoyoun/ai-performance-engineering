@@ -18,7 +18,13 @@ from pathlib import Path
 # Add common to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from common.python.benchmark_harness import BenchmarkHarness, BenchmarkConfig, BenchmarkMode
+from common.python.benchmark_harness import (
+    BaseBenchmark,
+    BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
+)
 from common.python.logger import get_logger
 
 logger = get_logger(__name__)
@@ -230,4 +236,73 @@ if __name__ == "__main__":
     print(f"  - {result['locality_pct']:.0f}% local expert access (reduces NVLink traffic)")
     print(f"  - Better load balancing vs baseline")
 
+
+#============================================================================
+# Benchmark Harness Integration
+#============================================================================
+
+class MoERoutingTopologyAwareBenchmark(BaseBenchmark):
+    """Benchmark harness wrapper for topology-aware MoE routing."""
+
+    def __init__(self):
+        super().__init__()
+        self.moe = None
+        self.batch_size = 16
+        self.seq_length = 2048
+        self.hidden_size = 4096
+        self.num_experts = 64
+        self._last = 0.0
+        
+        tokens = self.batch_size * self.seq_length
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
+
+    def setup(self) -> None:
+        """Setup: Initialize topology-aware MoE routing."""
+        torch.manual_seed(42)
+        
+        self.moe = OptimizedMoERoutingTopologyAware(
+            batch_size=self.batch_size,
+            seq_length=self.seq_length,
+            hidden_size=self.hidden_size,
+            num_experts=self.num_experts,
+            top_k=2,
+            num_gpus=8,
+        )
+        self.moe.setup()
+
+    def benchmark_fn(self) -> None:
+        """Benchmark: Topology-aware routing and forward pass."""
+        if self.moe is not None:
+            result = self.moe.run()
+            self._last = result
+        self._synchronize()
+
+    def teardown(self) -> None:
+        """Teardown: Clean up resources."""
+        if self.moe is not None:
+            self.moe.cleanup()
+            self.moe = None
+        torch.cuda.empty_cache()
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(iterations=20, warmup=5)
+    
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
+    def get_custom_metrics(self) -> Optional[dict]:
+        return {"moe_routing_topology_aware.locality_aware": True}
+
+    def validate_result(self) -> Optional[str]:
+        if self.moe is None:
+            return "MoE routing not initialized"
+        return None
+
+
+def get_benchmark() -> BaseBenchmark:
+    """Factory function for benchmark discovery."""
+    return MoERoutingTopologyAwareBenchmark()
 

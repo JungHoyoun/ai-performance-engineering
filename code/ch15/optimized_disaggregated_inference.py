@@ -1,4 +1,13 @@
-"""Optimized disaggregated inference benchmark with speculative decoding."""
+"""Optimized disaggregated inference benchmark with speculative windowing.
+
+Chapter 15: Disaggregated Inference (Optimized)
+
+NOTE: This file uses speculative window batching to overlap decode work.
+Full speculative decoding (draft model + verification) is covered in Chapter 18.
+Here we focus on the disaggregation pattern; for complete speculative decoding:
+- ch18/optimized_speculative_decode.py (draft model generation + verification)
+- ch18/optimized_vllm_decode_graphs.py (CUDA graph optimization for decode)
+"""
 
 from __future__ import annotations
 

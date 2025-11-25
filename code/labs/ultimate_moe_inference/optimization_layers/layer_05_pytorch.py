@@ -215,3 +215,4 @@ class Layer05PyTorch:
         """Return string representation."""
         return f"{self.name}: FP8={self._fp8_enabled}, compiled={self._compiled}"
 
+

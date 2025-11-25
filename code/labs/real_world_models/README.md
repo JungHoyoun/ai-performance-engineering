@@ -40,3 +40,4 @@ python labs/real_world_models/gpt4_architecture_optimization.py --seq-length 819
 - These scripts are intentionally weight-light sketches for benchmarking; swap in real checkpoints to validate production settings.
 - Hardware expectations: B200/GB200 for best results; GPT-4-scale examples assume 24+ GPUs with NVLink/NVL fabrics.
 - Metrics (balance loss, entropy, KV cache) are emitted alongside throughput so you can gate deployments with more than raw speed.
+

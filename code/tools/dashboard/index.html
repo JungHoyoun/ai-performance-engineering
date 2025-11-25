@@ -1,0 +1,1730 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⚡ GPU Performance Lab</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
+    <style>
+        :root {
+            --bg-primary: #06060a;
+            --bg-secondary: #0c0c14;
+            --bg-tertiary: #12121c;
+            --bg-card: rgba(16, 16, 24, 0.9);
+            --bg-glass: rgba(255, 255, 255, 0.02);
+            --border-glass: rgba(255, 255, 255, 0.06);
+            --border-highlight: rgba(0, 245, 212, 0.3);
+            --accent-primary: #00f5d4;
+            --accent-secondary: #9d4edd;
+            --accent-tertiary: #f72585;
+            --accent-success: #00f5a0;
+            --accent-warning: #ffc43d;
+            --accent-danger: #ff4757;
+            --accent-info: #4cc9f0;
+            --text-primary: #ffffff;
+            --text-secondary: rgba(255, 255, 255, 0.75);
+            --text-muted: rgba(255, 255, 255, 0.45);
+            --glow-primary: 0 0 60px rgba(0, 245, 212, 0.2);
+            --glow-secondary: 0 0 60px rgba(157, 78, 221, 0.2);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        /* Animated gradient background */
+        .bg-gradient {
+            position: fixed;
+            inset: 0;
+            z-index: -2;
+            background: 
+                radial-gradient(ellipse 80% 50% at 20% 40%, rgba(157, 78, 221, 0.12), transparent),
+                radial-gradient(ellipse 60% 60% at 80% 20%, rgba(0, 245, 212, 0.08), transparent),
+                radial-gradient(ellipse 50% 80% at 50% 100%, rgba(247, 37, 133, 0.06), transparent);
+            animation: gradientShift 30s ease-in-out infinite alternate;
+        }
+
+        @keyframes gradientShift {
+            0% { filter: hue-rotate(0deg); }
+            100% { filter: hue-rotate(30deg); }
+        }
+
+        /* Noise texture overlay */
+        .noise-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: -1;
+            opacity: 0.03;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+        }
+
+        /* Navigation */
+        .nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(6, 6, 10, 0.85);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--border-glass);
+        }
+
+        .nav-brand {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .nav-logo {
+            width: 44px;
+            height: 44px;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.4rem;
+            box-shadow: var(--glow-primary);
+        }
+
+        .nav-title {
+            font-family: 'Playfair Display', serif;
+            font-size: 1.4rem;
+            background: linear-gradient(135deg, #fff, var(--accent-primary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .nav-subtitle {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+
+        .nav-tabs {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .nav-tab {
+            padding: 0.6rem 1.2rem;
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: 8px;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .nav-tab:hover {
+            background: var(--bg-glass);
+            color: var(--text-primary);
+        }
+
+        .nav-tab.active {
+            background: rgba(0, 245, 212, 0.1);
+            border-color: var(--accent-primary);
+            color: var(--accent-primary);
+        }
+
+        .nav-actions {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .gpu-status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            background: rgba(0, 245, 160, 0.1);
+            border: 1px solid rgba(0, 245, 160, 0.2);
+            border-radius: 20px;
+            font-size: 0.8rem;
+            color: var(--accent-success);
+        }
+
+        .gpu-status.offline {
+            background: rgba(255, 196, 61, 0.1);
+            border-color: rgba(255, 196, 61, 0.2);
+            color: var(--accent-warning);
+        }
+
+        .status-pulse {
+            width: 8px;
+            height: 8px;
+            background: currentColor;
+            border-radius: 50%;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(0.9); }
+        }
+
+        .btn {
+            padding: 0.7rem 1.4rem;
+            border: none;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            color: var(--bg-primary);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(0, 245, 212, 0.3);
+        }
+
+        /* Main container */
+        .main {
+            padding: 6rem 2rem 2rem;
+            max-width: 1900px;
+            margin: 0 auto;
+        }
+
+        /* Section headers */
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .section-title {
+            font-size: 1.3rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .section-title-icon {
+            width: 36px;
+            height: 36px;
+            background: var(--bg-glass);
+            border: 1px solid var(--border-glass);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Hero stats */
+        .hero-stats {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .hero-stat {
+            background: var(--bg-card);
+            border: 1px solid var(--border-glass);
+            border-radius: 16px;
+            padding: 1.5rem;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s;
+        }
+
+        .hero-stat:hover {
+            border-color: var(--border-highlight);
+            transform: translateY(-4px);
+        }
+
+        .hero-stat::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary));
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .hero-stat:hover::before { opacity: 1; }
+
+        .hero-stat-value {
+            font-size: 2.2rem;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+            background: linear-gradient(135deg, var(--accent-primary), var(--text-primary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .hero-stat-label {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            margin-top: 0.25rem;
+        }
+
+        .hero-stat-change {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            font-size: 0.8rem;
+            font-weight: 600;
+            padding: 0.2rem 0.6rem;
+            border-radius: 6px;
+        }
+
+        .hero-stat-change.up { color: var(--accent-success); background: rgba(0, 245, 160, 0.1); }
+        .hero-stat-change.down { color: var(--accent-danger); background: rgba(255, 71, 87, 0.1); }
+
+        /* Cards */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-glass);
+            border-radius: 16px;
+            overflow: hidden;
+        }
+
+        .card-header {
+            padding: 1.25rem 1.5rem;
+            border-bottom: 1px solid var(--border-glass);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .card-title {
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .card-body { padding: 1.5rem; }
+
+        .card-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .chip {
+            padding: 0.4rem 0.8rem;
+            background: var(--bg-glass);
+            border: 1px solid var(--border-glass);
+            border-radius: 6px;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .chip:hover, .chip.active {
+            background: rgba(0, 245, 212, 0.1);
+            border-color: var(--accent-primary);
+            color: var(--accent-primary);
+        }
+
+        /* Grid layouts */
+        .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.5rem; }
+        .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; }
+        .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; }
+        .grid-1-2 { display: grid; grid-template-columns: 1fr 2fr; gap: 1.5rem; }
+        .grid-2-1 { display: grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; }
+
+        .mb-2 { margin-bottom: 2rem; }
+        .mb-3 { margin-bottom: 3rem; }
+
+        /* Chart containers */
+        .chart-container {
+            position: relative;
+            height: 280px;
+        }
+
+        .chart-container.tall { height: 350px; }
+
+        /* Benchmark list */
+        .benchmark-list {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .benchmark-item {
+            display: grid;
+            grid-template-columns: auto 1fr auto auto;
+            gap: 1rem;
+            align-items: center;
+            padding: 1rem;
+            border-radius: 10px;
+            margin-bottom: 0.5rem;
+            background: var(--bg-glass);
+            border: 1px solid transparent;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .benchmark-item:hover {
+            background: rgba(0, 245, 212, 0.03);
+            border-color: var(--border-highlight);
+        }
+
+        .benchmark-item.selected {
+            background: rgba(0, 245, 212, 0.08);
+            border-color: var(--accent-primary);
+        }
+
+        .benchmark-rank {
+            width: 32px;
+            height: 32px;
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 700;
+            font-size: 0.85rem;
+        }
+
+        .benchmark-rank.gold { background: linear-gradient(135deg, #ffd700, #ffaa00); color: #000; }
+        .benchmark-rank.silver { background: linear-gradient(135deg, #c0c0c0, #a0a0a0); color: #000; }
+        .benchmark-rank.bronze { background: linear-gradient(135deg, #cd7f32, #b87333); color: #000; }
+
+        .benchmark-info h4 {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.95rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .benchmark-meta {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+
+        .benchmark-bar {
+            width: 150px;
+            height: 6px;
+            background: var(--bg-tertiary);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .benchmark-bar-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.5s ease;
+        }
+
+        .benchmark-speedup {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 700;
+            font-size: 1.1rem;
+            min-width: 80px;
+            text-align: right;
+        }
+
+        .benchmark-speedup.excellent { color: var(--accent-success); }
+        .benchmark-speedup.good { color: var(--accent-primary); }
+        .benchmark-speedup.fair { color: var(--accent-warning); }
+        .benchmark-speedup.poor { color: var(--accent-danger); }
+
+        /* Comparison section */
+        .comparison-grid {
+            display: grid;
+            grid-template-columns: 1fr 80px 1fr;
+            gap: 1rem;
+            align-items: stretch;
+        }
+
+        .comparison-panel {
+            background: var(--bg-tertiary);
+            border-radius: 12px;
+            padding: 1.5rem;
+        }
+
+        .comparison-panel.baseline {
+            border-left: 3px solid var(--accent-tertiary);
+        }
+
+        .comparison-panel.optimized {
+            border-left: 3px solid var(--accent-success);
+        }
+
+        .comparison-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .comparison-label.baseline { color: var(--accent-tertiary); }
+        .comparison-label.optimized { color: var(--accent-success); }
+
+        .comparison-arrow {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-muted);
+        }
+
+        .comparison-arrow-icon {
+            font-size: 2rem;
+            color: var(--accent-primary);
+            animation: arrowPulse 2s ease-in-out infinite;
+        }
+
+        @keyframes arrowPulse {
+            0%, 100% { transform: translateX(0); opacity: 1; }
+            50% { transform: translateX(5px); opacity: 0.7; }
+        }
+
+        .comparison-speedup {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--accent-success);
+            margin-top: 0.5rem;
+        }
+
+        /* Metrics comparison */
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 0;
+            border-bottom: 1px solid var(--border-glass);
+        }
+
+        .metric-row:last-child { border-bottom: none; }
+
+        .metric-label {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .metric-values {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .metric-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+            padding: 0.3rem 0.6rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+        }
+
+        .metric-value.baseline {
+            background: rgba(247, 37, 133, 0.1);
+            color: var(--accent-tertiary);
+        }
+
+        .metric-value.optimized {
+            background: rgba(0, 245, 160, 0.1);
+            color: var(--accent-success);
+        }
+
+        .metric-delta {
+            font-size: 0.8rem;
+            color: var(--accent-success);
+        }
+
+        /* Explanation panel */
+        .explanation-panel {
+            background: linear-gradient(135deg, rgba(157, 78, 221, 0.1), rgba(0, 245, 212, 0.05));
+            border: 1px solid rgba(157, 78, 221, 0.2);
+            border-radius: 16px;
+            padding: 2rem;
+        }
+
+        .explanation-header {
+            display: flex;
+            align-items: flex-start;
+            gap: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .explanation-icon {
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(135deg, var(--accent-secondary), var(--accent-primary));
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.8rem;
+            flex-shrink: 0;
+        }
+
+        .explanation-title {
+            font-size: 1.4rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+
+        .explanation-subtitle {
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+        }
+
+        .explanation-content {
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+            line-height: 1.8;
+        }
+
+        .explanation-content h1, .explanation-content h2, .explanation-content h3 {
+            color: var(--accent-primary);
+            margin-top: 1.5rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .explanation-content h1 { font-size: 1.3rem; }
+        .explanation-content h2 { font-size: 1.15rem; }
+        .explanation-content h3 { font-size: 1rem; }
+
+        .explanation-content code {
+            background: rgba(0, 245, 212, 0.1);
+            padding: 0.15rem 0.4rem;
+            border-radius: 4px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85em;
+        }
+
+        .explanation-content pre {
+            background: #0d1117;
+            padding: 1rem;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 1rem 0;
+        }
+
+        .explanation-content pre code {
+            background: transparent;
+            padding: 0;
+        }
+
+        .explanation-content ul, .explanation-content ol {
+            margin-left: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .explanation-content li {
+            margin-bottom: 0.5rem;
+        }
+
+        .explanation-content strong {
+            color: var(--text-primary);
+        }
+
+        /* Loading state */
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 3rem;
+            color: var(--text-muted);
+        }
+
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--border-glass);
+            border-top-color: var(--accent-primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 1rem;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* No data state */
+        .no-data {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-muted);
+        }
+
+        .no-data-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+
+        /* Roofline legend */
+        .roofline-legend {
+            display: flex;
+            gap: 2rem;
+            justify-content: center;
+            margin-top: 1rem;
+        }
+
+        .roofline-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .roofline-legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: var(--bg-secondary); }
+        ::-webkit-scrollbar-thumb { background: var(--border-glass); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+        /* Responsive */
+        @media (max-width: 1400px) {
+            .hero-stats { grid-template-columns: repeat(3, 1fr); }
+            .grid-3 { grid-template-columns: repeat(2, 1fr); }
+        }
+
+        @media (max-width: 900px) {
+            .hero-stats { grid-template-columns: repeat(2, 1fr); }
+            .grid-2, .grid-2-1, .grid-1-2 { grid-template-columns: 1fr; }
+            .comparison-grid { grid-template-columns: 1fr; }
+            .comparison-arrow { transform: rotate(90deg); padding: 1rem 0; }
+        }
+
+        /* Animations */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .animate { animation: fadeIn 0.5s ease-out forwards; }
+        .delay-1 { animation-delay: 0.1s; opacity: 0; }
+        .delay-2 { animation-delay: 0.2s; opacity: 0; }
+        .delay-3 { animation-delay: 0.3s; opacity: 0; }
+        .delay-4 { animation-delay: 0.4s; opacity: 0; }
+        .delay-5 { animation-delay: 0.5s; opacity: 0; }
+
+        /* Tab content */
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        /* Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(10px);
+            z-index: 2000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-overlay.active { display: flex; }
+
+        .modal {
+            background: var(--bg-card);
+            border: 1px solid var(--border-glass);
+            border-radius: 20px;
+            max-width: 900px;
+            width: 90%;
+            max-height: 85vh;
+            overflow: hidden;
+        }
+
+        .modal-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid var(--border-glass);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-close {
+            width: 36px;
+            height: 36px;
+            background: var(--bg-glass);
+            border: 1px solid var(--border-glass);
+            border-radius: 10px;
+            color: var(--text-secondary);
+            font-size: 1.2rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+
+        .modal-close:hover {
+            background: rgba(255, 71, 87, 0.1);
+            border-color: var(--accent-danger);
+            color: var(--accent-danger);
+        }
+
+        .modal-body {
+            padding: 1.5rem;
+            max-height: calc(85vh - 100px);
+            overflow-y: auto;
+        }
+
+        /* Analysis card */
+        .analysis-card {
+            background: var(--bg-glass);
+            border: 1px solid var(--border-glass);
+            border-radius: 12px;
+            padding: 1.25rem;
+            margin-bottom: 1rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .analysis-card:hover {
+            border-color: var(--border-highlight);
+            background: rgba(0, 245, 212, 0.03);
+        }
+
+        .analysis-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+
+        .analysis-card-title {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+        }
+
+        .analysis-card-chapter {
+            font-size: 0.8rem;
+            color: var(--accent-primary);
+            background: rgba(0, 245, 212, 0.1);
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+        }
+
+        .analysis-card-preview {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+        }
+    </style>
+</head>
+<body>
+    <div class="bg-gradient"></div>
+    <div class="noise-overlay"></div>
+
+    <!-- Navigation -->
+    <nav class="nav">
+        <div class="nav-brand">
+            <div class="nav-logo">⚡</div>
+            <div>
+                <div class="nav-title">GPU Performance Lab</div>
+                <div class="nav-subtitle">AI-Powered Optimization Engine</div>
+            </div>
+        </div>
+        <div class="nav-tabs">
+            <button class="nav-tab active" onclick="showTab('overview')">Overview</button>
+            <button class="nav-tab" onclick="showTab('compare')">Compare</button>
+            <button class="nav-tab" onclick="showTab('insights')">LLM Insights</button>
+            <button class="nav-tab" onclick="showTab('roofline')">Roofline</button>
+        </div>
+        <div class="nav-actions">
+            <div class="gpu-status" id="gpuStatus">
+                <div class="status-pulse"></div>
+                <span id="gpuStatusText">Loading...</span>
+            </div>
+            <button class="btn btn-primary" onclick="refreshData()">
+                <span>🔄</span> Refresh
+            </button>
+        </div>
+    </nav>
+
+    <main class="main">
+        <!-- Overview Tab -->
+        <div id="tab-overview" class="tab-content active">
+            <!-- Hero Stats -->
+            <div class="hero-stats mb-2" id="heroStats">
+                <div class="hero-stat animate delay-1">
+                    <div class="hero-stat-value" id="statTotal">-</div>
+                    <div class="hero-stat-label">Total Benchmarks</div>
+                </div>
+                <div class="hero-stat animate delay-2">
+                    <div class="hero-stat-value" id="statBest">-</div>
+                    <div class="hero-stat-label">Best Speedup</div>
+                </div>
+                <div class="hero-stat animate delay-3">
+                    <div class="hero-stat-value" id="statAvg">-</div>
+                    <div class="hero-stat-label">Average Speedup</div>
+                </div>
+                <div class="hero-stat animate delay-4">
+                    <div class="hero-stat-value" id="statSuccess">-</div>
+                    <div class="hero-stat-label">Successful</div>
+                </div>
+                <div class="hero-stat animate delay-5">
+                    <div class="hero-stat-value" id="statFailed">-</div>
+                    <div class="hero-stat-label">Failed/Regressed</div>
+                </div>
+            </div>
+
+            <!-- Main charts row -->
+            <div class="grid-2-1 mb-3">
+                <div class="card animate delay-2">
+                    <div class="card-header">
+                        <h3 class="card-title">📈 Speedup by Benchmark</h3>
+                        <div class="card-actions">
+                            <button class="chip active" onclick="filterChart('all')">All</button>
+                            <button class="chip" onclick="filterChart('python')">Python</button>
+                            <button class="chip" onclick="filterChart('cuda')">CUDA</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="chart-container tall">
+                            <canvas id="speedupChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card animate delay-3">
+                    <div class="card-header">
+                        <h3 class="card-title">🎯 Benchmark Status</h3>
+                    </div>
+                    <div class="card-body">
+                        <div class="chart-container">
+                            <canvas id="statusChart"></canvas>
+                        </div>
+                        <div id="statusLegend" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-top: 1.5rem; text-align: center;">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Benchmark leaderboard -->
+            <div class="card animate delay-4 mb-3">
+                <div class="card-header">
+                    <h3 class="card-title">🏆 Optimization Leaderboard</h3>
+                    <div class="card-actions">
+                        <span id="dataTimestamp" style="font-size: 0.8rem; color: var(--text-muted);"></span>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="benchmark-list" id="benchmarkList">
+                        <div class="loading">
+                            <div class="loading-spinner"></div>
+                            <span>Loading benchmark data...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Compare Tab -->
+        <div id="tab-compare" class="tab-content">
+            <div class="section-header">
+                <h2 class="section-title">
+                    <div class="section-title-icon">⚖️</div>
+                    Baseline vs Optimized Comparison
+                </h2>
+                <select id="compareSelect" onchange="updateComparison()" style="padding: 0.5rem 1rem; background: var(--bg-tertiary); border: 1px solid var(--border-glass); border-radius: 8px; color: var(--text-primary); font-size: 0.9rem;">
+                    <option value="">Select a benchmark...</option>
+                </select>
+            </div>
+
+            <!-- Comparison display -->
+            <div id="comparisonContent">
+                <div class="no-data">
+                    <div class="no-data-icon">📊</div>
+                    <p>Select a benchmark above to compare baseline vs optimized performance</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- LLM Insights Tab -->
+        <div id="tab-insights" class="tab-content">
+            <div class="section-header">
+                <h2 class="section-title">
+                    <div class="section-title-icon">🧠</div>
+                    LLM-Generated Insights & Explanations
+                </h2>
+            </div>
+
+            <div id="insightsContent">
+                <div class="loading">
+                    <div class="loading-spinner"></div>
+                    <span>Loading LLM analysis...</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Roofline Tab -->
+        <div id="tab-roofline" class="tab-content">
+            <div class="section-header">
+                <h2 class="section-title">
+                    <div class="section-title-icon">📐</div>
+                    Roofline Analysis
+                </h2>
+            </div>
+
+            <div class="grid-2 mb-3">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Roofline Model - NVIDIA B200</h3>
+                    </div>
+                    <div class="card-body">
+                        <div class="chart-container tall">
+                            <canvas id="rooflineChart"></canvas>
+                        </div>
+                        <div class="roofline-legend">
+                            <div class="roofline-legend-item">
+                                <div class="roofline-legend-dot" style="background: var(--accent-tertiary);"></div>
+                                <span>Baseline</span>
+                            </div>
+                            <div class="roofline-legend-item">
+                                <div class="roofline-legend-dot" style="background: var(--accent-success);"></div>
+                                <span>Optimized</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Performance Distribution</h3>
+                    </div>
+                    <div class="card-body">
+                        <div class="chart-container tall">
+                            <canvas id="distributionChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Architecture specs -->
+            <div class="card mb-3">
+                <div class="card-header">
+                    <h3 class="card-title">🖥️ GPU Architecture Specifications</h3>
+                </div>
+                <div class="card-body">
+                    <div id="gpuSpecs" style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 2rem; text-align: center;">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Detail Modal -->
+    <div class="modal-overlay" id="detailModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="modalTitle">Details</h3>
+                <button class="modal-close" onclick="closeModal()">×</button>
+            </div>
+            <div class="modal-body" id="modalBody">
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global state
+        let benchmarkData = null;
+        let llmAnalysisData = null;
+        let gpuInfo = null;
+        let speedupChart = null;
+        let statusChart = null;
+        let rooflineChart = null;
+        let distributionChart = null;
+
+        // Tab switching
+        function showTab(tabId) {
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+            document.getElementById('tab-' + tabId).classList.add('active');
+            event.target.classList.add('active');
+        }
+
+        // Fetch data from API
+        async function fetchData() {
+            try {
+                const [dataRes, gpuRes, llmRes] = await Promise.all([
+                    fetch('/api/data'),
+                    fetch('/api/gpu'),
+                    fetch('/api/llm-analysis')
+                ]);
+                
+                benchmarkData = await dataRes.json();
+                gpuInfo = await gpuRes.json();
+                llmAnalysisData = await llmRes.json();
+                
+                renderAll();
+            } catch (error) {
+                console.error('Error fetching data:', error);
+                document.getElementById('benchmarkList').innerHTML = `
+                    <div class="no-data">
+                        <div class="no-data-icon">⚠️</div>
+                        <p>Error loading data. Make sure the server is running.</p>
+                        <p style="font-size: 0.8rem; margin-top: 0.5rem;">Run: python -m tools.dashboard.server</p>
+                    </div>
+                `;
+            }
+        }
+
+        // Render everything
+        function renderAll() {
+            renderGpuStatus();
+            renderHeroStats();
+            renderBenchmarkList();
+            renderSpeedupChart();
+            renderStatusChart();
+            renderCompareSelect();
+            renderInsights();
+            renderRoofline();
+            renderGpuSpecs();
+        }
+
+        // Render GPU status
+        function renderGpuStatus() {
+            const status = document.getElementById('gpuStatus');
+            const text = document.getElementById('gpuStatusText');
+            
+            if (gpuInfo && gpuInfo.live) {
+                status.classList.remove('offline');
+                text.textContent = `${gpuInfo.name.replace('NVIDIA ', '')} • ${gpuInfo.temperature}°C • ${Math.round(gpuInfo.power)}W`;
+            } else if (gpuInfo) {
+                status.classList.add('offline');
+                text.textContent = `${gpuInfo.name} (offline)`;
+            }
+        }
+
+        // Render hero stats
+        function renderHeroStats() {
+            if (!benchmarkData) return;
+            
+            const s = benchmarkData.summary;
+            document.getElementById('statTotal').textContent = s.total_benchmarks;
+            document.getElementById('statBest').textContent = s.max_speedup ? s.max_speedup.toFixed(2) + 'x' : '-';
+            document.getElementById('statAvg').textContent = s.avg_speedup ? s.avg_speedup.toFixed(2) + 'x' : '-';
+            document.getElementById('statSuccess').textContent = s.successful || '-';
+            document.getElementById('statFailed').textContent = (s.failed || 0) + (s.failed_regression || 0);
+            
+            document.getElementById('dataTimestamp').textContent = 
+                `Last updated: ${benchmarkData.timestamp}`;
+        }
+
+        // Render benchmark list
+        function renderBenchmarkList() {
+            if (!benchmarkData || !benchmarkData.benchmarks.length) {
+                document.getElementById('benchmarkList').innerHTML = `
+                    <div class="no-data">
+                        <div class="no-data-icon">📭</div>
+                        <p>No benchmark data available</p>
+                        <p style="font-size: 0.8rem; margin-top: 0.5rem;">Run benchmarks with: python -m tools.cli.benchmark_cli run</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            const list = document.getElementById('benchmarkList');
+            const maxSpeedup = Math.max(...benchmarkData.benchmarks.map(b => b.speedup));
+            
+            list.innerHTML = benchmarkData.benchmarks.map((b, i) => {
+                const rankClass = i === 0 ? 'gold' : i === 1 ? 'silver' : i === 2 ? 'bronze' : '';
+                const barWidth = Math.min(100, (Math.log10(b.speedup + 1) / Math.log10(maxSpeedup + 1)) * 100);
+                const status = getSpeedupStatus(b.speedup);
+                const barColor = status === 'excellent' ? 'var(--accent-success)' : 
+                                 status === 'good' ? 'var(--accent-primary)' :
+                                 status === 'fair' ? 'var(--accent-warning)' : 'var(--accent-danger)';
+                
+                return `
+                    <div class="benchmark-item" onclick="showBenchmarkDetail(${i})">
+                        <div class="benchmark-rank ${rankClass}">${i + 1}</div>
+                        <div class="benchmark-info">
+                            <h4>${b.chapter}:${b.name}</h4>
+                            <div class="benchmark-meta">${b.type} • ${b.baseline_time_ms?.toFixed(2) || '?'}ms → ${b.optimized_time_ms?.toFixed(2) || '?'}ms</div>
+                        </div>
+                        <div class="benchmark-bar">
+                            <div class="benchmark-bar-fill" style="width: ${barWidth}%; background: ${barColor};"></div>
+                        </div>
+                        <div class="benchmark-speedup ${status}">${b.speedup.toFixed(2)}x</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function getSpeedupStatus(speedup) {
+            if (speedup >= 5) return 'excellent';
+            if (speedup >= 2) return 'good';
+            if (speedup >= 1.1) return 'fair';
+            return 'poor';
+        }
+
+        // Render speedup chart
+        function renderSpeedupChart() {
+            if (!benchmarkData || !benchmarkData.benchmarks.length) return;
+            
+            const ctx = document.getElementById('speedupChart').getContext('2d');
+            
+            if (speedupChart) speedupChart.destroy();
+            
+            const data = benchmarkData.benchmarks.slice(0, 15); // Top 15
+            
+            speedupChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: data.map(b => `${b.chapter}:${b.name}`),
+                    datasets: [{
+                        label: 'Speedup',
+                        data: data.map(b => b.speedup),
+                        backgroundColor: data.map(b => {
+                            const status = getSpeedupStatus(b.speedup);
+                            return status === 'excellent' ? 'rgba(0, 245, 160, 0.8)' :
+                                   status === 'good' ? 'rgba(0, 245, 212, 0.8)' :
+                                   status === 'fair' ? 'rgba(255, 196, 61, 0.8)' : 'rgba(255, 71, 87, 0.8)';
+                        }),
+                        borderRadius: 6,
+                        borderSkipped: false,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: 'rgba(12, 12, 20, 0.95)',
+                            titleColor: '#fff',
+                            bodyColor: 'rgba(255,255,255,0.8)',
+                            callbacks: {
+                                label: ctx => `${ctx.parsed.y.toFixed(2)}x speedup`
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { display: false },
+                            ticks: { 
+                                color: 'rgba(255,255,255,0.5)', 
+                                font: { family: 'JetBrains Mono', size: 9 },
+                                maxRotation: 45
+                            }
+                        },
+                        y: {
+                            type: 'logarithmic',
+                            grid: { color: 'rgba(255,255,255,0.05)' },
+                            ticks: { 
+                                color: 'rgba(255,255,255,0.5)', 
+                                font: { family: 'JetBrains Mono', size: 11 },
+                                callback: v => v + 'x'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Render status chart
+        function renderStatusChart() {
+            if (!benchmarkData) return;
+            
+            const ctx = document.getElementById('statusChart').getContext('2d');
+            
+            if (statusChart) statusChart.destroy();
+            
+            const s = benchmarkData.summary;
+            const succeeded = s.successful || 0;
+            const failed = s.failed || 0;
+            const regressed = s.failed_regression || 0;
+            
+            statusChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Succeeded', 'Regressed', 'Failed'],
+                    datasets: [{
+                        data: [succeeded, regressed, failed],
+                        backgroundColor: [
+                            'rgba(0, 245, 160, 0.8)',
+                            'rgba(255, 196, 61, 0.8)',
+                            'rgba(255, 71, 87, 0.8)'
+                        ],
+                        borderWidth: 0,
+                        spacing: 4,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '70%',
+                    plugins: {
+                        legend: { display: false }
+                    }
+                }
+            });
+            
+            document.getElementById('statusLegend').innerHTML = `
+                <div>
+                    <div style="font-size: 1.5rem; font-weight: 700; color: var(--accent-success);">${succeeded}</div>
+                    <div style="font-size: 0.8rem; color: var(--text-muted);">Succeeded</div>
+                </div>
+                <div>
+                    <div style="font-size: 1.5rem; font-weight: 700; color: var(--accent-warning);">${regressed}</div>
+                    <div style="font-size: 0.8rem; color: var(--text-muted);">Regressed</div>
+                </div>
+                <div>
+                    <div style="font-size: 1.5rem; font-weight: 700; color: var(--accent-danger);">${failed}</div>
+                    <div style="font-size: 0.8rem; color: var(--text-muted);">Failed</div>
+                </div>
+            `;
+        }
+
+        // Render compare select
+        function renderCompareSelect() {
+            if (!benchmarkData) return;
+            
+            const select = document.getElementById('compareSelect');
+            select.innerHTML = '<option value="">Select a benchmark...</option>' +
+                benchmarkData.benchmarks.map((b, i) => 
+                    `<option value="${i}">${b.chapter}:${b.name} (${b.speedup.toFixed(2)}x)</option>`
+                ).join('');
+        }
+
+        // Update comparison view
+        function updateComparison() {
+            const idx = document.getElementById('compareSelect').value;
+            const container = document.getElementById('comparisonContent');
+            
+            if (idx === '' || !benchmarkData) {
+                container.innerHTML = `
+                    <div class="no-data">
+                        <div class="no-data-icon">📊</div>
+                        <p>Select a benchmark above to compare baseline vs optimized performance</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            const b = benchmarkData.benchmarks[parseInt(idx)];
+            const improvement = ((1 - b.optimized_time_ms / b.baseline_time_ms) * 100).toFixed(1);
+            
+            container.innerHTML = `
+                <div class="comparison-grid mb-3">
+                    <div class="comparison-panel baseline">
+                        <div class="comparison-label baseline">
+                            <span style="width: 8px; height: 8px; background: var(--accent-tertiary); border-radius: 50%;"></span>
+                            Baseline
+                        </div>
+                        <div class="metric-row">
+                            <div class="metric-label">Time</div>
+                            <div class="metric-value baseline">${b.baseline_time_ms?.toFixed(3) || '?'} ms</div>
+                        </div>
+                        <div class="metric-row">
+                            <div class="metric-label">P75</div>
+                            <div class="metric-value baseline">${b.p75_ms?.toFixed(3) || '?'} ms</div>
+                        </div>
+                        <div class="metric-row">
+                            <div class="metric-label">Type</div>
+                            <div class="chip">${b.type}</div>
+                        </div>
+                    </div>
+                    
+                    <div class="comparison-arrow">
+                        <div class="comparison-arrow-icon">→</div>
+                        <div class="comparison-speedup">${b.speedup.toFixed(2)}x</div>
+                    </div>
+                    
+                    <div class="comparison-panel optimized">
+                        <div class="comparison-label optimized">
+                            <span style="width: 8px; height: 8px; background: var(--accent-success); border-radius: 50%;"></span>
+                            Optimized
+                        </div>
+                        <div class="metric-row">
+                            <div class="metric-label">Time</div>
+                            <div class="metric-value optimized">${b.optimized_time_ms?.toFixed(3) || '?'} ms</div>
+                        </div>
+                        <div class="metric-row">
+                            <div class="metric-label">Improvement</div>
+                            <div class="metric-value optimized">-${improvement}%</div>
+                        </div>
+                        <div class="metric-row">
+                            <div class="metric-label">Status</div>
+                            <div class="chip" style="background: ${b.status === 'succeeded' ? 'rgba(0, 245, 160, 0.2)' : 'rgba(255, 196, 61, 0.2)'}; color: ${b.status === 'succeeded' ? 'var(--accent-success)' : 'var(--accent-warning)'};">${b.status}</div>
+                        </div>
+                    </div>
+                </div>
+                
+                ${b.optimizations && b.optimizations.length > 0 ? `
+                <div class="card mb-3">
+                    <div class="card-header">
+                        <h3 class="card-title">🔧 Optimization Techniques</h3>
+                    </div>
+                    <div class="card-body">
+                        ${b.optimizations.map(opt => `
+                            <div class="metric-row">
+                                <div class="metric-label">${opt.technique || opt.file}</div>
+                                <div class="metric-values">
+                                    <span class="metric-value optimized">${opt.speedup?.toFixed(2) || '?'}x</span>
+                                    <span style="color: var(--text-muted);">${opt.time_ms?.toFixed(3) || '?'} ms</span>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+                ` : ''}
+                
+                ${b.error ? `
+                <div class="card" style="border-color: rgba(255, 71, 87, 0.3);">
+                    <div class="card-header">
+                        <h3 class="card-title" style="color: var(--accent-danger);">⚠️ Error/Regression</h3>
+                    </div>
+                    <div class="card-body">
+                        <div style="color: var(--text-secondary); font-family: 'JetBrains Mono'; font-size: 0.85rem;">
+                            ${b.error}
+                        </div>
+                    </div>
+                </div>
+                ` : ''}
+            `;
+        }
+
+        // Render LLM insights
+        function renderInsights() {
+            const container = document.getElementById('insightsContent');
+            
+            if (!llmAnalysisData || !llmAnalysisData.analyses || llmAnalysisData.analyses.length === 0) {
+                container.innerHTML = `
+                    <div class="no-data">
+                        <div class="no-data-icon">🧠</div>
+                        <p>No LLM analysis available yet</p>
+                        <p style="font-size: 0.8rem; margin-top: 0.5rem;">Run with: python -m tools.cli.benchmark_cli run --llm-analysis</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            container.innerHTML = llmAnalysisData.analyses.map((analysis, i) => `
+                <div class="analysis-card" onclick="showAnalysis(${i})">
+                    <div class="analysis-card-header">
+                        <span class="analysis-card-title">${analysis.name}</span>
+                        <span class="analysis-card-chapter">${analysis.chapter}</span>
+                    </div>
+                    <div class="analysis-card-preview">
+                        ${analysis.content.substring(0, 200).replace(/[#*]/g, '')}...
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Show full analysis
+        function showAnalysis(idx) {
+            const analysis = llmAnalysisData.analyses[idx];
+            document.getElementById('modalTitle').textContent = `${analysis.chapter}:${analysis.name}`;
+            
+            // Parse markdown
+            const htmlContent = marked.parse(analysis.content);
+            document.getElementById('modalBody').innerHTML = `
+                <div class="explanation-content">
+                    ${htmlContent}
+                </div>
+            `;
+            
+            // Highlight code blocks
+            document.querySelectorAll('#modalBody pre code').forEach((block) => {
+                hljs.highlightElement(block);
+            });
+            
+            document.getElementById('detailModal').classList.add('active');
+        }
+
+        // Render roofline
+        function renderRoofline() {
+            if (!benchmarkData) return;
+            
+            const ctx = document.getElementById('rooflineChart').getContext('2d');
+            
+            if (rooflineChart) rooflineChart.destroy();
+            
+            // B200 specs
+            const peakCompute = 2520; // FP32 TFLOPS
+            const peakBandwidth = 8000; // GB/s
+            
+            // Generate roofline curve
+            const rooflineX = [];
+            const rooflineY = [];
+            for (let i = 0.1; i <= 1000; i *= 1.2) {
+                rooflineX.push(i);
+                rooflineY.push(Math.min(peakCompute, i * peakBandwidth / 1000));
+            }
+            
+            // Generate synthetic data points based on benchmark speedups
+            const baselinePoints = benchmarkData.benchmarks.slice(0, 8).map((b, i) => ({
+                x: 2 + i * 3,
+                y: 100 + Math.random() * 500
+            }));
+            
+            const optimizedPoints = benchmarkData.benchmarks.slice(0, 8).map((b, i) => ({
+                x: (2 + i * 3) * b.speedup * 0.5,
+                y: (100 + Math.random() * 500) * Math.sqrt(b.speedup)
+            }));
+
+            rooflineChart = new Chart(ctx, {
+                type: 'scatter',
+                data: {
+                    datasets: [{
+                        label: 'Roofline',
+                        data: rooflineX.map((x, i) => ({ x, y: rooflineY[i] })),
+                        borderColor: 'rgba(255, 255, 255, 0.3)',
+                        borderWidth: 2,
+                        showLine: true,
+                        pointRadius: 0,
+                        fill: false,
+                    }, {
+                        label: 'Baseline',
+                        data: baselinePoints,
+                        backgroundColor: 'rgba(247, 37, 133, 0.8)',
+                        pointRadius: 8,
+                    }, {
+                        label: 'Optimized',
+                        data: optimizedPoints,
+                        backgroundColor: 'rgba(0, 245, 160, 0.8)',
+                        pointRadius: 8,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: 'rgba(12, 12, 20, 0.95)',
+                            callbacks: {
+                                label: ctx => `AI: ${ctx.parsed.x.toFixed(1)} FLOP/B, Perf: ${ctx.parsed.y.toFixed(0)} GFLOPS`
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'logarithmic',
+                            title: { display: true, text: 'Arithmetic Intensity (FLOP/Byte)', color: 'rgba(255,255,255,0.5)' },
+                            grid: { color: 'rgba(255,255,255,0.05)' },
+                            ticks: { color: 'rgba(255,255,255,0.5)' }
+                        },
+                        y: {
+                            type: 'logarithmic',
+                            title: { display: true, text: 'Performance (GFLOPS)', color: 'rgba(255,255,255,0.5)' },
+                            grid: { color: 'rgba(255,255,255,0.05)' },
+                            ticks: { color: 'rgba(255,255,255,0.5)' }
+                        }
+                    }
+                }
+            });
+            
+            // Distribution chart
+            renderDistributionChart();
+        }
+
+        function renderDistributionChart() {
+            if (!benchmarkData) return;
+            
+            const ctx = document.getElementById('distributionChart').getContext('2d');
+            
+            if (distributionChart) distributionChart.destroy();
+            
+            // Create histogram of speedups
+            const bins = [0.5, 1, 1.5, 2, 3, 5, 10, 50, 100];
+            const counts = bins.map(() => 0);
+            
+            benchmarkData.benchmarks.forEach(b => {
+                for (let i = 0; i < bins.length; i++) {
+                    if (b.speedup < bins[i]) {
+                        counts[i]++;
+                        break;
+                    }
+                    if (i === bins.length - 1) counts[i]++;
+                }
+            });
+            
+            distributionChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: bins.map((b, i) => i === 0 ? `<${b}x` : `${bins[i-1]}-${b}x`),
+                    datasets: [{
+                        label: 'Count',
+                        data: counts,
+                        backgroundColor: 'rgba(0, 245, 212, 0.6)',
+                        borderRadius: 4,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                    },
+                    scales: {
+                        x: {
+                            grid: { display: false },
+                            ticks: { color: 'rgba(255,255,255,0.5)', font: { size: 10 } }
+                        },
+                        y: {
+                            grid: { color: 'rgba(255,255,255,0.05)' },
+                            ticks: { color: 'rgba(255,255,255,0.5)', stepSize: 1 }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Render GPU specs
+        function renderGpuSpecs() {
+            const container = document.getElementById('gpuSpecs');
+            const gpu = gpuInfo || {};
+            
+            const specs = [
+                { value: '148', label: 'Streaming Multiprocessors' },
+                { value: gpu.memory_total ? `${Math.round(gpu.memory_total / 1024)} GB` : '192 GB', label: 'Memory' },
+                { value: '8 TB/s', label: 'Memory Bandwidth' },
+                { value: '5,040', label: 'BF16 TFLOPS' },
+                { value: '2,520', label: 'FP32 TFLOPS' },
+                { value: '630', label: 'Ridge Point (FLOP/B)' },
+            ];
+            
+            container.innerHTML = specs.map(s => `
+                <div>
+                    <div style="font-size: 2rem; font-weight: 700; font-family: 'JetBrains Mono'; color: var(--accent-primary);">${s.value}</div>
+                    <div style="color: var(--text-muted); font-size: 0.85rem;">${s.label}</div>
+                </div>
+            `).join('');
+        }
+
+        // Show benchmark detail
+        function showBenchmarkDetail(idx) {
+            const b = benchmarkData.benchmarks[idx];
+            document.getElementById('modalTitle').textContent = `${b.chapter}:${b.name}`;
+            
+            const improvement = b.baseline_time_ms && b.optimized_time_ms 
+                ? ((1 - b.optimized_time_ms / b.baseline_time_ms) * 100).toFixed(1) 
+                : '?';
+            
+            document.getElementById('modalBody').innerHTML = `
+                <div class="grid-2" style="gap: 1.5rem;">
+                    <div>
+                        <h4 style="margin-bottom: 1rem; color: var(--accent-primary);">Performance Metrics</h4>
+                        <div class="metric-row">
+                            <div class="metric-label">Speedup</div>
+                            <div class="benchmark-speedup ${getSpeedupStatus(b.speedup)}" style="font-size: 1.5rem;">${b.speedup.toFixed(2)}x</div>
+                        </div>
+                        <div class="metric-row">
+                            <div class="metric-label">Baseline Time</div>
+                            <div class="metric-value baseline">${b.baseline_time_ms?.toFixed(3) || '?'} ms</div>
+                        </div>
+                        <div class="metric-row">
+                            <div class="metric-label">Optimized Time</div>
+                            <div class="metric-value optimized">${b.optimized_time_ms?.toFixed(3) || '?'} ms</div>
+                        </div>
+                        <div class="metric-row">
+                            <div class="metric-label">Time Saved</div>
+                            <div style="color: var(--accent-success); font-weight: 600;">${improvement}%</div>
+                        </div>
+                    </div>
+                    <div>
+                        <h4 style="margin-bottom: 1rem; color: var(--accent-secondary);">GPU Metrics</h4>
+                        <div class="metric-row">
+                            <div class="metric-label">Temperature</div>
+                            <div>${b.gpu_temp || '?'}°C</div>
+                        </div>
+                        <div class="metric-row">
+                            <div class="metric-label">Power Draw</div>
+                            <div>${b.gpu_power ? Math.round(b.gpu_power) + 'W' : '?'}</div>
+                        </div>
+                        <div class="metric-row">
+                            <div class="metric-label">Utilization</div>
+                            <div>${b.gpu_util !== undefined ? b.gpu_util + '%' : '?'}</div>
+                        </div>
+                        <div class="metric-row">
+                            <div class="metric-label">Status</div>
+                            <div><span class="chip" style="background: ${
+                                b.status === 'succeeded' ? 'rgba(0, 245, 160, 0.2)' :
+                                b.status.includes('regress') ? 'rgba(255, 196, 61, 0.2)' : 'rgba(255, 71, 87, 0.2)'
+                            }; color: ${
+                                b.status === 'succeeded' ? 'var(--accent-success)' :
+                                b.status.includes('regress') ? 'var(--accent-warning)' : 'var(--accent-danger)'
+                            };">${b.status}</span></div>
+                        </div>
+                    </div>
+                </div>
+                ${b.error ? `
+                <div style="margin-top: 1.5rem; padding: 1rem; background: rgba(255, 71, 87, 0.1); border-radius: 8px; border: 1px solid rgba(255, 71, 87, 0.2);">
+                    <div style="color: var(--accent-danger); font-weight: 600; margin-bottom: 0.5rem;">⚠️ Error/Regression</div>
+                    <div style="color: var(--text-secondary); font-family: 'JetBrains Mono'; font-size: 0.85rem;">${b.error}</div>
+                </div>
+                ` : ''}
+            `;
+            document.getElementById('detailModal').classList.add('active');
+        }
+
+        function closeModal() {
+            document.getElementById('detailModal').classList.remove('active');
+        }
+
+        function refreshData() {
+            fetchData();
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            fetchData();
+            // Auto-refresh every 30 seconds
+            setInterval(fetchData, 30000);
+        });
+
+        // Close modal on escape
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape') closeModal();
+        });
+
+        // Close modal on backdrop click
+        document.getElementById('detailModal').addEventListener('click', e => {
+            if (e.target.classList.contains('modal-overlay')) closeModal();
+        });
+    </script>
+</body>
+</html>

@@ -328,3 +328,4 @@ class _PlaceholderBenchmark(BaseBenchmark):
 def get_benchmark() -> BaseBenchmark:
     return _PlaceholderBenchmark()
 
+

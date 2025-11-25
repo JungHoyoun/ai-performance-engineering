@@ -5,8 +5,47 @@ Provides functions to discover benchmarks across chapters and CUDA benchmarks.
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
+
+
+def _has_get_benchmark(file_path: Path) -> bool:
+    """Quick check if a Python file has get_benchmark() function.
+    
+    Does a simple text search without importing the module.
+    """
+    try:
+        source = file_path.read_text()
+        return "def get_benchmark" in source
+    except Exception:
+        return False
+
+
+def validate_benchmark_file(file_path: Path, warn: bool = True) -> bool:
+    """Validate that a benchmark file has get_benchmark().
+    
+    Args:
+        file_path: Path to benchmark file
+        warn: If True, emit a warning for missing get_benchmark()
+        
+    Returns:
+        True if file has get_benchmark(), False otherwise
+    """
+    if not file_path.suffix == ".py":
+        return True  # Skip non-Python files
+    
+    has_fn = _has_get_benchmark(file_path)
+    
+    if not has_fn and warn:
+        warnings.warn(
+            f"Benchmark file '{file_path.name}' is missing get_benchmark() function. "
+            f"Add: def get_benchmark() -> BaseBenchmark: return YourClass()",
+            UserWarning,
+            stacklevel=2
+        )
+    
+    return has_fn
 
 LAB_NAMES = {
     "fullstack_cluster",
@@ -112,11 +151,17 @@ def normalize_chapter_token(token: str) -> str:
     )
 
 
-def discover_benchmarks(chapter_dir: Path) -> List[Tuple[Path, List[Path], str]]:
+def discover_benchmarks(
+    chapter_dir: Path, 
+    validate: bool = False,
+    warn_missing: bool = False
+) -> List[Tuple[Path, List[Path], str]]:
     """Discover benchmark modules by looking for baseline_*.py files with matching optimized_*.py.
     
     Args:
         chapter_dir: Path to chapter directory (e.g., Path('ch16'))
+        validate: If True, check that files have get_benchmark() and skip those that don't
+        warn_missing: If True, emit warnings for files missing get_benchmark()
         
     Returns:
         List of tuples: (baseline_path, [optimized_paths], example_name)
@@ -131,6 +176,12 @@ def discover_benchmarks(chapter_dir: Path) -> List[Tuple[Path, List[Path], str]]
     }
     
     for baseline_file in baseline_files:
+        # Validate baseline file if requested
+        if validate or warn_missing:
+            baseline_valid = validate_benchmark_file(baseline_file, warn=warn_missing)
+            if validate and not baseline_valid:
+                continue  # Skip invalid baseline files
+        
         # Extract example name using the entire suffix after "baseline_"
         # This preserves variants like "moe_dense" instead of collapsing everything to "moe".
         example_name = baseline_file.stem.replace("baseline_", "")
@@ -141,6 +192,12 @@ def discover_benchmarks(chapter_dir: Path) -> List[Tuple[Path, List[Path], str]]
         # Pattern 1: optimized_{name}_*.{ext} (e.g., optimized_moe_sparse.py)
         pattern1 = chapter_dir / f"optimized_{example_name}_*{ext}"
         for opt_path in pattern1.parent.glob(pattern1.name):
+            # Validate optimized file if requested
+            if validate or warn_missing:
+                opt_valid = validate_benchmark_file(opt_path, warn=warn_missing)
+                if validate and not opt_valid:
+                    continue  # Skip invalid optimized files
+            
             suffix = opt_path.stem.replace(f"optimized_{example_name}_", "", 1)
             candidate_name = f"{example_name}_{suffix}"
             if candidate_name in example_names:
@@ -151,7 +208,15 @@ def discover_benchmarks(chapter_dir: Path) -> List[Tuple[Path, List[Path], str]]
         # Pattern 2: optimized_{name}.{ext} (e.g., optimized_moe.py / optimized_moe.cu)
         pattern2 = chapter_dir / f"optimized_{example_name}{ext}"
         if pattern2.exists():
-            optimized_files.append(pattern2)
+            # Validate optimized file if requested
+            if validate or warn_missing:
+                opt_valid = validate_benchmark_file(pattern2, warn=warn_missing)
+                if validate and not opt_valid:
+                    pass  # Don't add invalid file
+                else:
+                    optimized_files.append(pattern2)
+            else:
+                optimized_files.append(pattern2)
         
         if optimized_files:
             pairs.append((baseline_file, optimized_files, example_name))

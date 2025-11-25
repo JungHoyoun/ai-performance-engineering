@@ -1,3 +1,18 @@
+"""Disaggregated Inference with Speculative Decoding Demo.
+
+Chapter 15: Disaggregated Inference
+
+This file demonstrates disaggregated prefill/decode architecture, which
+naturally combines with speculative decoding for improved throughput.
+
+NOTE: Speculative decoding is covered in depth in Chapter 18. This file
+provides a working integration as a forward reference. For the core
+speculative decoding algorithms and optimizations, see:
+- ch18/optimized_speculative_decode.py (EAGLE-style draft + verify)
+- ch18/optimized_vllm_decode_graphs.py (CUDA graph optimization)
+- ch18/run_vllm_decoder.py (production vLLM integration)
+"""
+
 import pathlib
 import sys
 

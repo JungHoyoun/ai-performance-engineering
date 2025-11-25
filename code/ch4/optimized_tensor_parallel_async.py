@@ -20,7 +20,13 @@ import os
 # Add common to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from common.python.benchmark_harness import BenchmarkHarness, BenchmarkConfig, BenchmarkMode
+from common.python.benchmark_harness import (
+    BaseBenchmark,
+    BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
+)
 from common.python.logger import get_logger
 
 logger = get_logger(__name__)
@@ -229,4 +235,70 @@ if __name__ == "__main__":
     print(f"{'='*60}\n")
     print(f"Expected: ~20-30% faster than baseline via overlap")
     print(f"Launch with: torchrun --nproc_per_node=2 {__file__}")
+
+
+#============================================================================
+# Benchmark Harness Integration
+#============================================================================
+
+class TensorParallelAsyncBenchmark(BaseBenchmark):
+    """Benchmark harness wrapper for async tensor parallelism."""
+
+    def __init__(self):
+        super().__init__()
+        self.tp = None
+        self.batch_size = 8
+        self.seq_length = 2048
+        self.hidden_size = 4096
+        self._last = 0.0
+        
+        tokens = self.batch_size * self.seq_length
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
+
+    def setup(self) -> None:
+        """Setup: Initialize async tensor parallelism."""
+        torch.manual_seed(42)
+        
+        self.tp = OptimizedTensorParallelAsync(
+            batch_size=self.batch_size,
+            seq_length=self.seq_length,
+            hidden_size=self.hidden_size,
+            num_layers=4,
+        )
+        self.tp.setup()
+
+    def benchmark_fn(self) -> None:
+        """Benchmark: Async TP forward pass."""
+        if self.tp is not None:
+            self._last = self.tp.run()
+        self._synchronize()
+
+    def teardown(self) -> None:
+        """Teardown: Clean up resources."""
+        if self.tp is not None:
+            self.tp.cleanup()
+            self.tp = None
+        torch.cuda.empty_cache()
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(iterations=10, warmup=3)
+    
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
+    def get_custom_metrics(self) -> Optional[dict]:
+        return {"tensor_parallel_async.overlap": True}
+
+    def validate_result(self) -> Optional[str]:
+        if self.tp is None:
+            return "Tensor parallelism not initialized"
+        return None
+
+
+def get_benchmark() -> BaseBenchmark:
+    """Factory function for benchmark discovery."""
+    return TensorParallelAsyncBenchmark()
 

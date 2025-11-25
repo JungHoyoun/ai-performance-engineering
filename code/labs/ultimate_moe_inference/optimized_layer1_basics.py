@@ -70,3 +70,4 @@ if __name__ == "__main__":
     
     print(f"\nLayer 1 (Ch1-6): {result.timing.mean_ms:.2f} ms" if result.timing else "No timing")
 
+

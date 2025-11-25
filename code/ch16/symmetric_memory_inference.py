@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Symmetric Memory Inference Patterns for 8x B200.
 
+Chapter 16: FP8 KV Cache and Symmetric Memory
+
 Extends the inference serving stack with PyTorch 2.10 symmetric memory
 primitives (backed by NVSHMEM on Blackwell) to achieve <5 µs cross-GPU
 access for latency-sensitive workloads.
@@ -9,6 +11,12 @@ Patterns:
 1. Distributed KV cache pages backed by symmetric memory buffers
 2. Multi-model serving with shared weight snapshots and hot-swapping
 3. Speculative decoding coordinator with low-latency cross-model sync
+
+NOTE: Pattern 3 (speculative decoding) is a forward reference to Chapter 18.
+This demonstrates the symmetric memory infrastructure for cross-GPU coordination;
+for complete speculative decoding implementation details, see:
+- ch18/optimized_speculative_decode.py (draft model + verification logic)
+- ch18/optimized_vllm_decode_graphs.py (CUDA graph optimization)
 
 All demos degrade to NCCL-based fallbacks when symmetric memory is not
 available so the file can be executed on developer machines.

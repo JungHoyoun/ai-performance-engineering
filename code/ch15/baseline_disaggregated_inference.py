@@ -1,4 +1,14 @@
-"""Baseline CLI hook for the disaggregated inference walkthrough."""
+"""Baseline CLI hook for the disaggregated inference walkthrough.
+
+Chapter 15: Disaggregated Inference
+
+NOTE: This file uses speculative decoding concepts (speculative_window parameter).
+Speculative decoding is covered in depth in Chapter 18. Here we demonstrate
+the basic pattern for disaggregated prefill/decode in a multi-GPU context.
+For full speculative decoding with draft models and token verification, see:
+- ch18/optimized_speculative_decode.py
+- ch18/optimized_vllm_decode_graphs.py
+"""
 
 from __future__ import annotations
 

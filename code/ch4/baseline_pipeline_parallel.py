@@ -7,7 +7,7 @@ Demonstrates basic pipeline parallelism with sequential micro-batches.
 import torch
 import torch.nn as nn
 import torch.distributed as dist
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import sys
 from pathlib import Path
 import time
@@ -16,7 +16,13 @@ import os
 # Add common to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from common.python.benchmark_harness import BenchmarkHarness, BenchmarkConfig, BenchmarkMode
+from common.python.benchmark_harness import (
+    BaseBenchmark,
+    BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
+)
 from common.python.logger import get_logger
 
 logger = get_logger(__name__)
@@ -247,4 +253,70 @@ if __name__ == "__main__":
     print(f"Mean time: {result['mean_time_ms']:.2f} ms")
     print(f"{'='*60}\n")
     print(f"Launch with: torchrun --nproc_per_node=2 {__file__}")
+
+
+#============================================================================
+# Benchmark Harness Integration
+#============================================================================
+
+class PipelineParallelBenchmark(BaseBenchmark):
+    """Benchmark harness wrapper for baseline pipeline parallelism."""
+
+    def __init__(self):
+        super().__init__()
+        self.pp = None
+        self.batch_size = 32
+        self.seq_length = 2048
+        self.hidden_size = 4096
+        self._last = 0.0
+        
+        tokens = self.batch_size * self.seq_length
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
+
+    def setup(self) -> None:
+        """Setup: Initialize baseline pipeline parallelism."""
+        torch.manual_seed(42)
+        self.pp = BaselinePipelineParallel(
+            batch_size=self.batch_size,
+            seq_length=self.seq_length,
+            hidden_size=self.hidden_size,
+            num_layers=8,
+            num_micro_batches=4,
+        )
+        self.pp.setup()
+
+    def benchmark_fn(self) -> None:
+        """Benchmark: Baseline PP forward pass."""
+        if self.pp is not None:
+            self._last = self.pp.run()
+        self._synchronize()
+
+    def teardown(self) -> None:
+        """Teardown: Clean up resources."""
+        if self.pp is not None:
+            self.pp.cleanup()
+            self.pp = None
+        torch.cuda.empty_cache()
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(iterations=10, warmup=3)
+    
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
+    def get_custom_metrics(self) -> Optional[dict]:
+        return {"pipeline_parallel.schedule": "gpipe"}
+
+    def validate_result(self) -> Optional[str]:
+        if self.pp is None:
+            return "Pipeline parallelism not initialized"
+        return None
+
+
+def get_benchmark() -> BaseBenchmark:
+    """Factory function for benchmark discovery."""
+    return PipelineParallelBenchmark()
 

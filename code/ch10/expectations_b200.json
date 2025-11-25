@@ -385,22 +385,22 @@
       "metadata": {
         "best_optimization": "optimized_tmem_triple_overlap",
         "best_optimization_file": "optimized_tmem_triple_overlap.py",
-        "best_optimization_speedup": 63.70479999999999,
+        "best_optimization_speedup": 28.099516666666663,
         "best_optimization_time_ms": 0.04,
-        "git_commit": "31bb5bdcfabc2dd956bb8ce8988785b9f6559ed8",
-        "updated_at": "2025-11-25T06:26:57.262068"
+        "git_commit": "93e7c34588cfab78bdfc5128a3b7c3f3e4254747",
+        "updated_at": "2025-11-25T11:19:51.190157"
       },
       "metrics": {
-        "baseline_p75_ms": 2.547309,
-        "baseline_throughput.latency_ms": 2.548192,
-        "baseline_throughput.requests_per_s": 392.43510693071795,
-        "baseline_time_ms": 2.548192,
+        "baseline_p75_ms": 1.102739,
+        "baseline_throughput.latency_ms": 1.1239806666666665,
+        "baseline_throughput.requests_per_s": 889.6950184789657,
+        "baseline_time_ms": 1.1239806666666665,
         "best_optimized_p75_ms": 0.04,
-        "best_optimized_speedup": 63.70479999999999,
+        "best_optimized_speedup": 28.099516666666663,
         "best_optimized_throughput.latency_ms": 0.043333333333333335,
         "best_optimized_throughput.requests_per_s": 23076.923076923078,
         "best_optimized_time_ms": 0.043333333333333335,
-        "best_speedup": 63.70479999999999
+        "best_speedup": 28.099516666666663
       },
       "type": "python"
     },

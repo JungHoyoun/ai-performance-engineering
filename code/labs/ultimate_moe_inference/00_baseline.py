@@ -69,3 +69,4 @@ __all__ = ["BaselineUltimateInference", "InferenceConfig", "get_benchmark"]
 if __name__ == "__main__":
     main()
 
+
