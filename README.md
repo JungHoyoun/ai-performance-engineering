@@ -264,9 +264,8 @@ Recent sessions:
 
 ## Contributing
 
-Contributions are welcome! See `CONTRIBUTING.md` for guidelines on code,
-documentation, and performance improvements.
+Contributions are welcome! See `CONTRIBUTING.md` for guidelines on code, documentation, and performance improvements.
 
 ## License
 
-MIT License – see `LICENSE` for details.
+Apache 2.0 License – see `LICENSE` for details.
