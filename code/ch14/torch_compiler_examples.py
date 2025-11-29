@@ -32,8 +32,7 @@ from arch_config import prefer_sdpa_backends
 
 from extras.ch14.torch_compile_large_model import create_model
 
-# Always run full demo by default; quick mode removed to avoid silent behavior changes.
-QUICK_MODE = False
+# Quick mode removed; always run full demo
 
 
 def configure_for_blackwell_peak_performance():
@@ -128,19 +127,7 @@ def benchmark_with_proper_warmup(model, x, name):
             with sdpa_ctx_factory():
                 return model(x)
     
-    if QUICK_MODE:
-        torch.cuda.synchronize()
-        for _ in range(2):
-            run_model()
-        torch.cuda.synchronize()
-        repeats = 5
-        start = time.time()
-        for _ in range(repeats):
-            run_model()
-        torch.cuda.synchronize()
-        avg_time_ms = (time.time() - start) * 1000.0 / repeats
-    else:
-        avg_time_ms = triton.testing.do_bench(run_model)
+    avg_time_ms = triton.testing.do_bench(run_model)
     throughput = 1000.0 / avg_time_ms  # iter/s
     
     print(f"  Average time: {avg_time_ms:.3f} ms")
@@ -177,9 +164,6 @@ def main():
     # 4. Create input (larger for better performance)
     batch_size = 16
     seq_len = 2048
-    if QUICK_MODE:
-        batch_size = 8
-        seq_len = 1024
     d_model = config['d_model']
     x = torch.randn(batch_size, seq_len, d_model, device='cuda', dtype=torch.bfloat16)
     
@@ -203,7 +187,7 @@ def main():
     with torch.no_grad():
         for i in range(warmup_iters):
             _ = model_compiled(x)
-            if not QUICK_MODE and (i + 1) % 5 == 0:
+            if (i + 1) % 5 == 0:
                 print(f"  Warmup iteration {i + 1}/{warmup_iters}...")
     torch.cuda.synchronize()
     print(" Warmup complete! Now benchmarking...")
@@ -247,7 +231,7 @@ def main():
     print("\n" + "=" * 80)
     print("KEY LEARNINGS FOR BOOK")
     print("=" * 80)
-    print("1. Warmup is still required—10 iterations baseline (3 in quick mode)")
+    print("1. Warmup is still required—10 iterations baseline")
     print("2. TF32 must be enabled (e.g., torch.set_float32_matmul_precision('high'))")
     print("3. fullgraph=True gives best performance (if possible)")
     print("4. CUDA graph trees provide additional 15-20% speedup")
@@ -264,6 +248,5 @@ if __name__ == "__main__":
     # Exit with appropriate code
     # Accept any speedup (1.0x+) as success - torch.compile doesn't always
     # show dramatic gains, especially when the baseline is already well-optimized
-    # In quick mode, allow more performance variability due to fewer warmup iterations
-    SUCCESS_THRESHOLD = 0.90 if QUICK_MODE else 0.98
+    SUCCESS_THRESHOLD = 0.98
     sys.exit(0 if speedup >= SUCCESS_THRESHOLD else 1)
