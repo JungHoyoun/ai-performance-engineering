@@ -457,17 +457,6 @@ python -m cli.aisp bench scaling
 python -m cli.aisp bench analyze
 ```
 
-### GPU Pricing
-
-| GPU | Rate | Use Case |
-|-----|------|----------|
-| B200 | $5.00/hr | Latest Blackwell |
-| H100 | $3.50/hr | Production inference |
-| A100 | $2.00/hr | Training/inference |
-| L40S | $1.50/hr | Inference |
-| A10G | $1.00/hr | Cost-optimized |
-| T4 | $0.50/hr | Budget inference |
-
 ### API Endpoints
 
 The dashboard server exposes REST APIs for programmatic access:
