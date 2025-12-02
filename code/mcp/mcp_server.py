@@ -8,7 +8,7 @@ Consolidated to ~73 tools (reduced from 86, preserving all unique functionality)
 Usage:
     # Start the MCP server
     python -m mcp.mcp_server
-    
+
     # Or use the aisp command
     aisp mcp serve
 
@@ -109,6 +109,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, TypedDict, NotReq
 CODE_ROOT = Path(__file__).resolve().parent.parent
 if str(CODE_ROOT) not in sys.path:
     sys.path.insert(0, str(CODE_ROOT))
+
 
 # MCP Protocol Types
 @dataclass
@@ -239,7 +240,8 @@ _EXPECTATION_OVERRIDES: Dict[str, str] = {
     "aisp_benchmark_export": "Exports existing benchmark JSON to csv/markdown/json; writes to the chosen output file.",
     "aisp_benchmark_compare_runs": "Diffs two benchmark JSON files; CPU-bound and quick, writes only if an output is specified.",
     "aisp_profile_nsys": "Calls Nsight Systems; requires nsys installed and writes .nsys-rep into output_dir. Slow/interactive; run aisp_status or aisp_triage first. Default preset is full; set preset=light explicitly to shrink traces.",
-    "aisp_profile_ncu": "Calls Nsight Compute; requires ncu installed and writes .ncu-rep into output_dir. Slow/interactive; run aisp_status or aisp_triage first. Defaults to memory_bound metric set; opt into heavier modes explicitly.",    "aisp_profile_compare": "Generates flame graph comparison; parses NSYS reports and may traverse multiple files; allow extra runtime.",
+    "aisp_profile_ncu": "Calls Nsight Compute; requires ncu installed and writes .ncu-rep into output_dir. Slow/interactive; run aisp_status or aisp_triage first. Defaults to memory_bound metric set; opt into heavier modes explicitly.",
+    "aisp_profile_compare": "Generates flame graph comparison; parses NSYS reports and may traverse multiple files; allow extra runtime.",
     "aisp_hw_speed": "Runs GPU/host micro-benchmarks; stresses hardware briefly. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
     "aisp_hw_roofline": "Runs roofline micro-benchmark; stresses memory subsystem briefly. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
     "aisp_hw_disk": "Runs disk I/O hardware benchmark; writes temporary files to tmp_dir. Supports precheck_only/dry_run/timeout_seconds.",
@@ -247,6 +249,7 @@ _EXPECTATION_OVERRIDES: Dict[str, str] = {
     "aisp_hw_cache": "Runs memory hierarchy hardware benchmark; exercises GPU cache. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
     "aisp_hw_tc": "Runs tensor core hardware benchmark; exercises GPU math units. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
 }
+
 
 def _property_implies_output(prop: str) -> bool:
     """Detect property names that imply writing to disk."""
@@ -469,13 +472,13 @@ def make_error(
     **extra: Any
 ) -> Dict[str, Any]:
     """Build standardized error response with optional context attachment.
-    
+
     Args:
         msg: The error message.
         include_context: Whether to attach system context.
         context_level: Level of context to attach ("summary" or "full").
         **extra: Additional fields to include in the error response.
-    
+
     Returns:
         A normalized error dict with success=False and optional context.
     """
@@ -489,12 +492,12 @@ def ensure_result(
     context_level: str
 ) -> Dict[str, Any]:
     """Normalize result and optionally attach context - single exit point for handlers.
-    
+
     Args:
         result: The raw result dict from a tool handler.
         include_context: Whether to attach system context.
         context_level: Level of context to attach.
-    
+
     Returns:
         Normalized result with success flag and optional context.
     """
@@ -976,7 +979,11 @@ def tool_system_dependencies(params: Dict[str, Any]) -> Dict[str, Any]:
                 "enum": ["none", "minimal", "deep_dive", "roofline"],
                 "default": "minimal"
             },
-            "llm_analysis": {"type": "boolean"},
+            "llm_analysis": {
+                "type": "boolean",
+                "description": "Enable LLM-powered analysis for benchmarks with <1.1x speedup. DISABLED BY DEFAULT (false) to avoid API costs. Only set to true when user explicitly requests: 'with LLM analysis', 'use AI insights', 'analyze with AI', 'get AI recommendations', or similar phrases. If user doesn't mention LLM/AI analysis, leave this false.",
+                "default": False
+            },
             "apply_patches": {"type": "boolean"},
             "precheck_only": {
                 "type": "boolean",
@@ -1004,11 +1011,11 @@ def tool_system_dependencies(params: Dict[str, Any]) -> Dict[str, Any]:
 )
 def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
     targets = params.get("targets") or []
-    
+
     # Normalize profile - uses _COMMON_ALIASES for most common mistakes
     raw_profile = params.get("profile") or "minimal"
     profile = normalize_param("profile", raw_profile, "minimal")
-    
+
     # Validate profile value
     valid_profiles = ["none", "minimal", "deep_dive", "roofline"]
     if profile not in valid_profiles:
@@ -1081,7 +1088,7 @@ def _benchmark_next_steps(result: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Generate actionable next steps after benchmark completion."""
     steps = []
     returncode = result.get("returncode", 0)
-    
+
     if returncode == 0:
         # Success path
         steps.append({
@@ -1118,7 +1125,7 @@ def _benchmark_next_steps(result: Dict[str, Any]) -> List[Dict[str, Any]]:
             "tool": "aisp_analyze_bottlenecks",
             "reason": "Identify what might be causing issues"
         })
-    
+
     return steps
 
 
@@ -1375,11 +1382,11 @@ def tool_benchmark_compare_runs(params: Dict[str, Any]) -> Dict[str, Any]:
 def tool_benchmark_triage(params: Dict[str, Any]) -> Dict[str, Any]:
     """Analyze benchmark results and provide actionable recommendations."""
     from core.analysis.performance_analyzer import PerformanceAnalyzer, load_benchmark_data
-    
+
     include_context, context_level = extract_context_opts(params)
     data_file = params.get("data_file")
     baseline_file = params.get("baseline_file")
-    
+
     # Find latest benchmark results if not specified
     data_path = Path(data_file) if data_file else None
     if not data_path:
@@ -1393,7 +1400,7 @@ def tool_benchmark_triage(params: Dict[str, Any]) -> Dict[str, Any]:
             if p.exists():
                 data_path = p
                 break
-    
+
     if not data_path or not data_path.exists():
         return make_error(
             "No benchmark results found. Run aisp_run_benchmarks first.",
@@ -1401,42 +1408,42 @@ def tool_benchmark_triage(params: Dict[str, Any]) -> Dict[str, Any]:
             searched_paths=[str(p) for p in search_paths] if not data_file else None,
             hint="Specify data_file parameter or run aisp_run_benchmarks to generate results."
         )
-    
+
     try:
         data = load_benchmark_data(data_path)
     except Exception as exc:
         return make_error(f"Failed to load benchmark data: {exc}", include_context, context_level)
-    
+
     benchmarks = data.get("benchmarks", [])
     if not benchmarks:
         return make_error("Benchmark file contains no results", include_context, context_level, data_file=str(data_path))
-    
+
     # Analyze results
     total = len(benchmarks)
     passed = sum(1 for b in benchmarks if b.get("speedup", 0) >= 1.0)
     failed = total - passed
-    
+
     # Find regressions and improvements
     regressions = sorted(
         [b for b in benchmarks if b.get("speedup", 1.0) < 0.95],
         key=lambda x: x.get("speedup", 1.0)
     )[:10]
-    
+
     improvements = sorted(
         [b for b in benchmarks if b.get("speedup", 1.0) > 1.05],
         key=lambda x: x.get("speedup", 1.0),
         reverse=True
     )[:10]
-    
+
     # Identify patterns for recommendations
     slow_kernels = [b for b in benchmarks if b.get("baseline_time_ms", 0) > 100]
     memory_issues = [b for b in benchmarks if "memory" in b.get("name", "").lower() or "oom" in str(b.get("error", "")).lower()]
     attention_benchmarks = [b for b in benchmarks if "attention" in b.get("name", "").lower()]
-    
+
     # Build recommendations
     recommended_tools = []
     optimization_plan = []
-    
+
     if regressions:
         recommended_tools.append({
             "tool": "aisp_analyze_bottlenecks",
@@ -1448,7 +1455,7 @@ def tool_benchmark_triage(params: Dict[str, Any]) -> Dict[str, Any]:
             "action": "Investigate regressions",
             "details": f"Top regression: {regressions[0].get('chapter')}:{regressions[0].get('name')} ({regressions[0].get('speedup', 0):.2f}x)"
         })
-    
+
     if slow_kernels:
         recommended_tools.append({
             "tool": "aisp_profile_nsys",
@@ -1460,7 +1467,7 @@ def tool_benchmark_triage(params: Dict[str, Any]) -> Dict[str, Any]:
             "action": "Profile slow operations",
             "details": f"Slowest: {slow_kernels[0].get('chapter')}:{slow_kernels[0].get('name')} ({slow_kernels[0].get('baseline_time_ms', 0):.1f}ms)"
         })
-    
+
     if attention_benchmarks:
         avg_attention_speedup = sum(b.get("speedup", 1.0) for b in attention_benchmarks) / len(attention_benchmarks)
         if avg_attention_speedup < 1.5:
@@ -1469,27 +1476,27 @@ def tool_benchmark_triage(params: Dict[str, Any]) -> Dict[str, Any]:
                 "reason": "Learn about FlashAttention optimization",
                 "params": {"concept": "flash-attention"}
             })
-    
+
     if improvements:
         recommended_tools.append({
             "tool": "aisp_benchmark_report",
             "reason": f"Document {len(improvements)} improvement(s) in shareable report",
             "params": {"format": "html"}
         })
-    
+
     # Always suggest comparison if we have results
     recommended_tools.append({
         "tool": "aisp_benchmark_compare_runs",
         "reason": "Compare with previous baseline for trend analysis",
         "note": "Save current results as baseline for future comparisons"
     })
-    
+
     # Add general optimization recommendations
     recommended_tools.append({
         "tool": "aisp_recommend",
         "reason": "Get optimization playbook based on your hardware and goals"
     })
-    
+
     result = {
         "success": True,
         "data_file": str(data_path),
@@ -1497,7 +1504,7 @@ def tool_benchmark_triage(params: Dict[str, Any]) -> Dict[str, Any]:
             "total_benchmarks": total,
             "passed": passed,
             "failed": failed,
-            "pass_rate": f"{(passed/total)*100:.1f}%" if total > 0 else "N/A",
+            "pass_rate": f"{(passed / total) * 100:.1f}%" if total > 0 else "N/A",
             "avg_speedup": sum(b.get("speedup", 1.0) for b in benchmarks) / total if total > 0 else 0,
         },
         "regressions": [
@@ -1525,7 +1532,7 @@ def tool_benchmark_triage(params: Dict[str, Any]) -> Dict[str, Any]:
             f"Use recommended_tools for specific actions."
         ),
     }
-    
+
     # Add top issues
     if regressions:
         result["top_issues"].append({
@@ -1539,7 +1546,7 @@ def tool_benchmark_triage(params: Dict[str, Any]) -> Dict[str, Any]:
             "count": len(slow_kernels),
             "severity": "medium"
         })
-    
+
     return attach_context_if_requested(result, include_context, context_level)
 
 
@@ -1682,7 +1689,7 @@ def tool_analyze_stacking(params: Dict[str, Any]) -> Dict[str, Any]:
             "description": "Maximum VRAM budget in GB (e.g., 24 for single 3090)"
         },
         "max_latency_ms": {
-            "type": "number", 
+            "type": "number",
             "description": "Maximum acceptable latency in milliseconds (e.g., 50ms SLA)"
         },
         "min_throughput": {
@@ -1700,7 +1707,7 @@ def tool_analyze_whatif(params: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # =============================================================================
-# OPTIMIZATION TOOLS  
+# OPTIMIZATION TOOLS
 # =============================================================================
 
 @register_tool(
@@ -2111,14 +2118,14 @@ def tool_profile_compare(params: Dict[str, Any]) -> Dict[str, Any]:
     from pathlib import Path
     from core import profile_insights
     from core.perf_core_base import PerformanceCoreBase
-    
+
     chapter = params.get("chapter")
     profiles_dir_param = params.get("profiles_dir")
     output_html = params.get("output_html")
     include_context, context_level = extract_context_opts(params)
-    
+
     core = PerformanceCoreBase()
-    
+
     # Resolve the profile directory
     if profiles_dir_param:
         profiles_dir = Path(profiles_dir_param)
@@ -2137,10 +2144,10 @@ def tool_profile_compare(params: Dict[str, Any]) -> Dict[str, Any]:
             "count": pairs.get("count", 0),
             "hint": "Provide chapter parameter to compare profiles. Example: aisp_profile_compare(chapter='ch11-streams-comparison')",
         }
-    
+
     if not profiles_dir or not profiles_dir.exists():
         return make_error(f"profiles_dir not found: {profiles_dir}", include_context, context_level)
-    
+
     result = profile_insights.generate_flamegraph_comparison(profiles_dir)
     if result is None:
         return {
@@ -2148,10 +2155,10 @@ def tool_profile_compare(params: Dict[str, Any]) -> Dict[str, Any]:
             "profiles_dir": str(profiles_dir),
             "hint": "Profile both baseline and optimized with: nsys profile --stats=true -o <name> python <script>.py",
         }
-    
+
     if result.get("error"):
         return result
-    
+
     # NEW: Also get metric-level analysis via compare_profiles()
     # This adds improvements/regressions analysis and bottleneck shift detection
     if chapter:
@@ -2166,18 +2173,18 @@ def tool_profile_compare(params: Dict[str, Any]) -> Dict[str, Any]:
                     result["recommendations"] = metric_comparison["recommendations"]
         except Exception:
             pass  # Best effort - don't fail if metric analysis unavailable
-    
+
     # Optionally generate HTML
     if output_html:
         from cli.commands.profiling import _generate_comparison_html
         html_content = _generate_comparison_html(result, chapter or profiles_dir.name)
         Path(output_html).write_text(html_content)
         result["html_output"] = output_html
-    
+
     # Add chapter/directory info
     result["chapter"] = chapter
     result["profiles_dir"] = str(profiles_dir)
-    
+
     return attach_context_if_requested(result, include_context, context_level)
 
 
@@ -2979,6 +2986,7 @@ def tool_hw_roofline(params: Dict[str, Any]) -> Dict[str, Any]:
     result = {"size_mb": size_mb, "rows": rows}
     return attach_context_if_requested(result, include_context, context_level)
 
+
 @register_tool(
     "aisp_hw_disk",
     "Tags: disk, io, storage, read, write, sequential, throughput. "
@@ -3301,18 +3309,18 @@ def tool_analyze_memory_patterns(params: Dict[str, Any]) -> Dict[str, Any]:
     include_context, context_level = extract_context_opts(params)
     analysis_type = normalize_param("analysis_type", params.get("analysis_type"), "all")
     stride = params.get("stride", 1)
-    
+
     try:
         core = PerformanceCoreBase()
         result = {}
-        
+
         if analysis_type in ("all", "warp"):
             result["warp_divergence"] = core.get_warp_divergence()
         if analysis_type in ("all", "bank"):
             result["bank_conflicts"] = core.get_bank_conflicts(stride=stride)
         if analysis_type in ("all", "access"):
             result["memory_access"] = core.get_memory_access_patterns(stride=stride)
-        
+
         result["success"] = True
         return attach_context_if_requested(result, include_context, context_level)
     except Exception as e:
@@ -3667,7 +3675,7 @@ def tool_hw_ib(params: Dict[str, Any]) -> Dict[str, Any]:
     """InfiniBand bandwidth test guidance."""
     import shutil
     include_context, context_level = extract_context_opts(params)
-    
+
     ib_write_bw = shutil.which("ib_write_bw")
     result = {
         "success": True,
@@ -3701,11 +3709,11 @@ def tool_hw_nccl(params: Dict[str, Any]) -> Dict[str, Any]:
     """NCCL collective bandwidth test guidance."""
     import shutil
     include_context, context_level = extract_context_opts(params)
-    
+
     collective = normalize_param("collective", params.get("collective"), "all_reduce")
     bin_name = f"{collective}_perf"
     bin_path = shutil.which(bin_name)
-    
+
     result = {
         "success": True,
         "tool_available": bin_path is not None,
@@ -3734,53 +3742,53 @@ def tool_hw_p2p(params: Dict[str, Any]) -> Dict[str, Any]:
         import torch
         include_context = bool(params.get("include_context", False))
         context_level = params.get("context_level", "summary")
-        
+
         if not torch.cuda.is_available():
             return {"success": False, "error": "CUDA not available"}
-        
+
         num_gpus = torch.cuda.device_count()
         if num_gpus < 2:
             return {"success": False, "error": "P2P test requires at least 2 GPUs", "gpu_count": num_gpus}
-        
+
         size_mb = params.get("size_mb", 256)
         size_bytes = size_mb * 1024 * 1024
-        
+
         results = []
         for i in range(min(num_gpus, 2)):  # Test first pair only for speed
             for j in range(min(num_gpus, 2)):
                 if i == j:
                     continue
-                
+
                 can_access = torch.cuda.can_device_access_peer(i, j)
-                
+
                 with torch.cuda.device(i):
                     src = torch.empty(size_bytes // 4, dtype=torch.float32, device=f"cuda:{i}")
                 with torch.cuda.device(j):
                     dst = torch.empty(size_bytes // 4, dtype=torch.float32, device=f"cuda:{j}")
-                
+
                 dst.copy_(src)
                 torch.cuda.synchronize()
-                
+
                 start = torch.cuda.Event(enable_timing=True)
                 end = torch.cuda.Event(enable_timing=True)
-                
+
                 iters = 5
                 start.record()
                 for _ in range(iters):
                     dst.copy_(src)
                 end.record()
                 torch.cuda.synchronize()
-                
+
                 elapsed_ms = start.elapsed_time(end)
                 bw_gbps = (size_bytes * iters / (elapsed_ms / 1000)) / 1e9
-                
+
                 results.append({
                     "src": i,
                     "dst": j,
                     "p2p_enabled": can_access,
                     "bandwidth_gbps": round(bw_gbps, 2)
                 })
-        
+
         result = {"success": True, "gpu_count": num_gpus, "results": results}
         return attach_context_if_requested(result, include_context, context_level)
     except Exception as e:
@@ -3957,11 +3965,11 @@ def tool_hf(params: Dict[str, Any]) -> Dict[str, Any]:
     """HuggingFace Hub operations."""
     from core.engine import get_engine
     include_context, context_level = extract_context_opts(params)
-    
+
     action = normalize_param("action", params.get("action"), "search")
     query = params.get("query", "")
     limit = params.get("limit", 10)
-    
+
     try:
         engine = get_engine()
         if action == "search":
@@ -3974,7 +3982,7 @@ def tool_hf(params: Dict[str, Any]) -> Dict[str, Any]:
             result = engine.hf.download(query)
         else:
             return make_error(f"Unknown action: {action}", include_context, context_level)
-        
+
         return attach_context_if_requested(result, include_context, context_level)
     except Exception as e:
         return make_error(f"HuggingFace operation failed: {e}", include_context, context_level)
@@ -4035,7 +4043,7 @@ def tool_suggest_tools(params: Dict[str, Any]) -> Dict[str, Any]:
             "tool": "aisp_hw_tc",
             "keywords": ["tensor core", "tflops", "matmul"],
             "reason": "Tensor core throughput test",
-        },        {
+        }, {
             "tool": "aisp_profile_flame",
             "keywords": ["profile", "flame", "time", "hotspot", "trace", "timeline", "slow step"],
             "reason": "Inspect time hotspots with flame graph",
@@ -4065,7 +4073,7 @@ def tool_suggest_tools(params: Dict[str, Any]) -> Dict[str, Any]:
             "tool": "aisp_profile_ncu",
             "keywords": ["ncu", "nsight compute", "compute profile", "kernel metrics", "ncu profile"],
             "reason": "Capture kernel metrics with Nsight Compute",
-        },        {
+        }, {
             "tool": "aisp_profile_memory",
             "keywords": ["memory", "vram", "oom", "leak", "fragmentation", "spike"],
             "reason": "See memory timeline and spikes",
@@ -4114,7 +4122,7 @@ def tool_suggest_tools(params: Dict[str, Any]) -> Dict[str, Any]:
             "tool": "aisp_cluster_slurm",
             "keywords": ["slurm", "batch", "sbatch", "job script"],
             "reason": "Generate SLURM script for cluster runs",
-        },        {
+        }, {
             "tool": "aisp_distributed_plan",
             "keywords": ["distributed", "multi node", "tp", "pp", "dp", "fsdp"],
             "reason": "Plan DP/TP/PP strategy",
@@ -4138,11 +4146,11 @@ def tool_suggest_tools(params: Dict[str, Any]) -> Dict[str, Any]:
             "tool": "aisp_inference_quantization",
             "keywords": ["quant", "int8", "fp8", "fp4", "kv cache"],
             "reason": "Quantization guidance for inference",
-        },        {
+        }, {
             "tool": "aisp_benchmark_targets",
             "keywords": ["benchmark targets", "bench targets", "list benchmarks", "what can I run"],
             "reason": "List benchmark targets",
-        },        {
+        }, {
             "tool": "aisp_triage",
             "keywords": ["triage", "start", "first", "status", "health", "quick check"],
             "reason": "Get status + summary context",
@@ -4171,7 +4179,7 @@ def tool_suggest_tools(params: Dict[str, Any]) -> Dict[str, Any]:
             "tool": "aisp_benchmark_targets",
             "keywords": ["list targets", "what benchmarks", "examples", "chapters"],
             "reason": "List available benchmark targets (chapter:example)",
-        },        {
+        }, {
             "tool": "aisp_benchmark_report",
             "keywords": ["report", "pdf", "html", "export report"],
             "reason": "Generate PDF/HTML benchmark report",
@@ -4190,7 +4198,7 @@ def tool_suggest_tools(params: Dict[str, Any]) -> Dict[str, Any]:
             "tool": "aisp_hw_roofline",
             "keywords": ["stride", "roofline", "memory sweep"],
             "reason": "Quick stride sweep roofline for memory hierarchy",
-        },        {
+        }, {
             "tool": "aisp_gpu_topology",
             "keywords": ["topology", "nvlink", "pcie", "multi gpu"],
             "reason": "Inspect multi-GPU topology",
@@ -4239,11 +4247,17 @@ def tool_suggest_tools(params: Dict[str, Any]) -> Dict[str, Any]:
 
 class MCPServer:
     """MCP Server for AI Systems Performance."""
-    
+
     def __init__(self):
         self.name = "aisp"
         self.version = "2.0.0"
-    
+        # Track pending requests to help with debugging and prevent duplicate processing
+        self._pending_requests: Dict[Any, Dict[str, Any]] = {}
+        self._request_lock = threading.Lock()
+        # Track request timestamps to detect stale requests
+        self._request_timeouts: Dict[Any, float] = {}
+        self._timeout_seconds = 300.0  # 5 minutes default timeout
+
     def get_tool_list(self) -> List[Dict[str, Any]]:
         """Get list of available tools."""
         return [
@@ -4254,7 +4268,7 @@ class MCPServer:
             }
             for tool in TOOLS.values()
         ]
-    
+
     def call_tool(self, name: str, arguments: Dict[str, Any]) -> ToolResult:
         """Call a tool by name."""
         start_ts = time.time()
@@ -4273,7 +4287,7 @@ class MCPServer:
                 content=_content_from_payload(payload),
                 is_error=True
             )
-        
+
         try:
             raw_result = HANDLERS[name](arguments)
             result = _normalize_result(raw_result)
@@ -4306,125 +4320,318 @@ class MCPServer:
                 content=_content_from_payload(payload),
                 is_error=True
             )
-    
+
+    def _cleanup_stale_requests(self):
+        """Remove requests that have timed out."""
+        current_time = time.time()
+        with self._request_lock:
+            stale_ids = [
+                req_id for req_id, timestamp in self._request_timeouts.items()
+                if current_time - timestamp > self._timeout_seconds
+            ]
+            for req_id in stale_ids:
+                self._pending_requests.pop(req_id, None)
+                self._request_timeouts.pop(req_id, None)
+                if os.environ.get("AISP_MCP_DEBUG"):
+                    print(f"[DEBUG] Cleaned up stale request ID: {req_id}", file=sys.stderr)
+
+    def _track_request(self, msg_id: Any, method: str, params: Dict[str, Any]) -> bool:
+        """Track a request and return True if it's a duplicate."""
+        if msg_id is None:
+            return False
+
+        with self._request_lock:
+            # Clean up stale requests periodically
+            if len(self._pending_requests) > 100:  # Threshold to avoid constant cleanup
+                self._cleanup_stale_requests()
+
+            # Check if this is a duplicate request
+            if msg_id in self._pending_requests:
+                existing = self._pending_requests[msg_id]
+                if os.environ.get("AISP_MCP_DEBUG"):
+                    print(
+                        f"[DEBUG] Duplicate request detected - ID: {msg_id}, "
+                        f"Method: {method}, Previous: {existing.get('method')}",
+                        file=sys.stderr
+                    )
+                # Update timestamp but don't process again
+                self._request_timeouts[msg_id] = time.time()
+                return True
+
+            # Track new request
+            self._pending_requests[msg_id] = {
+                "method": method,
+                "params": params,
+                "received_at": time.time()
+            }
+            self._request_timeouts[msg_id] = time.time()
+            return False
+
+    def _complete_request(self, msg_id: Any):
+        """Mark a request as completed."""
+        if msg_id is None:
+            return
+        with self._request_lock:
+            self._pending_requests.pop(msg_id, None)
+            self._request_timeouts.pop(msg_id, None)
+
     async def handle_message(self, message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Handle an MCP message. Returns None for notifications (messages without an id)."""
         method = message.get("method")
         msg_id = message.get("id")
         is_notification = msg_id is None
         params = message.get("params", {})
-        
+
+        # Validate message structure
+        if not isinstance(message, dict):
+            if msg_id is not None:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "error": {
+                        "code": -32600,
+                        "message": "Invalid Request: message must be an object"
+                    }
+                }
+            return None
+
         # Ignore notifications (messages without an id); MCP clients may send these.
         if is_notification:
             return None
-        
-        if method == "initialize":
-            return {
-                "jsonrpc": "2.0",
-                "id": msg_id,
-                "result": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {
-                        "tools": {}
-                    },
-                    "serverInfo": {
-                        "name": self.name,
-                        "version": self.version
-                    }
-                }
-            }
-        
-        elif method == "tools/list":
-            return {
-                "jsonrpc": "2.0",
-                "id": msg_id,
-                "result": {
-                    "tools": self.get_tool_list()
-                }
-            }
-        
-        elif method == "tools/call":
-            tool_name = params.get("name", "")
-            arguments = params.get("arguments", {})
-            result = self.call_tool(tool_name, arguments)
-            
-            return {
-                "jsonrpc": "2.0",
-                "id": msg_id,
-                "result": {
-                    "content": result.content,
-                    "isError": result.is_error
-                }
-            }
-        
-        else:
-            if is_notification:
-                return None
+
+        # Track request and detect duplicates
+        # Note: initialize is tracked but always processed (clears state on client restart)
+        is_duplicate = self._track_request(msg_id, method, params)
+        if is_duplicate and method != "initialize":
+            # For duplicate requests (except initialize), return an error
+            # Initialize should always be processed to reset server state
             return {
                 "jsonrpc": "2.0",
                 "id": msg_id,
                 "error": {
-                    "code": -32601,
-                    "message": f"Method not found: {method}"
+                    "code": -32000,
+                    "message": "Duplicate request detected. This request was already processed."
                 }
             }
-    
+
+        try:
+            if method == "initialize":
+                # Initialize clears old pending requests (from previous client session)
+                # but we still process and complete this initialize request itself
+                with self._request_lock:
+                    # Save current initialize request info before clearing
+                    current_req = self._pending_requests.get(msg_id, {})
+                    current_timeout = self._request_timeouts.get(msg_id, time.time())
+                    # Clear all pending requests (client restart scenario)
+                    self._pending_requests.clear()
+                    self._request_timeouts.clear()
+                    # Re-add this initialize request so it can be properly completed
+                    if msg_id is not None:
+                        self._pending_requests[msg_id] = current_req or {
+                            "method": method,
+                            "params": params,
+                            "received_at": time.time()
+                        }
+                        self._request_timeouts[msg_id] = current_timeout
+
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "result": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {
+                            "tools": {}
+                        },
+                        "serverInfo": {
+                            "name": self.name,
+                            "version": self.version
+                        }
+                    }
+                }
+                # Don't complete here - will be completed after sending response
+                return response
+
+            elif method == "tools/list":
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "result": {
+                        "tools": self.get_tool_list()
+                    }
+                }
+                # Don't complete here - will be completed after sending response
+                return response
+
+            elif method == "tools/call":
+                tool_name = params.get("name", "")
+                arguments = params.get("arguments", {})
+                result = self.call_tool(tool_name, arguments)
+
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "result": {
+                        "content": result.content,
+                        "isError": result.is_error
+                    }
+                }
+                # Don't complete here - will be completed after sending response
+                return response
+
+            else:
+                if is_notification:
+                    return None
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "error": {
+                        "code": -32601,
+                        "message": f"Method not found: {method}"
+                    }
+                }
+                # Don't complete here - will be completed after sending response
+                return response
+        except Exception as e:
+            # On error, we still need to complete the request
+            # But only if we're going to send an error response
+            # Re-raise to be handled by outer error handler
+            raise
+
     async def run_stdio(self):
         """Run MCP server over stdio."""
         import sys
-        
+
         print(f"AISP MCP Server v{self.version} - {len(TOOLS)} tools available", file=sys.stderr)
-        
+
         while True:
             try:
                 line = sys.stdin.readline()
                 if not line:
                     break
-                
+
+                # Skip empty lines
+                line = line.strip()
+                if not line:
+                    continue
+
                 message = json.loads(line)
+
+                # Validate JSON-RPC version
+                if message.get("jsonrpc") != "2.0":
+                    msg_id = message.get("id")
+                    if msg_id is not None:
+                        error_response = {
+                            "jsonrpc": "2.0",
+                            "id": msg_id,
+                            "error": {
+                                "code": -32600,
+                                "message": "Invalid Request: jsonrpc must be '2.0'"
+                            }
+                        }
+                        print(json.dumps(error_response), flush=True)
+                    continue
+
                 response = await self.handle_message(message)
                 if response is not None:
-                    print(json.dumps(response), flush=True)
-                
+                    # Send response, then complete the request
+                    # This ensures we only send responses for requests we're still tracking
+                    response_id = response.get("id")
+                    should_send = True
+                    if response_id is not None:
+                        with self._request_lock:
+                            if response_id not in self._pending_requests:
+                                # Request was cleaned up (timeout or client restart)
+                                # Don't send response to avoid "unknown message ID" errors
+                                if os.environ.get("AISP_MCP_DEBUG"):
+                                    print(
+                                        f"[DEBUG] Skipping response for cleaned-up request ID: {response_id}",
+                                        file=sys.stderr
+                                    )
+                                should_send = False
+                    
+                    if should_send:
+                        print(json.dumps(response), flush=True)
+                        # Complete request after sending response
+                        if response_id is not None:
+                            self._complete_request(response_id)
+
             except json.JSONDecodeError as e:
                 print(f"JSON decode error: {e}", file=sys.stderr)
+                # Try to send error response if we can extract an ID
+                try:
+                    partial_msg = json.loads(line) if 'line' in locals() else {}
+                    msg_id = partial_msg.get("id")
+                    if msg_id is not None:
+                        error_response = {
+                            "jsonrpc": "2.0",
+                            "id": msg_id,
+                            "error": {
+                                "code": -32700,
+                                "message": f"Parse error: {str(e)}"
+                            }
+                        }
+                        print(json.dumps(error_response), flush=True)
+                except Exception:
+                    pass  # Can't recover from parse error
             except Exception as e:
-                print(f"Error: {e}", file=sys.stderr)
+                print(f"Error handling message: {e}", file=sys.stderr)
+                import traceback
+                print(traceback.format_exc(), file=sys.stderr)
+                # Try to send error response
+                try:
+                    msg_id = message.get("id") if 'message' in locals() else None
+                    if msg_id is not None:
+                        # Only send error response if request is still tracked
+                        with self._request_lock:
+                            if msg_id in self._pending_requests:
+                                error_response = {
+                                    "jsonrpc": "2.0",
+                                    "id": msg_id,
+                                    "error": {
+                                        "code": -32603,
+                                        "message": f"Internal error: {str(e)}"
+                                    }
+                                }
+                                print(json.dumps(error_response), flush=True)
+                                # Complete request after sending error response
+                                self._complete_request(msg_id)
+                except Exception:
+                    pass  # Can't send error response
 
 
 def main():
     """Main entry point."""
     import argparse
-    
+
     parser = argparse.ArgumentParser(description="AISP MCP Server")
     parser.add_argument("--list", action="store_true", help="List available tools")
     parser.add_argument("--test", type=str, help="Test a specific tool")
     parser.add_argument("--serve", action="store_true", help="Start MCP server (stdio)")
     args = parser.parse_args()
-    
+
     if args.list:
         print(f"\n🚀 AISP MCP Tools ({len(TOOLS)} available):\n")
         for name, tool in sorted(TOOLS.items()):
             print(f"  {name}")
             print(f"    {tool.description}\n")
         return
-    
+
     if args.test:
         tool_name = args.test
         if tool_name not in HANDLERS:
             print(f"Unknown tool: {tool_name}")
             return 1
-        
+
         print(f"Testing {tool_name}...")
         result = HANDLERS[tool_name]({})
         print(json.dumps(result, indent=2, default=str))
         return
-    
+
     if args.serve:
         server = MCPServer()
         asyncio.run(server.run_stdio())
         return
-    
+
     # Default: show help
     parser.print_help()
 

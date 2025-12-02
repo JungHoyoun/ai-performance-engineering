@@ -60,16 +60,16 @@
       },
       "metrics": {
         "baseline_p75_ms": 1.1486079692840576,
-        "baseline_throughput.latency_ms": 1.1582224011421203,
+        "baseline_throughput.latency_ms": 0.848702397942543,
         "baseline_throughput.requests_per_s": 4331.869738826985,
         "baseline_throughput.tokens_per_s": 43318.697388269844,
-        "baseline_time_ms": 1.1582224011421203,
+        "baseline_time_ms": 0.848702397942543,
         "best_optimized_p75_ms": 0.30182400345802307,
         "best_optimized_speedup": 5.134746099349384,
-        "best_optimized_throughput.latency_ms": 0.3587488025426865,
-        "best_optimized_throughput.requests_per_s": 11149.863000655037,
-        "best_optimized_throughput.tokens_per_s": 111498.63000655037,
-        "best_optimized_time_ms": 0.3587488025426865,
+        "best_optimized_throughput.latency_ms": 0.2472991980612278,
+        "best_optimized_throughput.requests_per_s": 16174.739066519965,
+        "best_optimized_throughput.tokens_per_s": 161747.39066519964,
+        "best_optimized_time_ms": 0.2472991980612278,
         "best_speedup": 5.134746099349384
       },
       "type": "python"
@@ -79,17 +79,17 @@
       "metadata": {
         "best_optimization": "optimized_ilp_basic",
         "best_optimization_file": "optimized_ilp_basic.py",
-        "best_optimization_speedup": 1.3655596152827434,
-        "best_optimization_time_ms": 0.5052053332328796,
-        "git_commit": "657de7f6b85e490ef49125856e5ed28875c0d8df",
-        "updated_at": "2025-11-27T02:07:37.026577"
+        "best_optimization_speedup": 1.404523262832654,
+        "best_optimization_time_ms": 0.3651302382349968,
+        "git_commit": "678b7491992be920f1b844eb8c44ae7d40ae6db2",
+        "updated_at": "2025-12-02T04:33:13.346317"
       },
       "metrics": {
         "baseline_p75_ms": 0.5648639798164368,
-        "baseline_throughput.latency_ms": 0.6898880004882812,
-        "baseline_throughput.requests_per_s": 1449.51064418026,
-        "baseline_throughput.tokens_per_s": 1.4495106441802598e+19,
-        "baseline_time_ms": 0.6898880004882812,
+        "baseline_throughput.latency_ms": 0.512833913564682,
+        "baseline_throughput.requests_per_s": 1949.9490450018247,
+        "baseline_throughput.tokens_per_s": 1.9499490450018247e+19,
+        "baseline_time_ms": 0.512833913564682,
         "best_optimized_p75_ms": 0.3624959886074066,
         "best_optimized_speedup": 1.3655596152827434,
         "best_optimized_throughput.latency_ms": 0.4333920031785965,
