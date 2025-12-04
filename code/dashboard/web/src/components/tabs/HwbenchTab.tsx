@@ -105,15 +105,16 @@ export function HwbenchTab() {
   const [nsysPreset, setNsysPreset] = useState<'light' | 'full'>('full');
   const [runAsync, setRunAsync] = useState(false);
   const [nsysFullTimeline, setNsysFullTimeline] = useState(false);
-  const [nsysResult, setNsysResult] = useState<Result>(null);
-  const [nsysLoading, setNsysLoading] = useState(false);
-  const [nsysForceLineinfo, setNsysForceLineinfo] = useState(true);
+const [nsysResult, setNsysResult] = useState<Result>(null);
+const [nsysLoading, setNsysLoading] = useState(false);
+const [nsysForceLineinfo, setNsysForceLineinfo] = useState(true);
 
-  const [ncuCommand, setNcuCommand] = useState('python -c "print(456)"');
-  const [ncuWorkload, setNcuWorkload] = useState('memory_bound');
-  const [ncuResult, setNcuResult] = useState<Result>(null);
-  const [ncuLoading, setNcuLoading] = useState(false);
-  const [ncuForceLineinfo, setNcuForceLineinfo] = useState(true);
+const [ncuCommand, setNcuCommand] = useState('python -c "print(456)"');
+const [ncuWorkload, setNcuWorkload] = useState('memory_bound');
+const [ncuSamplingInterval, setNcuSamplingInterval] = useState<number | ''>('');
+const [ncuResult, setNcuResult] = useState<Result>(null);
+const [ncuLoading, setNcuLoading] = useState(false);
+const [ncuForceLineinfo, setNcuForceLineinfo] = useState(true);
 
   const [jobId, setJobId] = useState('');
   const [jobStatus, setJobStatus] = useState<Result>(null);
@@ -512,6 +513,16 @@ export function HwbenchTab() {
                       onChange={(e) => setTimeoutSeconds(e.target.value === '' ? '' : Number(e.target.value))}
                     />
                   </label>
+                  <label className="flex items-center gap-2">
+                    Sampling interval
+                    <input
+                      type="number"
+                      className="bg-white/10 border border-white/10 rounded-lg px-2 py-1 w-24 text-white"
+                      placeholder="optional"
+                      value={ncuSamplingInterval}
+                      onChange={(e) => setNcuSamplingInterval(e.target.value === '' ? '' : Number(e.target.value))}
+                    />
+                  </label>
                 </div>
                 <button
                   className="rounded-lg bg-accent-warning/20 px-3 py-2 text-sm text-accent-warning hover:bg-accent-warning/30 transition-colors"
@@ -529,6 +540,7 @@ export function HwbenchTab() {
                       async: runAsync,
                       force_lineinfo: ncuForceLineinfo,
                       timeout_seconds: timeoutSeconds === '' ? undefined : Number(timeoutSeconds),
+                      pm_sampling_interval: ncuSamplingInterval === '' ? undefined : Number(ncuSamplingInterval),
                     });
                       setNcuResult(json);
                       if (json.job_id) setJobId(json.job_id);

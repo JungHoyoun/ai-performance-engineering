@@ -57,7 +57,7 @@ from core.utils.chapter_compare_template import (
     get_last_load_error,
 )
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode, BenchmarkConfig
-from core.benchmark.defaults import BenchmarkDefaults, set_defaults
+from core.benchmark.defaults import BenchmarkDefaults, set_defaults, get_defaults
 from core.benchmark.run_manifest import reset_gpu_state, get_git_info
 from core.profiling.gpu_telemetry import format_gpu_telemetry, query_gpu_telemetry
 try:
@@ -86,6 +86,9 @@ except ImportError:
 
 # Check if torch.profiler is available at module level
 TORCH_PROFILER_AVAILABLE = hasattr(torch, 'profiler') and hasattr(torch.profiler, 'profile')
+
+# Generous timeout so deep NCU profiling can finish (pulled from benchmark defaults)
+NCU_TIMEOUT_SECONDS = get_defaults().ncu_timeout_seconds
 
 # Import metric extraction utilities
 try:
@@ -213,10 +216,8 @@ INFORMATIONAL_BENCHMARKS: Dict[str, Set[str]] = {
 
 # Note: The following legacy paths were previously under tools/ and are now in monitoring/ or core/ subpackages:
 # - ch02/uma_memory_reporting -> monitoring/diagnostics/uma_memory/
-# - ch10/roofline -> core/analysis/roofline/
-# - ch15/moe_validation -> core/verification/moe/
-# - speculative_decode/spec_config_sweep -> core/analysis/speculative_decode/
-# - occupancy_tuning/proton_* -> core/profiling/occupancy_tuning/
+# - speculative_decode/spec_config_sweep -> core/analysis/speculative_decode/ (shared helpers only)
+# - occupancy_tuning/proton_* harness wrappers live in labs/occupancy_tuning; shared Triton schedules remain in core/profiling/occupancy_tuning/
 
 def format_time_ms(time_ms: float) -> str:
     """Format time in milliseconds with adaptive precision.
@@ -1581,13 +1582,13 @@ benchmark.teardown()
             wrapper_script.name
         ]
         
-        # ncu profiling timeout: 180 seconds (matches benchmark_harness.ncu_timeout_seconds)
+        # ncu profiling timeout: align with BenchmarkDefaults.ncu_timeout_seconds
         # ncu is slower than nsys and needs more time for metric collection
         result = subprocess.run(
             ncu_command,
             cwd=str(chapter_dir),
             capture_output=True,
-            timeout=180,  # Increased from 60s - ncu profiling needs more time
+            timeout=NCU_TIMEOUT_SECONDS,
             check=False
         )
         
@@ -1648,13 +1649,13 @@ def profile_cuda_executable_ncu(
     ]
     
     try:
-        # ncu profiling timeout: 180 seconds (matches benchmark_harness.ncu_timeout_seconds)
+        # ncu profiling timeout: align with BenchmarkDefaults.ncu_timeout_seconds
         # ncu is slower than nsys and needs more time for metric collection
         result = subprocess.run(
             ncu_command,
             cwd=str(chapter_dir),
             capture_output=True,
-            timeout=180,  # Increased from 60s - ncu profiling needs more time
+            timeout=NCU_TIMEOUT_SECONDS,
             check=False
         )
         
@@ -1814,6 +1815,7 @@ def _test_chapter_impl(
     only_examples: Optional[List[str]] = None,
     accept_regressions: bool = False,
     ncu_metric_set: str = "auto",
+    pm_sampling_interval: Optional[int] = None,
     launch_via: str = "python",
     nproc_per_node: Optional[int] = None,
     nnodes: Optional[str] = None,
@@ -2023,7 +2025,7 @@ def _test_chapter_impl(
     except Exception:
         _defaults_obj = None
 
-    base_config = BenchmarkConfig(
+    config_kwargs: Dict[str, Any] = dict(
         iterations=iterations,
         warmup=warmup,
         measurement_timeout_seconds=180,  # Increased for CUDA JIT compilation (can take 30+ seconds)
@@ -2045,6 +2047,11 @@ def _test_chapter_impl(
         env_passthrough=env_passthrough or None,
         target_extra_args=target_extra_args or {},
     )
+    if pm_sampling_interval is not None:
+        config_kwargs["pm_sampling_interval"] = pm_sampling_interval
+    elif _defaults_obj is not None:
+        config_kwargs["pm_sampling_interval"] = getattr(_defaults_obj, "pm_sampling_interval", None)
+    base_config = BenchmarkConfig(**config_kwargs)
     logger.info("base_config launch_via=%s", base_config.launch_via)
     if profiling_output_dir:
         base_config.profiling_output_dir = str(profiling_output_dir)
@@ -4710,6 +4717,7 @@ def test_chapter(
     only_examples: Optional[List[str]] = None,
     accept_regressions: bool = False,
     ncu_metric_set: str = "auto",
+    pm_sampling_interval: Optional[int] = None,
     launch_via: str = "python",
     nproc_per_node: Optional[int] = None,
     nnodes: Optional[str] = None,
@@ -4745,6 +4753,7 @@ def test_chapter(
         only_examples=only_examples,
         accept_regressions=accept_regressions,
         ncu_metric_set=ncu_metric_set,
+        pm_sampling_interval=pm_sampling_interval,
         launch_via=launch_via,
         nproc_per_node=nproc_per_node,
         nnodes=nnodes,
@@ -5057,6 +5066,12 @@ def main():
         default='auto',
         help='Nsight Compute metric preset (auto/minimal/deep_dive/roofline). Auto follows the profile preset.'
     )
+    parser.add_argument(
+        '--pm-sampling-interval',
+        type=int,
+        default=None,
+        help='Nsight Compute pm-sampling-interval (cycles between samples). Optional; leave unset to skip the flag.'
+    )
     
     args = parser.parse_args()
     active_bench_root = Path(args.bench_root).resolve() if args.bench_root else repo_root
@@ -5168,6 +5183,7 @@ def main():
             only_examples=only_examples,
             accept_regressions=args.accept_regressions if hasattr(args, "accept_regressions") else False,
             ncu_metric_set=args.ncu_metric_set,
+            pm_sampling_interval=args.pm_sampling_interval,
             launch_via=args.launch_via,
             nproc_per_node=args.nproc_per_node,
             nnodes=args.nnodes,

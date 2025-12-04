@@ -384,7 +384,7 @@ class ProfilerConfig:
     nsys_stats: bool = True
     nsys_backtrace: str = "none"
     ncu_replay_mode: str = "kernel"  # "kernel" or "application"
-    ncu_sampling_interval: int = 75000
+    pm_sampling_interval: Optional[int] = None
     
     def get_nsys_command(
         self, 
@@ -493,8 +493,8 @@ class ProfilerConfig:
             cmd.extend([
                 "--replay-mode", "application",
             ])
-            if self.ncu_sampling_interval:
-                cmd.extend(["--pm-sampling-interval", str(self.ncu_sampling_interval)])
+            if self.pm_sampling_interval:
+                cmd.extend(["--pm-sampling-interval", str(self.pm_sampling_interval)])
             cmd.extend([
                 "--target-processes", "all",
             ])
@@ -682,7 +682,7 @@ def build_profiler_config_from_benchmark(
     metric_set = getattr(config, "ncu_metric_set", None)
     if metric_set is None or str(metric_set).lower() == "auto":
         metric_set = preset if preset in {"minimal", "roofline", "deep_dive"} else "deep_dive"
-    sampling_interval = getattr(config, "ncu_sampling_interval", 75000)
+    sampling_interval = getattr(config, "pm_sampling_interval", None)
     explicit_includes = getattr(config, "nsys_nvtx_include", None)
     nvtx_includes = discover_nvtx_includes(
         benchmark_module,
@@ -693,5 +693,5 @@ def build_profiler_config_from_benchmark(
         metric_set=str(metric_set),
         preset=preset,
         nvtx_includes=nvtx_includes or None,
-        ncu_sampling_interval=sampling_interval,
+        pm_sampling_interval=sampling_interval,
     )

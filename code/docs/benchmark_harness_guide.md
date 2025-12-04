@@ -696,7 +696,7 @@ Every benchmark produces:
 
 - **Minimal (default)** keeps profiler overhead low for baseline/optimized A/B runs. Harness emits:
   - Nsight Systems: `nsys profile --force-overwrite=true -o <out> -t cuda,nvtx,osrt --sample=cpu --backtrace=none [--nvtx-include <range> ...] python <wrapper>`.
-  - Nsight Compute: `ncu --set speed-of-light --metrics sm__throughput.avg.pct_of_peak_sustained_elapsed,gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed,gpu__time_duration.avg --replay-mode application --pm-sampling-interval 75000 --target-processes all [--nvtx-include <range> ...] -o <out> python <wrapper>`.
+  - Nsight Compute: `ncu --set speed-of-light --metrics sm__throughput.avg.pct_of_peak_sustained_elapsed,gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed,gpu__time_duration.avg --replay-mode application [--pm-sampling-interval <cycles>] --target-processes all [--nvtx-include <range> ...] -o <out> python <wrapper>`.
   - PyTorch profiler (CUDA-only, sparse schedule): 
     ```python
     with torch.profiler.profile(

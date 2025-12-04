@@ -2,18 +2,7 @@
 
 from __future__ import annotations
 
-import importlib
+from . import triton_matmul  # noqa: F401
+from .triton_matmul import matmul_kernel, run_one, describe_schedule
 
-triton_matmul = importlib.import_module("core.profiling.occupancy_tuning.triton_matmul")
-from core.profiling.occupancy_tuning.triton_matmul import (  # noqa: E402
-    matmul_kernel,
-    run_one,
-    describe_schedule,
-)
-
-__all__ = [
-    "matmul_kernel",
-    "run_one",
-    "describe_schedule",
-    "triton_matmul",
-]
+__all__ = ["matmul_kernel", "run_one", "describe_schedule", "triton_matmul"]

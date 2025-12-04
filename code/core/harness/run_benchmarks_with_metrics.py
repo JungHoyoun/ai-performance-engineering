@@ -31,6 +31,7 @@ from core.env import apply_env_defaults, dump_environment_and_capabilities
 apply_env_defaults()
 
 import torch
+from core.benchmark.defaults import get_defaults
 from core.harness.run_benchmarks import (
     discover_benchmarks, discover_cuda_benchmarks,
     load_benchmark, BenchmarkHarness, BenchmarkMode, BenchmarkConfig,
@@ -40,6 +41,8 @@ from core.harness.run_benchmarks import (
     format_time_ms
 )
 from core.discovery import chapter_slug, resolve_target_chapters
+
+NCU_TIMEOUT_SECONDS = get_defaults().ncu_timeout_seconds
 
 
 @dataclass
@@ -217,13 +220,13 @@ benchmark.teardown()
             wrapper_script.name
         ]
         
-        # ncu profiling timeout: 180 seconds (matches benchmark_harness.ncu_timeout_seconds)
+        # ncu profiling timeout: align with BenchmarkDefaults.ncu_timeout_seconds
         # ncu is slower than nsys and needs more time for metric collection
         result = subprocess.run(
             ncu_command,
             cwd=str(chapter_dir),
             capture_output=True,
-            timeout=180,  # Increased from 60s - ncu profiling needs more time
+            timeout=NCU_TIMEOUT_SECONDS,
             check=False
         )
         
@@ -278,13 +281,13 @@ def profile_with_ncu_cuda(
     ]
     
     try:
-        # ncu profiling timeout: 180 seconds (matches benchmark_harness.ncu_timeout_seconds)
+        # ncu profiling timeout: align with BenchmarkDefaults.ncu_timeout_seconds
         # ncu is slower than nsys and needs more time for metric collection
         result = subprocess.run(
             ncu_command,
             cwd=str(chapter_dir),
             capture_output=True,
-            timeout=180,  # Increased from 60s - ncu profiling needs more time
+            timeout=NCU_TIMEOUT_SECONDS,
             check=False
         )
         

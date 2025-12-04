@@ -248,6 +248,7 @@ export async function startNsightComputeCapture(payload: {
   workload_type?: string;
   async?: boolean;
   timeout_seconds?: number;
+  pm_sampling_interval?: number;
 }) {
   return fetchAPI('/nsight/profile/ncu', {
     method: 'POST',

@@ -50,6 +50,7 @@ import subprocess
 import time
 import os
 import tempfile
+import signal
 from core.harness.hardware_capabilities import detect_capabilities
 from core.utils.chapter_compare_template import (
     discover_benchmarks,
@@ -57,7 +58,7 @@ from core.utils.chapter_compare_template import (
     get_last_load_error,
 )
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode, BenchmarkConfig
-from core.benchmark.defaults import BenchmarkDefaults, set_defaults
+from core.benchmark.defaults import BenchmarkDefaults, set_defaults, get_defaults
 from core.benchmark.run_manifest import reset_gpu_state, get_git_info
 from core.profiling.gpu_telemetry import format_gpu_telemetry, query_gpu_telemetry
 try:
@@ -86,6 +87,9 @@ except ImportError:
 
 # Check if torch.profiler is available at module level
 TORCH_PROFILER_AVAILABLE = hasattr(torch, 'profiler') and hasattr(torch.profiler, 'profile')
+
+# Generous timeout so deep NCU profiling can finish (pulled from benchmark defaults)
+NCU_TIMEOUT_SECONDS = get_defaults().ncu_timeout_seconds
 
 # Import metric extraction utilities
 try:
@@ -213,10 +217,8 @@ INFORMATIONAL_BENCHMARKS: Dict[str, Set[str]] = {
 
 # Note: The following legacy paths were previously under tools/ and are now in monitoring/ or core/ subpackages:
 # - ch02/uma_memory_reporting -> monitoring/diagnostics/uma_memory/
-# - ch10/roofline -> core/analysis/roofline/
-# - ch15/moe_validation -> core/verification/moe/
-# - speculative_decode/spec_config_sweep -> core/analysis/speculative_decode/
-# - occupancy_tuning/proton_* -> core/profiling/occupancy_tuning/
+# - speculative_decode/spec_config_sweep -> core/analysis/speculative_decode/ (shared helpers only)
+# - occupancy_tuning/proton_* harness wrappers live in labs/occupancy_tuning; shared Triton schedules remain in core/profiling/occupancy_tuning/
 
 def format_time_ms(time_ms: float) -> str:
     """Format time in milliseconds with adaptive precision.
@@ -1507,6 +1509,32 @@ def profile_cuda_executable(
         return None
 
 
+def _terminate_process_group(process: subprocess.Popen, reason: str, timeout_seconds: Optional[float] = None) -> None:
+    """Best-effort kill of a process group (and children) started with start_new_session."""
+    try:
+        pgid = os.getpgid(process.pid)
+        os.killpg(pgid, signal.SIGTERM)
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            os.killpg(pgid, signal.SIGKILL)
+            process.wait(timeout=2)
+    except (ProcessLookupError, OSError, AttributeError):
+        try:
+            process.terminate()
+            process.wait(timeout=2)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+    if LOGGER_AVAILABLE:
+        if timeout_seconds is not None:
+            logger.warning("  NCU profiling timed out after %.1fs (%s); killed process group", timeout_seconds, reason)
+        else:
+            logger.warning("  NCU profiling cleanup triggered (%s); killed process group", reason)
+
+
 def profile_python_benchmark_ncu(
     benchmark: Any,  # Benchmark instance
     benchmark_path: Path,
@@ -1581,34 +1609,47 @@ benchmark.teardown()
             wrapper_script.name
         ]
         
-        # ncu profiling timeout: 180 seconds (matches benchmark_harness.ncu_timeout_seconds)
+        # ncu profiling timeout: align with BenchmarkDefaults.ncu_timeout_seconds
         # ncu is slower than nsys and needs more time for metric collection
-        result = subprocess.run(
+        timed_out = False
+        process = subprocess.Popen(
             ncu_command,
             cwd=str(chapter_dir),
-            capture_output=True,
-            timeout=180,  # Increased from 60s - ncu profiling needs more time
-            check=False
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
         )
-        
-        # Clean up wrapper script
-        Path(wrapper_script.name).unlink(missing_ok=True)
+        try:
+            process.communicate(timeout=NCU_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            _terminate_process_group(process, f"{benchmark_name}_{variant}", timeout_seconds=NCU_TIMEOUT_SECONDS)
+            try:
+                process.communicate(timeout=2)
+            except Exception:
+                pass
+        except Exception:
+            _terminate_process_group(process, f"{benchmark_name}_{variant}")
+            return None
         
         # Check if file exists (ncu may create file even with non-zero exit code)
-        if ncu_output.exists():
-            return ncu_output
-        # Try alternative path
-        alt_path = output_dir / f"{benchmark_name}_{variant}.ncu-rep"
-        if alt_path.exists():
-            return alt_path
-        # Check for any .ncu-rep file matching the pattern
-        for ncu_file in output_dir.glob(f"{benchmark_name}_{variant}*.ncu-rep"):
-            return ncu_file
+        if not timed_out:
+            if ncu_output.exists():
+                return ncu_output
+            # Try alternative path
+            alt_path = output_dir / f"{benchmark_name}_{variant}.ncu-rep"
+            if alt_path.exists():
+                return alt_path
+            # Check for any .ncu-rep file matching the pattern
+            for ncu_file in output_dir.glob(f"{benchmark_name}_{variant}*.ncu-rep"):
+                return ncu_file
         return None
     except (subprocess.SubprocessError, OSError):
-        # Clean up wrapper script on error
-        Path(wrapper_script.name).unlink(missing_ok=True)
         return None
+    finally:
+        # Clean up wrapper script
+        Path(wrapper_script.name).unlink(missing_ok=True)
 
 
 def profile_cuda_executable_ncu(
@@ -1648,26 +1689,41 @@ def profile_cuda_executable_ncu(
     ]
     
     try:
-        # ncu profiling timeout: 180 seconds (matches benchmark_harness.ncu_timeout_seconds)
+        # ncu profiling timeout: align with BenchmarkDefaults.ncu_timeout_seconds
         # ncu is slower than nsys and needs more time for metric collection
-        result = subprocess.run(
+        timed_out = False
+        process = subprocess.Popen(
             ncu_command,
             cwd=str(chapter_dir),
-            capture_output=True,
-            timeout=180,  # Increased from 60s - ncu profiling needs more time
-            check=False
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
         )
+        try:
+            process.communicate(timeout=NCU_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            _terminate_process_group(process, f"{exec_name}_{variant}", timeout_seconds=NCU_TIMEOUT_SECONDS)
+            try:
+                process.communicate(timeout=2)
+            except Exception:
+                pass
+        except Exception:
+            _terminate_process_group(process, f"{exec_name}_{variant}")
+            return None
         
         # Check if file exists (ncu may create file even with non-zero exit code)
-        if ncu_output.exists():
-            return ncu_output
-        # Try alternative path
-        alt_path = output_dir / f"{exec_name}_{variant}.ncu-rep"
-        if alt_path.exists():
-            return alt_path
-        # Check for any .ncu-rep file matching the pattern
-        for ncu_file in output_dir.glob(f"{exec_name}_{variant}*.ncu-rep"):
-            return ncu_file
+        if not timed_out:
+            if ncu_output.exists():
+                return ncu_output
+            # Try alternative path
+            alt_path = output_dir / f"{exec_name}_{variant}.ncu-rep"
+            if alt_path.exists():
+                return alt_path
+            # Check for any .ncu-rep file matching the pattern
+            for ncu_file in output_dir.glob(f"{exec_name}_{variant}*.ncu-rep"):
+                return ncu_file
         return None
     except (subprocess.TimeoutExpired, Exception):
         return None
@@ -1814,6 +1870,7 @@ def _test_chapter_impl(
     only_examples: Optional[List[str]] = None,
     accept_regressions: bool = False,
     ncu_metric_set: str = "auto",
+    pm_sampling_interval: Optional[int] = None,
     launch_via: str = "python",
     nproc_per_node: Optional[int] = None,
     nnodes: Optional[str] = None,
@@ -2023,7 +2080,7 @@ def _test_chapter_impl(
     except Exception:
         _defaults_obj = None
 
-    base_config = BenchmarkConfig(
+    config_kwargs: Dict[str, Any] = dict(
         iterations=iterations,
         warmup=warmup,
         measurement_timeout_seconds=180,  # Increased for CUDA JIT compilation (can take 30+ seconds)
@@ -2045,6 +2102,11 @@ def _test_chapter_impl(
         env_passthrough=env_passthrough or None,
         target_extra_args=target_extra_args or {},
     )
+    if pm_sampling_interval is not None:
+        config_kwargs["pm_sampling_interval"] = pm_sampling_interval
+    elif _defaults_obj is not None:
+        config_kwargs["pm_sampling_interval"] = getattr(_defaults_obj, "pm_sampling_interval", None)
+    base_config = BenchmarkConfig(**config_kwargs)
     logger.info("base_config launch_via=%s", base_config.launch_via)
     if profiling_output_dir:
         base_config.profiling_output_dir = str(profiling_output_dir)
@@ -4710,6 +4772,7 @@ def test_chapter(
     only_examples: Optional[List[str]] = None,
     accept_regressions: bool = False,
     ncu_metric_set: str = "auto",
+    pm_sampling_interval: Optional[int] = None,
     launch_via: str = "python",
     nproc_per_node: Optional[int] = None,
     nnodes: Optional[str] = None,
@@ -4745,6 +4808,7 @@ def test_chapter(
         only_examples=only_examples,
         accept_regressions=accept_regressions,
         ncu_metric_set=ncu_metric_set,
+        pm_sampling_interval=pm_sampling_interval,
         launch_via=launch_via,
         nproc_per_node=nproc_per_node,
         nnodes=nnodes,
@@ -5057,6 +5121,12 @@ def main():
         default='auto',
         help='Nsight Compute metric preset (auto/minimal/deep_dive/roofline). Auto follows the profile preset.'
     )
+    parser.add_argument(
+        '--pm-sampling-interval',
+        type=int,
+        default=None,
+        help='Nsight Compute pm-sampling-interval (cycles between samples). Optional; leave unset to skip the flag.'
+    )
     
     args = parser.parse_args()
     active_bench_root = Path(args.bench_root).resolve() if args.bench_root else repo_root
@@ -5168,6 +5238,7 @@ def main():
             only_examples=only_examples,
             accept_regressions=args.accept_regressions if hasattr(args, "accept_regressions") else False,
             ncu_metric_set=args.ncu_metric_set,
+            pm_sampling_interval=args.pm_sampling_interval,
             launch_via=args.launch_via,
             nproc_per_node=args.nproc_per_node,
             nnodes=args.nnodes,

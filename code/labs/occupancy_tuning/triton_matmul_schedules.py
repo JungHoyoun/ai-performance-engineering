@@ -9,7 +9,7 @@ from typing import Callable, Optional
 import torch
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
-from core.profiling.occupancy_tuning import triton_matmul
+from labs.occupancy_tuning import triton_matmul
 
 
 @dataclass(frozen=True)

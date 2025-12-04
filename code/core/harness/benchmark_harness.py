@@ -340,7 +340,7 @@ class BenchmarkConfig:
     gpu_memory_log_path: Optional[str] = field(default_factory=lambda: _get_default_value("gpu_memory_log_path", None))
     profiling_timeout_seconds: Optional[int] = field(default_factory=lambda: _get_default_value("profiling_timeout_seconds", None))
     ncu_metric_set: str = field(default_factory=lambda: _get_default_value("ncu_metric_set", "auto"))
-    ncu_sampling_interval: int = field(default_factory=lambda: _get_default_value("ncu_sampling_interval", 75000))
+    pm_sampling_interval: Optional[int] = field(default_factory=lambda: _get_default_value("pm_sampling_interval", None))
 
 
     # Legacy timeout field (deprecated, use measurement_timeout_seconds)
@@ -348,7 +348,7 @@ class BenchmarkConfig:
     
     # Profiler-specific timeouts
     nsys_timeout_seconds: int = field(default_factory=lambda: _get_default_value("nsys_timeout_seconds", 120))
-    ncu_timeout_seconds: int = field(default_factory=lambda: _get_default_value("ncu_timeout_seconds", 180))
+    ncu_timeout_seconds: int = field(default_factory=lambda: _get_default_value("ncu_timeout_seconds", 3600))
     proton_timeout_seconds: int = field(default_factory=lambda: _get_default_value("proton_timeout_seconds", 120))
     
     # Timeout multiplier

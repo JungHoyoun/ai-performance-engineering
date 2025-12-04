@@ -3135,6 +3135,8 @@ class PerformanceCore(http.server.SimpleHTTPRequestHandler):
         timeout_param = params.get("timeout_seconds")
         timeout_seconds = int(timeout_param) if timeout_param not in (None, "") else None
         force_lineinfo = bool(params.get("force_lineinfo", True))
+        sampling_param = params.get("pm_sampling_interval") if "pm_sampling_interval" in params else params.get("sampling_interval")
+        sampling_interval = int(sampling_param) if sampling_param not in (None, "") else None
 
         automation = NsightAutomation(output_dir)
         precheck = {
@@ -3144,6 +3146,7 @@ class PerformanceCore(http.server.SimpleHTTPRequestHandler):
             "workload_type": workload_type,
             "command": command_list,
             "force_lineinfo": force_lineinfo,
+            "pm_sampling_interval": sampling_interval,
         }
         if precheck_only:
             return {"precheck_only": True, **precheck}
@@ -3155,6 +3158,7 @@ class PerformanceCore(http.server.SimpleHTTPRequestHandler):
                 **precheck,
                 "planned_output": str(output_dir / f"{output_name}.ncu-rep"),
                 "timeout_seconds": timeout_seconds,
+                "pm_sampling_interval": sampling_interval,
             }
 
         def _runner():
@@ -3166,6 +3170,7 @@ class PerformanceCore(http.server.SimpleHTTPRequestHandler):
                 kernel_filter=kernel_filter,
                 force_lineinfo=force_lineinfo,
                 timeout_seconds=timeout_seconds,
+                sampling_interval=sampling_interval,
             )
             return {
                 "success": path is not None,
@@ -3173,6 +3178,7 @@ class PerformanceCore(http.server.SimpleHTTPRequestHandler):
                 "workload_type": workload_type,
                 "force_lineinfo": force_lineinfo,
                 "timeout_seconds": timeout_seconds,
+                "pm_sampling_interval": sampling_interval,
                 "timeout_hit": bool(getattr(auto, "last_run", {}).get("timeout_hit", False)),
                 "error": auto.last_error if path is None else None,
                 "run_details": getattr(auto, "last_run", {}),

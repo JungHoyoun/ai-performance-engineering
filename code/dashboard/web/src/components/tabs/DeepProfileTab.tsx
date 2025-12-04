@@ -46,12 +46,13 @@ export function DeepProfileTab() {
   const [nsysResult, setNsysResult] = useState<any>(null);
   const [nsysLoading, setNsysLoading] = useState(false);
 
-  const [ncuCommand, setNcuCommand] = useState('python -c "print(456)"');
-  const [ncuWorkload, setNcuWorkload] = useState('memory_bound');
-  const [ncuTimeout, setNcuTimeout] = useState<number | ''>('');
-  const [forceLineinfo, setForceLineinfo] = useState(true);
-  const [ncuResult, setNcuResult] = useState<any>(null);
-  const [ncuLoading, setNcuLoading] = useState(false);
+const [ncuCommand, setNcuCommand] = useState('python -c "print(456)"');
+const [ncuWorkload, setNcuWorkload] = useState('memory_bound');
+const [ncuTimeout, setNcuTimeout] = useState<number | ''>('');
+const [ncuSamplingInterval, setNcuSamplingInterval] = useState<number | ''>('');
+const [forceLineinfo, setForceLineinfo] = useState(true);
+const [ncuResult, setNcuResult] = useState<any>(null);
+const [ncuLoading, setNcuLoading] = useState(false);
 
   const [jobId, setJobId] = useState('');
   const [jobStatus, setJobStatus] = useState<any>(null);
@@ -312,6 +313,16 @@ export function DeepProfileTab() {
                     onChange={(e) => setNcuTimeout(e.target.value === '' ? '' : Number(e.target.value))}
                   />
                 </label>
+                <label className="flex items-center gap-2">
+                  Sampling interval
+                  <input
+                    type="number"
+                    className="bg-white/10 border border-white/10 rounded-lg px-2 py-1 w-24 text-white"
+                    placeholder="optional"
+                    value={ncuSamplingInterval}
+                    onChange={(e) => setNcuSamplingInterval(e.target.value === '' ? '' : Number(e.target.value))}
+                  />
+                </label>
               </div>
               <button
                 className="rounded-lg bg-accent-warning/20 px-3 py-2 text-sm text-accent-warning hover:bg-accent-warning/30 transition-colors"
@@ -329,6 +340,7 @@ export function DeepProfileTab() {
                       async: runAsync,
                       force_lineinfo: forceLineinfo,
                       timeout_seconds: ncuTimeout === '' ? undefined : Number(ncuTimeout),
+                      pm_sampling_interval: ncuSamplingInterval === '' ? undefined : Number(ncuSamplingInterval),
                     });
                     setNcuResult(res);
                     if (res.job_id) setJobId(res.job_id);

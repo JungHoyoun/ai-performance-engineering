@@ -260,6 +260,7 @@ class NsightAutomation:
         kernel_filter: Optional[str] = None,
         force_lineinfo: bool = True,
         timeout_seconds: Optional[float] = None,
+        sampling_interval: Optional[int] = None,
     ) -> Optional[Path]:
         """Run Nsight Compute profiling.
         
@@ -268,6 +269,7 @@ class NsightAutomation:
             output_name: Base name for output file
             workload_type: Type of workload for metric selection
             kernel_filter: Optional kernel name filter
+            sampling_interval: pm-sampling-interval value (cycles between samples)
         
         Returns:
             output_path: Path to .ncu-rep file, or None if failed
@@ -298,6 +300,8 @@ class NsightAutomation:
         # Add kernel filter if specified
         if kernel_filter:
             ncu_cmd.extend(['--kernel-name', kernel_filter])
+        if sampling_interval:
+            ncu_cmd.extend(['--pm-sampling-interval', str(sampling_interval)])
         
         ncu_cmd.extend(command)
         
@@ -307,6 +311,7 @@ class NsightAutomation:
             "cmd": ncu_cmd,
             "timeout_seconds": timeout_seconds,
             "workload_type": workload_type,
+            "sampling_interval": sampling_interval,
         }
         
         try:

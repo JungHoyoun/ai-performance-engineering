@@ -117,10 +117,10 @@ class BenchmarkDefaults:
     measurement_timeout_seconds: int = 1200
     profiling_timeout_seconds: Optional[int] = None  # Defaults to max(nsys, ncu)
     nsys_timeout_seconds: int = 180
-    ncu_timeout_seconds: int = 300
+    ncu_timeout_seconds: int = 3600
     proton_timeout_seconds: int = 180
     timeout_multiplier: float = 3.0
-    ncu_sampling_interval: int = 75000
+    pm_sampling_interval: Optional[int] = None
     
     # Legacy timeout (deprecated)
     timeout_seconds: int = 900
@@ -177,7 +177,7 @@ class BenchmarkDefaults:
             "timeout_seconds": self.timeout_seconds,
             "profiling_output_dir": self.profiling_output_dir,
             "ncu_metric_set": self.ncu_metric_set,
-            "ncu_sampling_interval": self.ncu_sampling_interval,
+            "pm_sampling_interval": self.pm_sampling_interval,
         }
 
 

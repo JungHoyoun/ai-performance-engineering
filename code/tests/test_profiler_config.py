@@ -267,7 +267,7 @@ class TestBuildProfilerConfigFromBenchmark:
         mock_config = MagicMock()
         mock_config.profile_type = "minimal"
         mock_config.ncu_metric_set = None
-        mock_config.ncu_sampling_interval = 75000
+        mock_config.pm_sampling_interval = None
         mock_config.nsys_nvtx_include = None
         
         result = build_profiler_config_from_benchmark(mock_config)
@@ -280,7 +280,7 @@ class TestBuildProfilerConfigFromBenchmark:
         mock_config = MagicMock()
         mock_config.profile_type = "deep_dive"
         mock_config.ncu_metric_set = "deep_dive"
-        mock_config.ncu_sampling_interval = 50000
+        mock_config.pm_sampling_interval = 50000
         mock_config.nsys_nvtx_include = ["kernel1"]
         
         result = build_profiler_config_from_benchmark(mock_config)
@@ -317,6 +317,3 @@ class TestMetricNaming:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-
-
-

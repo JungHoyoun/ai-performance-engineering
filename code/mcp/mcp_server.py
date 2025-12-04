@@ -2419,6 +2419,11 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
             "description": "Max runtime before returning partial output; set 0/null for no timeout",
             "default": 300
         },
+        "pm_sampling_interval": {
+            "type": "integer",
+            "description": "Nsight Compute pm-sampling-interval (cycles). Increase to reduce overhead; omit for default.",
+            "default": None
+        },
     }), "required": ["command"]}
 )
 def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -2441,6 +2446,8 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
     run_async = bool(params.get("async"))
     timeout_param = params.get("timeout_seconds")
     timeout_seconds = None if timeout_param is None else int(timeout_param)
+    sampling_param = params.get("pm_sampling_interval") if "pm_sampling_interval" in params else params.get("sampling_interval")
+    sampling_interval = None if sampling_param in (None, "") else int(sampling_param)
 
     automation = NsightAutomation(output_dir)
     cuda_check = _cuda_precheck()
@@ -2450,6 +2457,7 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
         "cuda": cuda_check,
         "output_dir": str(output_dir),
         "command_provided": bool(command),
+        "pm_sampling_interval": sampling_interval,
     }
 
     if precheck_only:
@@ -2475,6 +2483,7 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
             "kernel_filter": kernel_filter,
             "force_lineinfo": force_lineinfo,
             "timeout_seconds": timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
+            "pm_sampling_interval": sampling_interval,
             "planned_output": str(output_path),
             "note": "Set dry_run=false to execute; use async=true to background the run.",
         }
@@ -2488,6 +2497,7 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
             kernel_filter=kernel_filter,
             force_lineinfo=force_lineinfo,
             timeout_seconds=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
+            sampling_interval=sampling_interval,
         )
 
         result = {
@@ -2498,6 +2508,7 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
             "cwd": str(output_dir),
             "force_lineinfo": force_lineinfo,
             "timeout_seconds": timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
+            "pm_sampling_interval": sampling_interval,
             "timeout_hit": bool(auto.last_run.get("timeout_hit")) if hasattr(auto, "last_run") else False,  # type: ignore[attr-defined]
             "error": auto.last_error if path is None else None,
             "run_details": getattr(auto, "last_run", {}),  # type: ignore[attr-defined]
