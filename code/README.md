@@ -75,7 +75,6 @@ python -m cli.aisp bench run --targets ch07 --profile minimal
 python -m cli.aisp bench compare ch07.baseline_memory_access ch07.optimized_memory_access
 
 # Using the Harness Directly
-```python
 from core.harness.benchmark_harness import BenchmarkHarness
 from ch07.optimized_memory_access import get_benchmark
 
@@ -331,7 +330,7 @@ aisp_ask(question='Why is my attention kernel slow?')
 
 ```python
 #!/usr/bin/env python3
-"""Optimized: Description of optimization."""
+"""Description of optimization."""
 
 import torch
 from core.harness.benchmark_harness import BaseBenchmark
