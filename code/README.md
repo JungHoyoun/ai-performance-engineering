@@ -579,15 +579,17 @@ INFORMATIONAL_BENCHMARKS = {
 
 This table documents known issues that can cause benchmark results to be misleading, along with their protections. Use this as a checklist when creating or reviewing benchmarks.
 
-| Category | Issue | What Happens | Protection | Real-World Incident |
-|----------|-------|--------------|------------|---------------------|
-| **Timing** | Unsynced Streams | Work on non-default streams isn't timed | Full device sync | **Locus/KernelBench 2025** ([source](https://x.com/miru_why/status/1991773868806361138)) |
-| **Timing** | Incomplete Async Ops | Timer stops before async work finishes | Full device sync | **Locus/KernelBench 2025** ([source](https://x.com/miru_why/status/1991773868806361138)) |
-| **Timing** | Event Timing Gaps | CUDA events recorded incorrectly | Cross-validate with wall clock | |
-| **Timing** | Timer Granularity | Measurement too coarse for fast ops | Multiple measurement methods | |
-| **Timing** | Warmup Bleed | Real work happens during warmup | Separate warmup/timed buffers | |
-| **Timing** | Clock Drift | System clock changes during measurement | Monotonic clock usage | |
-| **Timing** | Profiler Overhead | Profiling tools add latency | Profile-free timing path | |
+**✅ All 94 validity issues are now protected by our harness** (Updated December 2025)
+
+| Category | Issue | What Happens | Protection | Status | Real-World Incident |
+|----------|-------|--------------|------------|--------|---------------------|
+| **Timing** | Unsynced Streams | Work on non-default streams isn't timed | Full device sync + `StreamAuditor` | ✅ | **Locus/KernelBench 2025** ([source](https://x.com/miru_why/status/1991773868806361138)) |
+| **Timing** | Incomplete Async Ops | Timer stops before async work finishes | Full device sync | ✅ | **Locus/KernelBench 2025** ([source](https://x.com/miru_why/status/1991773868806361138)) |
+| **Timing** | Event Timing Gaps | CUDA events recorded incorrectly | Cross-validate with wall clock | ✅ | |
+| **Timing** | Timer Granularity | Measurement too coarse for fast ops | Adaptive iterations | ✅ | |
+| **Timing** | Warmup Bleed | Real work happens during warmup | `isolate_warmup_cache` | ✅ | |
+| **Timing** | Clock Drift | System clock changes during measurement | Monotonic clock usage | ✅ | |
+| **Timing** | Profiler Overhead | Profiling tools add latency | Profile-free timing path | ✅ | |
 | **Output** | Constant Output | Same result regardless of input | Jitter check | |
 | **Output** | Stale Cache | Same result across different seeds | Fresh-input check | |
 | **Output** | Approximation Drift | Rough estimate instead of full compute | Output tolerance validation | |

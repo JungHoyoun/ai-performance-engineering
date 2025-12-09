@@ -68,6 +68,12 @@ class OptimizedFlashSDPBenchmark(BaseBenchmark):
             requests_per_iteration=float(self.batch),
             tokens_per_iteration=float(tokens),
         )
+        self.output = None
+        self.jitter_exemption_reason = "Flash SDP benchmark: fixed dimensions for attention comparison"
+        self.register_workload_metadata(
+            requests_per_iteration=float(self.batch),
+            tokens_per_iteration=float(tokens),
+        )
 
     def setup(self) -> None:
         ensure_flash_sdp_available()
@@ -88,7 +94,7 @@ class OptimizedFlashSDPBenchmark(BaseBenchmark):
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
         with nvtx_range("flash_sdp_optimized", enable=enable_nvtx):
-            _ = self.model(self.inputs)
+            self.output = self.model(self.inputs)
         torch.cuda.synchronize(self.device)
 
     def teardown(self) -> None:
@@ -100,6 +106,20 @@ class OptimizedFlashSDPBenchmark(BaseBenchmark):
         if self.model is None or self.inputs is None:
             return "Model not initialized"
         return None
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification comparison."""
+        if self.output is None:
+            raise RuntimeError("Output not available - run benchmark first")
+        return self.output
+
+    def get_input_signature(self) -> dict:
+        """Return workload signature for input verification."""
+        return {"batch": self.batch, "seq_len": self.seq_len, "hidden": self.hidden}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(

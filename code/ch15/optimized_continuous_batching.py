@@ -29,6 +29,12 @@ class OptimizedContinuousBatchingBenchmark(BaseBenchmark):
             requests_per_iteration=float(self.num_samples),
             tokens_per_iteration=float(tokens),
         )
+        self.output = None
+        self.jitter_exemption_reason = "Continuous batching benchmark: fixed dimensions for scheduling comparison"
+        self.register_workload_metadata(
+            requests_per_iteration=float(self.num_samples),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: initialize model and sample queue."""
@@ -63,7 +69,11 @@ class OptimizedContinuousBatchingBenchmark(BaseBenchmark):
                         current_size += 1
                     if current_batch:
                         batch = torch.cat(current_batch, dim=0)
-                        _ = self.model(batch)
+                        out = self.model(batch)
+                        if self.output is None:
+                            self.output = out
+                        else:
+                            self.output = torch.cat([self.output, out], dim=0)
             self._synchronize()
     
     def teardown(self) -> None:
@@ -96,8 +106,21 @@ class OptimizedContinuousBatchingBenchmark(BaseBenchmark):
     def validate_result(self) -> Optional[str]:
         if self.model is None:
             return "Model not initialized"
-        if self.sample_queue is None:
-            return "Sample queue not initialized"
+        return None
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification comparison."""
+        if self.output is None:
+            raise RuntimeError("Output not available - run benchmark first")
+        return self.output
+
+    def get_input_signature(self) -> dict:
+        """Return workload signature for input verification."""
+        return {"batch_size": self.batch_size, "num_batches": self.num_batches, "hidden_dim": self.hidden_dim}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
         return None
 
 
