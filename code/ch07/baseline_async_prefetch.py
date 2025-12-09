@@ -6,6 +6,8 @@ from typing import Optional
 import sys
 from pathlib import Path
 
+import torch
+
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
@@ -26,6 +28,12 @@ class BaselineAsyncPrefetchBenchmark(CudaBinaryBenchmark):
             iterations=3,
             warmup=5,
             timeout_seconds=120,
+            workload_params={"type": "async_prefetch"},
+        )
+        self._bytes_requested = 1024 * 1024 * 4  # Default 1MB float32
+        from core.harness.benchmark_harness import WorkloadMetadata
+        self.register_workload_metadata(
+            bytes_per_iteration=float(self._bytes_requested),
         )
 
 
@@ -38,6 +46,11 @@ class BaselineAsyncPrefetchBenchmark(CudaBinaryBenchmark):
             num_transactions=max(1, self._bytes_requested // 128),
             optimal_transactions=max(1, self._bytes_requested // 128),
         )
+    
+    # Note: get_verify_output() inherited from CudaBinaryBenchmark
+    # which returns checksum from verify binary run
+
+
 
 def get_benchmark() -> BaselineAsyncPrefetchBenchmark:
     """Factory for discover_benchmarks()."""
