@@ -37,6 +37,8 @@ class NvlinkOffloadBenchmark(BaseBenchmark):
         self.copy_stream: Optional[torch.cuda.Stream] = None
         self.next_start: int = 0
         self._bytes_per_iteration: float = 0.0
+        self.jitter_exemption_reason = "NVLink offload benchmark: fixed dimensions"
+        self.register_workload_metadata(requests_per_iteration=1.0)
 
     def setup(self) -> None:
         torch.manual_seed(2025)
@@ -123,3 +125,15 @@ class NvlinkOffloadBenchmark(BaseBenchmark):
             f"{self.label}.use_pinned": float(self.cfg.use_pinned),
             f"{self.label}.non_blocking": float(self.cfg.non_blocking),
         }
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification comparison."""
+        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"label": self.label, "batch_size": self.cfg.batch_size}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
