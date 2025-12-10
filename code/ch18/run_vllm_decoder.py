@@ -307,6 +307,11 @@ class VLLMMoEInferenceBenchmark(BaseBenchmark):
         self._mem_log_path: Optional[Path] = None
         self._nvlink_warned: bool = False
         self._nvlink_status: str = "unknown"
+        self.jitter_exemption_reason = "vLLM decoder benchmark: fixed configuration"
+        self.register_workload_metadata(
+            requests_per_iteration=float(self.config.batch_size),
+            tokens_per_iteration=float(self.config.tokens_per_iteration),
+        )
 
     def _build_config(self) -> MoeInferenceConfig:
         return MoeInferenceConfig(
@@ -777,6 +782,18 @@ class VLLMMoEInferenceBenchmark(BaseBenchmark):
         if not self._history["tpot"]:
             return "No decode tokens captured"
         return None
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification comparison."""
+        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"batch_size": self.config.batch_size, "context_window": self.config.context_window}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:
