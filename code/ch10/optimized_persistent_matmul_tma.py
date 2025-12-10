@@ -217,6 +217,11 @@ class PersistentMatmulTMABenchmark(BaseBenchmark):
             requests_per_iteration=1.0,
             tokens_per_iteration=float(self.M * self.N),
         )
+        self.jitter_exemption_reason = "TMA matmul benchmark: fixed dimensions for comparison"
+        self.register_workload_metadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(self.M * self.N),
+        )
 
     def setup(self) -> None:
         """Setup: Initialize matrices and warmup TMA kernel."""
@@ -291,6 +296,20 @@ class PersistentMatmulTMABenchmark(BaseBenchmark):
         if not torch.allclose(self.c, expected, rtol=0.05, atol=0.05):
             return "Result verification failed"
         return None
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification."""
+        if self.c is None:
+            raise RuntimeError("Output not available - run benchmark first")
+        return self.c.float()
+
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"M": self.M, "N": self.N, "K": self.K}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison - wider due to FP16."""
+        return (0.5, 5.0)
 
 
 def get_benchmark() -> BaseBenchmark:

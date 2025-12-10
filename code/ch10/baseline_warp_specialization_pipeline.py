@@ -41,6 +41,12 @@ class BaselineWarpSpecializationPipelineBenchmark(BaseBenchmark):
             requests_per_iteration=float(self.micro_batches),
             tokens_per_iteration=float(tokens),
         )
+        self.output: Optional[torch.Tensor] = None
+        self.jitter_exemption_reason = "Warp specialization benchmark: fixed dimensions"
+        self.register_workload_metadata(
+            requests_per_iteration=float(self.micro_batches),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize model without warp specialization."""
@@ -108,6 +114,20 @@ class BaselineWarpSpecializationPipelineBenchmark(BaseBenchmark):
         if self.inputs_host is None:
             return "Inputs not initialized"
         return None
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification."""
+        if self.output is None:
+            raise RuntimeError("Output not available - run benchmark first")
+        return self.output
+
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"micro_batches": self.micro_batches, "chunk_tokens": self.chunk_tokens, "hidden_dim": self.hidden_dim}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

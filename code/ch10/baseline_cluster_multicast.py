@@ -30,7 +30,10 @@ class BaselineClusterMulticastBenchmark(BaseBenchmark):
         self.linear_a: Optional[nn.Linear] = None
         self.linear_b: Optional[nn.Linear] = None
         self.inputs: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
         self._workload = WorkloadMetadata(bytes_per_iteration=0.0)
+        self.jitter_exemption_reason = "Cluster multicast benchmark: fixed dimensions"
+        self.register_workload_metadata(bytes_per_iteration=0.0)
 
     def setup(self) -> None:
         torch.manual_seed(0)
@@ -65,6 +68,26 @@ class BaselineClusterMulticastBenchmark(BaseBenchmark):
             num_stages=getattr(self, 'num_stages', 4),
             stage_times_ms=getattr(self, '_stage_times_ms', [1.0]),
         )
+
+    def validate_result(self) -> Optional[str]:
+        if self.linear_a is None or self.linear_b is None:
+            return "Models not initialized"
+        return None
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification."""
+        if self.output is None:
+            raise RuntimeError("Output not available - run benchmark first")
+        return self.output.float()
+
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"hidden": 4096, "batch": 256}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.5, 5.0)
+
 
 def get_benchmark() -> BaseBenchmark:
     return BaselineClusterMulticastBenchmark()

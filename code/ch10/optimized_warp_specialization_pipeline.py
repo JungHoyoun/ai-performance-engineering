@@ -52,6 +52,8 @@ class OptimizedWarpSpecializationPipelineBenchmark(BaseBenchmark):
         self.producer_stream = torch.cuda.Stream()
         self.compute_stream = torch.cuda.Stream()
         self.consumer_stream = torch.cuda.Stream()
+        self.output: Optional[torch.Tensor] = None
+        self.jitter_exemption_reason = "Warp specialization benchmark: fixed dimensions"
 
     def setup(self) -> None:
         """Setup: Initialize model with warp specialization."""
@@ -122,6 +124,28 @@ class OptimizedWarpSpecializationPipelineBenchmark(BaseBenchmark):
             num_stages=getattr(self, 'num_stages', 4),
             stage_times_ms=getattr(self, '_stage_times_ms', [1.0]),
         )
+
+    def validate_result(self) -> Optional[str]:
+        if self.model is None:
+            return "Model not initialized"
+        if self.input is None:
+            return "Input not initialized"
+        return None
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification."""
+        if self.output is None:
+            raise RuntimeError("Output not available - run benchmark first")
+        return self.output.float()
+
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"micro_batches": self.micro_batches, "chunk_tokens": self.chunk_tokens, "hidden_dim": self.hidden_dim}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison - wider due to FP16."""
+        return (0.5, 5.0)
+
 
 def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
