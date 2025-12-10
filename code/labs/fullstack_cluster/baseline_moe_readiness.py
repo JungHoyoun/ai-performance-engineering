@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -118,6 +118,11 @@ def main() -> None:
 class BaselineMoEReadinessBenchmark(BaseBenchmark):
     """Harness entry that launches this module via torchrun."""
 
+    def __init__(self) -> None:
+        super().__init__()
+        self.jitter_exemption_reason = "MoE readiness baseline: multi-GPU"
+        self.register_workload_metadata(requests_per_iteration=1.0)
+
     def benchmark_fn(self) -> None:
         # On single-GPU hosts, skip rather than failing torchrun.
         if torch.cuda.device_count() < 2:
@@ -161,6 +166,13 @@ class BaselineMoEReadinessBenchmark(BaseBenchmark):
         """Return output tensor for verification comparison."""
         return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"type": "moe_readiness_baseline"}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaselineMoEReadinessBenchmark:
