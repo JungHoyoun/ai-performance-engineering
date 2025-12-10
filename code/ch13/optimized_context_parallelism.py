@@ -21,7 +21,7 @@ import torch.nn as nn
 # Add common to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.harness.benchmark_harness import BenchmarkHarness, BenchmarkConfig, BenchmarkMode
+from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkConfig, BenchmarkMode
 from core.utils.logger import get_logger
 
 logger = get_logger(__name__)
