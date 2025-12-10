@@ -104,6 +104,11 @@ class OptimizedTorchcommsBenchmark(BaseBenchmark):
         )
         self._bytes_transferred = 0
         self._overlap_efficiency = 0.0
+        self.jitter_exemption_reason = "Torchcomms optimized benchmark: multi-GPU"
+        self.register_workload_metadata(
+            requests_per_iteration=float(self.batch),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize model with async-ready communication."""
@@ -278,6 +283,13 @@ class OptimizedTorchcommsBenchmark(BaseBenchmark):
             raise RuntimeError("Output not available - run benchmark first")
         return self.output
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"batch": self.batch, "hidden": self.hidden}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:
@@ -285,12 +297,22 @@ def get_benchmark() -> BaseBenchmark:
     gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
     if gpu_count < 2:
         class _SkipBenchmark(BaseBenchmark):
+            def __init__(self) -> None:
+                super().__init__()
+                self.jitter_exemption_reason = "Skip benchmark: insufficient GPUs"
+                self.register_workload_metadata(requests_per_iteration=1.0)
             def get_config(self) -> BenchmarkConfig:
                 return BenchmarkConfig(iterations=1, warmup=5)
             def benchmark_fn(self) -> None:
                 raise RuntimeError(
                     f"SKIPPED: torchcomms benchmark requires 2+ GPUs (found {gpu_count})"
                 )
+            def get_verify_output(self) -> torch.Tensor:
+                return torch.tensor([0.0], dtype=torch.float32)
+            def get_input_signature(self) -> dict:
+                return {"type": "skip"}
+            def get_output_tolerance(self) -> tuple:
+                return (0.1, 1.0)
         return _SkipBenchmark()
     return OptimizedTorchcommsBenchmark()
 
