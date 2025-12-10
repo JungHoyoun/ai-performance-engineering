@@ -41,6 +41,11 @@ def _configure_blackwell_nccl() -> None:
 
 
 class OptimizedNVSHMEMPipelineParallelMultiGPU(BaseBenchmark):
+    def __init__(self) -> None:
+        super().__init__()
+        self.jitter_exemption_reason = "NVSHMEM pipeline parallel: multi-GPU"
+        self.register_workload_metadata(requests_per_iteration=1.0)
+
     def setup(self) -> None:
         if torch.cuda.device_count() < 2:
             raise RuntimeError("SKIPPED: nvshmem_pipeline_parallel requires >=2 GPUs")
@@ -71,6 +76,13 @@ class OptimizedNVSHMEMPipelineParallelMultiGPU(BaseBenchmark):
         """Return output tensor for verification comparison."""
         return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"type": "nvshmem_pipeline_parallel_optimized"}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

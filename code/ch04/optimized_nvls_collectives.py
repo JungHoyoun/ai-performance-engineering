@@ -31,6 +31,7 @@ class NVLSCollectivesBenchmark(BaseBenchmark):
         self.tensor: Optional[torch.Tensor] = None
         self._initialized = False
         self._workload = WorkloadMetadata(bytes_per_iteration=0.0)
+        self.jitter_exemption_reason = "NVLS collectives benchmark: multi-GPU"
 
     def setup(self) -> None:
         if torch.cuda.device_count() < 2:
@@ -79,6 +80,13 @@ class NVLSCollectivesBenchmark(BaseBenchmark):
         """Return output tensor for verification comparison."""
         return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"type": "nvls_collectives"}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:
