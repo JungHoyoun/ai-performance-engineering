@@ -14,7 +14,10 @@ Benefits:
 - Larger effective matrix size → higher TFLOPS
 """
 
+import torch
+
 from labs.moe_optimization_journey.moe_benchmark import MoEJourneyBenchmark
+
 
 class Level5BMMFusion(MoEJourneyBenchmark):
     LEVEL = 5
