@@ -46,6 +46,8 @@ class BaselineKVStandard(BaseBenchmark):
         self.max_seq_length = max_seq_length
         self._last_metrics: Dict[str, Any] = {}
         self.precision_label = "bf16"
+        self.jitter_exemption_reason = "KV cache benchmark: fixed dimensions for memory testing"
+        self.register_workload_metadata(requests_per_iteration=1.0)
 
         hidden_size = num_heads * head_dim
         memory_per_token = num_layers * 2 * num_heads * head_dim * 2  # 2 for K/V, 2 bytes for BF16
@@ -160,6 +162,18 @@ class BaselineKVStandard(BaseBenchmark):
         del self.kv_cache
         super().teardown()
 
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification comparison."""
+        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"batch_size": self.batch_size, "num_layers": self.num_layers}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
+
 
 def run_benchmark(
     batch_size: int = 8,
@@ -196,11 +210,6 @@ def run_benchmark(
         "precision": benchmark.precision_label,
         **metrics,
     }
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
-
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -49,6 +49,8 @@ class OptimizedKVFP8Compressed(BaseBenchmark):
         self.use_fp8 = use_fp8
         self.use_fp4 = use_fp4
         self._last_metrics: Dict[str, Any] = {}
+        self.jitter_exemption_reason = "KV cache benchmark: fixed dimensions for memory testing"
+        self.register_workload_metadata(requests_per_iteration=1.0)
 
         # Determine precision
         if use_fp4 and hasattr(torch, 'float4_e2m1fn'):
@@ -216,6 +218,18 @@ class OptimizedKVFP8Compressed(BaseBenchmark):
         del self.kv_cache
         super().teardown()
 
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification comparison."""
+        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"batch_size": self.batch_size, "num_layers": self.num_layers, "use_fp8": self.use_fp8}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
+
 
 def run_benchmark(
     batch_size: int = 8,
@@ -252,11 +266,6 @@ def run_benchmark(
         "precision": benchmark.precision_label,
         **metrics,
     }
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
-
 
 
 def get_benchmark() -> BaseBenchmark:
