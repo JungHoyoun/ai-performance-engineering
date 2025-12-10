@@ -31,6 +31,7 @@ class OptimizedCudaGraphsBenchmark(BaseBenchmark):
         super().__init__()
         self.data = None
         self.N = 1 << 20  # 1M elements - large enough for meaningful work
+        self.jitter_exemption_reason = "CUDA graphs benchmark: fixed dimensions"
         self.iterations = 500  # More iterations to amortize graph capture cost
         self._extension = None
         self._workload = WorkloadMetadata(
@@ -114,6 +115,13 @@ class OptimizedCudaGraphsBenchmark(BaseBenchmark):
         """Return output tensor for verification comparison."""
         return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"N": self.N}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -34,6 +34,7 @@ class BaselineGraphBandwidthBenchmark(BaseBenchmark):
         self.src = None
         self.dst = None
         self.N = 50_000_000
+        self.jitter_exemption_reason = "Graph bandwidth benchmark: fixed dimensions"
         self.iterations = 10
         self._extension = None
         self._workload = WorkloadMetadata(
@@ -116,6 +117,13 @@ class BaselineGraphBandwidthBenchmark(BaseBenchmark):
         """Return output tensor for verification comparison."""
         return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"N": self.N}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

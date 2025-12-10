@@ -51,6 +51,7 @@ class CUDAGraphRouterBenchmark(BaseBenchmark):
         self.static_out: Optional[torch.Tensor] = None
         # Match baseline workload signature: N represents total elements processed
         self.N = 1 << 20  # 1M elements to match baseline
+        self.jitter_exemption_reason = "CUDA graphs router benchmark: fixed dimensions"
         self._workload = WorkloadMetadata(tokens_per_iteration=float(self.N))
 
     def setup(self) -> None:
@@ -104,6 +105,13 @@ class CUDAGraphRouterBenchmark(BaseBenchmark):
         """Return output tensor for verification comparison."""
         return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"N": self.N}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

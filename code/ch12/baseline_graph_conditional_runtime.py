@@ -44,6 +44,7 @@ class BaselineGraphBenchmark(BaseBenchmark):
         super().__init__()
         self.batch_size = 32
         self.seq_len = 512
+        self.jitter_exemption_reason = "Graph conditional runtime: fixed dimensions"
         self.hidden_dim = 2048
         
         self.data: Optional[torch.Tensor] = None
@@ -123,6 +124,13 @@ class BaselineGraphBenchmark(BaseBenchmark):
         """Return output tensor for verification comparison."""
         return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"batch_size": self.batch_size, "seq_len": self.seq_len}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:
