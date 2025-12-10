@@ -49,6 +49,12 @@ class OptimizedPipelineParallelismBenchmark(BaseBenchmark):
             requests_per_iteration=float(self.micro_batches),
             tokens_per_iteration=float(tokens),
         )
+        self.output = None
+        self.jitter_exemption_reason = "Pipeline parallelism benchmark: fixed dimensions for comparison"
+        self.register_workload_metadata(
+            requests_per_iteration=float(self.micro_batches),
+            tokens_per_iteration=float(tokens),
+        )
 
     def setup(self) -> None:
         if torch.cuda.is_available():
@@ -124,7 +130,7 @@ class OptimizedPipelineParallelismBenchmark(BaseBenchmark):
             
             with self._nvtx_range("optimized_single_gpu"):
                 with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-                    _ = self._compiled_model(self._input_data)
+                    self.output = self._compiled_model(self._input_data)
             self._synchronize()
             self._bubble_fraction = 0.0  # No pipeline bubble
             self._last_stage_durations_ms = [0.0]
@@ -174,6 +180,10 @@ class OptimizedPipelineParallelismBenchmark(BaseBenchmark):
         self._synchronize()
         # Bubble fraction approximates fill/drain overhead: (S-1)/M
         self._bubble_fraction = (num_stages - 1) / float(self.micro_batches)
+        # Store final output from last stage
+        final_outputs = [o for o in stage_buffers[num_stages] if o is not None]
+        if final_outputs:
+            self.output = torch.cat(final_outputs, dim=0)
 
     def teardown(self) -> None:
         self.pipeline_stages = []
@@ -220,9 +230,27 @@ class OptimizedPipelineParallelismBenchmark(BaseBenchmark):
         return self._workload
 
     def validate_result(self) -> Optional[str]:
+        if self._single_gpu_mode:
+            if self._compiled_model is None:
+                return "Compiled model not initialized"
+            return None
         if not self.pipeline_stages:
             return "Pipeline stages not initialized"
         return None
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification comparison."""
+        if self.output is None:
+            raise RuntimeError("Output not available - run benchmark first")
+        return self.output.float()
+
+    def get_input_signature(self) -> dict:
+        """Return workload signature for input verification."""
+        return {"batch_size": self.batch_size, "hidden_size": self.hidden_size}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison - wider due to BF16 and compile."""
+        return (0.5, 5.0)
 
 
 def get_benchmark() -> OptimizedPipelineParallelismBenchmark:

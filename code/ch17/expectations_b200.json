@@ -1,0 +1,32 @@
+{
+  "examples": {
+    "inference_full": {
+      "example": "inference_full",
+      "metadata": {
+        "best_optimization": "optimized_inference_full",
+        "best_optimization_file": "optimized_inference_full.py",
+        "best_optimization_speedup": 2.0282799827755484,
+        "best_optimization_time_ms": 0.36752511918544767,
+        "git_commit": "3ad8bfea529ef4e484a2f8771c7c726e639aee9d",
+        "updated_at": "2025-12-10T00:08:57.324587"
+      },
+      "metrics": {
+        "baseline_p75_ms": 0.7557759881019592,
+        "baseline_throughput.latency_ms": 0.7454438424110412,
+        "baseline_throughput.requests_per_s": 21463.72280472541,
+        "baseline_throughput.tokens_per_s": 43957704.30407764,
+        "baseline_time_ms": 0.7454438424110412,
+        "best_optimized_p75_ms": 0.3742400109767914,
+        "best_optimized_speedup": 2.0282799827755484,
+        "best_optimized_throughput.latency_ms": 0.36752511918544767,
+        "best_optimized_throughput.requests_per_s": 43534.4393206676,
+        "best_optimized_throughput.tokens_per_s": 89158531.72872725,
+        "best_optimized_time_ms": 0.36752511918544767,
+        "best_speedup": 2.0282799827755484
+      },
+      "type": "python"
+    }
+  },
+  "hardware_key": "b200",
+  "schema_version": 2
+}
