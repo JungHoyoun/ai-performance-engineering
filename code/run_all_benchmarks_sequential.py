@@ -160,7 +160,7 @@ def filter_chapters(chapters, chapter_patterns=None, lab_patterns=None, chapter_
 
 def run_benchmark_for_chapter(chapter, log_file, update_expectations=False, accept_regressions=False, 
                               cold_start=False, reproducible=False, suite_timeout=None, timeout_multiplier=None,
-                              profile="deep_dive", kill_gpu=True):
+                              profile="deep_dive", kill_gpu=True, skip_verify=False, verify_phase=None):
     """
     Run benchmark for a single chapter/lab with TRUE ISOLATION.
     
@@ -175,6 +175,8 @@ def run_benchmark_for_chapter(chapter, log_file, update_expectations=False, acce
         timeout_multiplier: Optional multiplier for benchmark timeouts
         profile: Profiling level ('none', 'minimal', 'deep_dive', 'roofline')
         kill_gpu: If True, kill all GPU processes before running benchmark
+        skip_verify: If True, skip output verification
+        verify_phase: Verification enforcement phase ('detect', 'quarantine', 'gate')
     """
     print(f"\n{'='*80}")
     print(f"Starting benchmark for: {chapter}")
@@ -222,6 +224,10 @@ def run_benchmark_for_chapter(chapter, log_file, update_expectations=False, acce
             cmd.extend(["--suite-timeout", str(suite_timeout)])
         if timeout_multiplier is not None:
             cmd.extend(["--timeout-multiplier", str(timeout_multiplier)])
+        if skip_verify:
+            cmd.append("--skip-verify")
+        if verify_phase is not None:
+            cmd.extend(["--verify-phase", verify_phase])
         
         print(f"Command: {' '.join(cmd)}")
         log_file.write(f"Command: {' '.join(cmd)}\n")
@@ -316,6 +322,17 @@ def main():
         help="Don't kill GPU processes between benchmarks (faster but less isolated)"
     )
     parser.add_argument(
+        "--skip-verify",
+        action="store_true",
+        help="Skip output verification (useful for initial runs before golden outputs are cached)"
+    )
+    parser.add_argument(
+        "--verify-phase",
+        choices=["detect", "quarantine", "gate"],
+        default=None,
+        help="Verification enforcement phase: 'detect' (report only), 'quarantine' (exclude non-compliant), 'gate' (strict, default)"
+    )
+    parser.add_argument(
         "--chapter-patterns",
         type=str,
         nargs="+",
@@ -365,6 +382,10 @@ def main():
         print(f"Suite timeout: {args.suite_timeout} seconds")
     if args.timeout_multiplier is not None:
         print(f"Timeout multiplier: {args.timeout_multiplier}x")
+    if args.skip_verify:
+        print("Mode: --skip-verify enabled (skipping output verification)")
+    if args.verify_phase:
+        print(f"Verify phase: {args.verify_phase}")
     
     # Get all chapters and labs
     print("\nFetching list of chapters and labs...")
@@ -438,6 +459,10 @@ def main():
             log_file.write(f"Suite timeout: {args.suite_timeout} seconds\n")
         if args.timeout_multiplier is not None:
             log_file.write(f"Timeout multiplier: {args.timeout_multiplier}x\n")
+        if args.skip_verify:
+            log_file.write("Mode: --skip-verify enabled\n")
+        if args.verify_phase:
+            log_file.write(f"Verify phase: {args.verify_phase}\n")
         log_file.write(f"Total chapters/labs: {len(chapters)}\n")
         log_file.write(f"Chapters/labs list:\n")
         for ch in chapters:
@@ -460,7 +485,9 @@ def main():
                 suite_timeout=args.suite_timeout,
                 timeout_multiplier=args.timeout_multiplier,
                 profile=args.profile,
-                kill_gpu=kill_gpu
+                kill_gpu=kill_gpu,
+                skip_verify=args.skip_verify,
+                verify_phase=args.verify_phase
             )
             chapter_duration = time.time() - chapter_start_time
             
