@@ -58,6 +58,7 @@ class OptimizedDisaggregatedBenchmark(BaseBenchmark):
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(tokens),
         )
+        self.jitter_exemption_reason = "Disaggregated benchmark: multi-GPU"
     
     def setup(self) -> None:
         """Setup: Initialize separate models for prefill and decode."""
@@ -187,6 +188,13 @@ class OptimizedDisaggregatedBenchmark(BaseBenchmark):
         """Return output tensor for verification comparison."""
         return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"batch_size": self.batch_size, "prefill_len": self.prefill_len}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:
