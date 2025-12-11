@@ -123,14 +123,25 @@ class GraceCoherentMemoryBenchmark(BaseBenchmark):
         self.elapsed_s: Optional[float] = None
         self.bandwidth_gb_s: Optional[float] = None
         self.size_mb = size_mb
-        self.jitter_exemption_reason = "Memory benchmark: fixed size for bandwidth measurement"
+        self._verify_output: Optional[torch.Tensor] = None
 
     def setup(self) -> None:
+        # Seed FIRST for deterministic verification
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+        
         self._impl.setup()
         self.register_workload_metadata(
             requests_per_iteration=self._workload.requests_per_iteration,
             bytes_per_iteration=self._workload.bytes_per_iteration,
         )
+        
+        # Do an initial copy to populate gpu_data with actual values
+        self._impl.gpu_data.copy_(self._impl.cpu_data.to(self._impl.device))
+        torch.cuda.synchronize()
+        
+        # Store slice of actual transferred data for jitter-enabled verification
+        self._verify_output = self._impl.gpu_data[:1000].clone()
 
     def benchmark_fn(self) -> None:
         elapsed = self._impl.run()
@@ -162,16 +173,24 @@ class GraceCoherentMemoryBenchmark(BaseBenchmark):
         return None
 
     def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        """Return slice of transferred data for verification comparison."""
+        if self._verify_output is None:
+            raise RuntimeError("setup() must be called before verification")
+        return self._verify_output
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"size_mb": self.size_mb}
+        num_elements = (self.size_mb * 1024 * 1024) // 4  # float32
+        return {
+            "size_mb": self.size_mb,
+            "transfer_type": "coherent",
+            "shapes": {"data": (1, num_elements)},  # 2D shape for jitter check
+            "dtypes": {"data": "float32"},
+        }
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        return (1e-3, 1e-3)
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -704,19 +704,15 @@ class VerifyRunner:
         Returns:
             Tuple of (outputs, workload_metrics, seed_info)
         """
-        # Set deterministic seeds BEFORE setup
-        # Note: Seeds are re-set AFTER setup to ensure verification seeds
-        # take precedence over any seeds benchmarks may set during setup()
-        # for standalone reproducibility. This is the recommended pattern
-        # per the design doc - benchmarks can set seeds in setup() for
-        # standalone use, and verification re-seeds after.
-        set_deterministic_seeds(seed)
-        
-        # Setup (benchmarks may set their own seeds for standalone use)
-        benchmark.setup()
-        
-        # Re-set seeds after setup to ensure verification seeds take precedence
+        # Set deterministic seeds BEFORE setup and capture seed_info
+        # NOTE: We do NOT re-seed after setup. This ensures inputs created
+        # in setup() are deterministic - both baseline and optimized get
+        # identical inputs because they use the same seed before setup().
+        # Benchmarks should create fixed inputs in setup(), not benchmark_fn().
         seed_info = set_deterministic_seeds(seed)
+        
+        # Setup creates model and fixed inputs deterministically
+        benchmark.setup()
         
         try:
             # Run benchmark function

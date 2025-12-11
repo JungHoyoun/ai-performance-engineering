@@ -78,6 +78,8 @@ class SimpleAttentionLayer(nn.Module):
     
     def __init__(self, hidden_dim: int, num_heads: int, head_dim: int, dtype: torch.dtype = torch.float16):
         super().__init__()
+        self.output = None
+        self._verify_input = None
         self.num_heads = num_heads
         self.head_dim = head_dim
         self.qkv = nn.Linear(hidden_dim, hidden_dim * 3, dtype=dtype)
@@ -217,7 +219,9 @@ class OptimizedKVCacheOptimizedBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        return self.output.detach().clone()
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""

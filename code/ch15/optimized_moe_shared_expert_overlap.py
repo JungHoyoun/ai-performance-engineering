@@ -27,6 +27,8 @@ from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E40
 class OverlappedMoE(nn.Module):
     def __init__(self, hidden_dim: int = 1024, num_experts: int = 4):
         super().__init__()
+        self.output = None
+        self._verify_input = None
         self.gate = nn.Linear(hidden_dim, num_experts, bias=False)
         self.experts = nn.ModuleList(
             [nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.SiLU()) for _ in range(num_experts)]
@@ -163,7 +165,9 @@ class OptimizedMoeOverlapBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        return self.output.detach().clone()
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""

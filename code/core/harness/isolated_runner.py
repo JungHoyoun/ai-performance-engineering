@@ -202,6 +202,24 @@ def run_benchmark(input_data: Dict[str, Any]) -> Dict[str, Any]:
             memory_peak_mb = torch.cuda.max_memory_allocated() / (1024 * 1024)
             memory_allocated_mb = torch.cuda.memory_allocated() / (1024 * 1024)
         
+        # Capture verify_output BEFORE teardown (teardown may clear self.output)
+        verify_output_data = None
+        try:
+            if hasattr(benchmark, 'get_verify_output'):
+                verify_output = benchmark.get_verify_output()
+                if verify_output is not None:
+                    import torch
+                    if isinstance(verify_output, torch.Tensor):
+                        # Serialize tensor: shape, dtype, and data as list
+                        verify_output_data = {
+                            'shape': list(verify_output.shape),
+                            'dtype': str(verify_output.dtype),
+                            'data': verify_output.detach().cpu().float().tolist(),
+                        }
+        except Exception as e:
+            # Log but don't fail - verification is optional
+            errors.append(f"get_verify_output() warning: {e}")
+        
         # Teardown
         benchmark.teardown()
         
@@ -225,6 +243,7 @@ def run_benchmark(input_data: Dict[str, Any]) -> Dict[str, Any]:
         benchmark_name=benchmark_name,
         device_str=device_str,
         inference_timing_data=inference_timing_data,
+        verify_output_data=verify_output_data,
         errors=errors,
     )
 
@@ -264,6 +283,7 @@ def _make_success_response(
     benchmark_name: str,
     device_str: Optional[str],
     inference_timing_data: Optional[Dict[str, List[float]]],
+    verify_output_data: Optional[Dict[str, Any]],
     errors: List[str],
 ) -> Dict[str, Any]:
     """Create success response in harness-expected format."""
@@ -317,6 +337,7 @@ def _make_success_response(
     return {
         "success": True,
         "result_json": result.model_dump_json(),
+        "verify_output": verify_output_data,
         "errors": errors,
     }
 

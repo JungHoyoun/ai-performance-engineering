@@ -31,12 +31,13 @@ class OptimizedPerformanceBatchBenchmark(BaseBenchmark):
         super().__init__()
         self.workload = WORKLOAD
         self.batch_size = batch_size if batch_size != 32 else self.workload.microbatch_size
-        self.jitter_exemption_reason = "Performance benchmark: fixed batch size for comparison"
         self.model = None
         self.microbatches = None
         self.targets = None
         self.optimizer = None
         self.fusion = 4
+        self._verify_input = None
+        self._verify_output = None
         tokens = self.batch_size * self.workload.performance_microbatches * 256
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.workload.performance_microbatches),
@@ -44,7 +45,10 @@ class OptimizedPerformanceBatchBenchmark(BaseBenchmark):
         )
     
     def setup(self) -> None:
-        """Setup: initialize model and data with larger batch."""
+        """Setup: initialize model, fixed inputs, and verification output."""
+        # Seed FIRST for deterministic verification
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         
         from core.utils.compile_utils import compile_model
         
@@ -67,7 +71,6 @@ class OptimizedPerformanceBatchBenchmark(BaseBenchmark):
         
         # Match baseline: use eval() mode (baseline has this even though it does backward pass)
         self.model.eval()
-        torch.manual_seed(42)
         microbatches = [
             torch.randn(self.batch_size, 256, device=self.device, dtype=dtype).contiguous()
             for _ in range(self.workload.performance_microbatches)
@@ -78,6 +81,12 @@ class OptimizedPerformanceBatchBenchmark(BaseBenchmark):
         ]
         self.microbatches = microbatches
         self.targets = targets
+        
+        # Create FIXED verification input - output will be captured at END of benchmark_fn()
+        # Note: This benchmark intentionally uses FP16 as the optimization (vs FP32 baseline)
+        self._verify_input = self.microbatches[0].clone()
+        self._verify_output = None  # Will be set at end of benchmark_fn()
+        
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=1e-3)
         # Warm up compiled model so the measurement loop only sees steady-state cost.
         for _ in range(3):
@@ -110,6 +119,11 @@ class OptimizedPerformanceBatchBenchmark(BaseBenchmark):
                 loss.backward()
                 self.optimizer.step()
         self._synchronize()
+        
+        # Capture verification output AFTER training completes
+        # Convert to FP32 for consistent comparison with baseline
+        with torch.no_grad():
+            self._verify_output = self.model(self._verify_input).float().clone()
 
     
     def teardown(self) -> None:
@@ -159,15 +173,26 @@ class OptimizedPerformanceBatchBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self._verify_output is None:
+            raise RuntimeError("setup() must be called before verification")
+        return self._verify_output
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"batch_size": self.batch_size}
+        return {
+            "batch_size": self.batch_size,
+            "num_microbatches": self.workload.performance_microbatches,
+            "input_dim": 256,
+            "output_dim": 10,
+        }
 
     def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        """Return tolerance for numerical comparison.
+        
+        Uses looser tolerance because this benchmark intentionally uses
+        FP16 (optimized) vs FP32 (baseline). FP16 has ~3 decimal digits of precision.
+        """
+        return (1e-2, 1e-2)
 
 
 def get_benchmark() -> BaseBenchmark:

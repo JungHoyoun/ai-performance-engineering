@@ -44,6 +44,7 @@ class BaselineMoERoutingSimple:
         self.top_k = top_k
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.last_output = None  # For verification
         
         logger.info(f"Baseline MoE Routing")
         logger.info(f"  Experts: {num_experts}, Top-K: {top_k}")
@@ -77,6 +78,9 @@ class BaselineMoERoutingSimple:
         # Top-K selection (no topology consideration)
         routing_weights, selected_experts = torch.topk(routing_logits, self.top_k, dim=-1)
         routing_weights = F.softmax(routing_weights, dim=-1)
+        
+        # Capture output for verification
+        self.last_output = routing_weights.detach()
         
         torch.cuda.synchronize()
         elapsed = time.perf_counter() - start
@@ -145,6 +149,7 @@ class _MoERoutingSimpleBenchmark(BaseBenchmark):
         super().__init__()
         self._impl = BaselineMoERoutingSimple()
         self._metrics = {}
+        self.output = None
         self.jitter_exemption_reason = "MoE routing simple: fixed configuration"
         self.register_workload_metadata(requests_per_iteration=1.0)
 
@@ -153,6 +158,7 @@ class _MoERoutingSimpleBenchmark(BaseBenchmark):
 
     def benchmark_fn(self) -> None:
         self._metrics = self._impl.run()
+        self.output = self._impl.last_output
         self._synchronize()
 
     def teardown(self) -> None:
@@ -162,7 +168,9 @@ class _MoERoutingSimpleBenchmark(BaseBenchmark):
         return BenchmarkConfig(iterations=10, warmup=5)
 
     def get_verify_output(self) -> torch.Tensor:
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        return self.output.detach().clone()
 
     def get_input_signature(self) -> dict:
         return {"type": "moe_routing_simple_baseline"}

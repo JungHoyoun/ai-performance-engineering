@@ -21,25 +21,23 @@ class BaselineWarpDivergenceILPBenchmark(BaseBenchmark):
         self.workload = WORKLOAD
         self.N = self.workload.warp_elements
         self.branch_iterations = self.workload.warp_branch_iterations
-        self._checksum = 0.0
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.branch_iterations),
             tokens_per_iteration=float(self.N * self.branch_iterations),
         )
-        # ILP benchmark: fixed dimensions for measurement
-        self.jitter_exemption_reason = "Warp divergence ILP benchmark: fixed dimensions"
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        self.output = None  # Will be set by benchmark_fn
         self.routing_logits = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self._synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: ILP operations with warp divergence."""
-        assert self.input is not None and self.output is not None and self.routing_logits is not None
+        assert self.input is not None and self.routing_logits is not None
         with self._nvtx_range("baseline_warp_divergence_ilp"):
             mask_source = self.routing_logits
             result = self.input.clone()
@@ -64,7 +62,6 @@ class BaselineWarpDivergenceILPBenchmark(BaseBenchmark):
 
             self.output = result
             self.routing_logits = mask_source
-            self._checksum = float(result.sum().item())
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -98,20 +95,30 @@ class BaselineWarpDivergenceILPBenchmark(BaseBenchmark):
 
     def get_input_signature(self) -> dict:
         """Return workload signature for input verification."""
-        return {"N": self.N, "branch_iterations": self.branch_iterations}
+        return {
+            "N": self.N,
+            "branch_iterations": self.branch_iterations,
+            "shapes": {"input": (1, self.N)},  # 2D shape for jitter check
+            "dtypes": {"input": "float32"},
+        }
 
     def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
+        """Return output tensor for verification comparison.
+        
+        Boolean indexing vs torch.where should produce IDENTICAL results
+        because they apply the same math to the same elements.
+        """
         if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
+            raise RuntimeError("setup() must be called before verification")
         return self.output
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison.
         
-        Divergent vs branchless implementations may have slight numerical differences.
+        FP32 operations with same math should match closely.
+        Using slightly loose tolerance for CUDA parallel execution variance.
         """
-        return (1e-4, 1e-4)
+        return (1e-5, 1e-5)
 
 
 

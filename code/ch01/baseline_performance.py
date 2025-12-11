@@ -67,9 +67,15 @@ class BaselinePerformanceBenchmark(BaseBenchmark):
         self.num_microbatches = self.workload.performance_microbatches
         self.microbatches = None
         self.targets = None
+        self._verify_input = None
+        self._verify_output = None
     
     def setup(self) -> None:
-        """Setup: initialize model and data."""
+        """Setup: initialize model, fixed inputs, and verification output."""
+        # Seed FIRST for deterministic verification
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+        
         self.model = torch.nn.Sequential(
             torch.nn.Linear(256, 256),
             torch.nn.ReLU(),
@@ -95,6 +101,11 @@ class BaselinePerformanceBenchmark(BaseBenchmark):
             torch.randint(0, 10, (self.batch_size,), device=self.device)
             for _ in range(self.num_microbatches)
         ]
+        
+        # Create FIXED verification input - output will be captured at END of benchmark_fn()
+        self._verify_input = self.microbatches[0].clone()
+        self._verify_output = None  # Will be set at end of benchmark_fn()
+        
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=1e-3)
         # Warm up: run a few iterations so any torch.compile graph capture or
         # kernel autotuning occurs before the harness starts timing.
@@ -128,6 +139,10 @@ class BaselinePerformanceBenchmark(BaseBenchmark):
                 self.optimizer.step()
         if self.device.type == "cuda":
             torch.cuda.synchronize()
+        
+        # Capture verification output AFTER training completes
+        with torch.no_grad():
+            self._verify_output = self.model(self._verify_input).clone()
 
     
     def teardown(self) -> None:
@@ -173,15 +188,26 @@ class BaselinePerformanceBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self._verify_output is None:
+            raise RuntimeError("setup() must be called before verification")
+        return self._verify_output
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"batch_size": self.batch_size, "num_microbatches": self.num_microbatches}
+        return {
+            "batch_size": self.batch_size,
+            "num_microbatches": self.num_microbatches,
+            "input_dim": 256,
+            "output_dim": 10,
+        }
 
     def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        """Return tolerance for numerical comparison.
+        
+        Uses looser tolerance because optimized uses FP16 vs baseline FP32.
+        FP16 has ~3 decimal digits of precision, so 1e-2 allows for that.
+        """
+        return (1e-2, 1e-2)
 
 
 def get_benchmark() -> BaseBenchmark:

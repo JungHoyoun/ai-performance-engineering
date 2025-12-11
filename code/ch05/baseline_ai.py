@@ -40,7 +40,8 @@ class BaselineAIBenchmark(BaseBenchmark):
         )
 
     def setup(self) -> None:
-        torch.manual_seed(0)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         # Initialize model weights after seeding for deterministic comparison
         self.blocks = nn.ModuleList(TinyBlock(1024).to(self.device) for _ in range(4))
         self.inputs = torch.randn(self.batch, self.hidden, device=self.device, dtype=torch.float32)
@@ -91,7 +92,7 @@ class BaselineAIBenchmark(BaseBenchmark):
         """Return output tensor for verification comparison."""
         if self.output is not None:
             return self.output.detach().clone()
-        return torch.tensor([0.0], dtype=torch.float32, device=self.device)
+        raise RuntimeError("benchmark_fn() must be called before verification - output is None")
     
     def get_output_tolerance(self) -> tuple:
         """Return custom tolerance for inference benchmark."""

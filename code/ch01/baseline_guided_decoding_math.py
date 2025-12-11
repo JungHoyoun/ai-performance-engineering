@@ -30,19 +30,25 @@ class BaselineGuidedDecodingMathBenchmark(BaseBenchmark):
         super().__init__()
         self.model = None
         self.input_ids = None
+        self.embedded_input = None
+        self.memory = None
+        self._verify_output = None
         self.schema = None
         self.max_length = 20
         self.batch_size = 4
         self.seq_len = 10
+        self.hidden_dim = 256
         tokens = self.batch_size * self.seq_len
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(tokens),
         )
-        # Jitter check not applicable: random inputs generated per iteration
-        self.jitter_exemption_reason = "Guided decoding: random inputs generated in benchmark_fn each iteration"
 
     def setup(self) -> None:
+        # Seed FIRST for deterministic verification
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+        
         if torch.cuda.is_available():
             torch.backends.cuda.enable_flash_sdp(False)
             torch.backends.cuda.enable_mem_efficient_sdp(False)
@@ -52,11 +58,9 @@ class BaselineGuidedDecodingMathBenchmark(BaseBenchmark):
             torch.backends.cudnn.deterministic = False
             enable_tf32()
 
-        torch.manual_seed(42)
         vocab_size = 1000
-        hidden_dim = 256
         self.model = nn.TransformerDecoder(
-            nn.TransformerDecoderLayer(d_model=hidden_dim, nhead=8, batch_first=True),
+            nn.TransformerDecoderLayer(d_model=self.hidden_dim, nhead=8, batch_first=True),
             num_layers=1,
         ).to(self.device).eval()
 
@@ -70,15 +74,22 @@ class BaselineGuidedDecodingMathBenchmark(BaseBenchmark):
         }
 
         self.input_ids = torch.randint(0, vocab_size, (self.batch_size, self.seq_len), device=self.device)
-        torch.cuda.synchronize(self.device)
+        
+        # Create FIXED inputs for deterministic verification
+        self.embedded_input = torch.randn(self.batch_size, self.seq_len, self.hidden_dim, device=self.device)
+        self.memory = torch.randn(self.batch_size, self.seq_len, self.hidden_dim, device=self.device)
+        
+        # Compute verification output once
+        with torch.no_grad():
+            self._verify_output = self.model(self.embedded_input, self.memory).clone()
+        self._synchronize()
 
     def benchmark_fn(self) -> None:
         with self._nvtx_range("baseline_guided_decoding_math"):
             with torch.no_grad():
-                embedded_input = torch.randn(self.input_ids.size(0), self.input_ids.size(1), 256, device=self.device)
-                memory = torch.randn(self.input_ids.size(0), self.input_ids.size(1), 256, device=self.device)
-                output = self.model(embedded_input, memory)
-                _ = output.sum()
+                # Use fixed inputs for deterministic verification
+                self._verify_output = self.model(self.embedded_input, self.memory)
+                _ = self._verify_output.sum()
             self._synchronize()
 
     def teardown(self) -> None:
@@ -114,22 +125,20 @@ class BaselineGuidedDecodingMathBenchmark(BaseBenchmark):
         return {
             "batch_size": self.batch_size,
             "seq_len": self.seq_len,
-            "max_length": self.max_length,
-            "hidden_dim": 256,
+            "hidden_dim": self.hidden_dim,
+            "num_layers": 1,
+            "nhead": 8,
         }
 
     def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison.
-        
-        Note: This benchmark creates random inputs in benchmark_fn() each iteration,
-        making deterministic verification infeasible. We return a checksum based on
-        model parameter count as a sanity check.
-        """
-        if self.model is None:
-            raise RuntimeError("Model not available - run benchmark first")
-        param_count = sum(p.numel() for p in self.model.parameters())
-        return torch.tensor([float(param_count)], dtype=torch.float32)
+        """Return output tensor for verification comparison."""
+        if self._verify_output is None:
+            raise RuntimeError("setup() must be called before verification")
+        return self._verify_output
 
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (1e-4, 1e-4)
 
 
 def get_benchmark() -> BaseBenchmark:

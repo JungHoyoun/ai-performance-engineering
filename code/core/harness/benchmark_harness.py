@@ -2142,6 +2142,25 @@ class BenchmarkHarness:
                                 ncu_metrics = benchmark_result.profiler_metrics.ncu.to_dict()
                             if benchmark_result.profiler_metrics.proton:
                                 proton_metrics = benchmark_result.profiler_metrics.proton.to_dict()
+                        
+                        # Extract verify_output from subprocess and store on benchmark
+                        verify_output_data = result_dict.get("verify_output")
+                        if verify_output_data is not None:
+                            try:
+                                import torch
+                                # Reconstruct tensor from serialized data
+                                data = verify_output_data.get("data")
+                                shape = verify_output_data.get("shape")
+                                dtype_str = verify_output_data.get("dtype", "torch.float32")
+                                if data is not None:
+                                    tensor = torch.tensor(data, dtype=torch.float32)
+                                    if shape:
+                                        tensor = tensor.view(*shape)
+                                    # Store on the benchmark object for verification
+                                    benchmark._subprocess_verify_output = tensor
+                            except Exception as e:
+                                if LOGGER_AVAILABLE:
+                                    logger.debug(f"Failed to reconstruct verify_output: {e}")
                     else:
                         errors.extend(result_dict.get("errors", ["Subprocess execution failed"]))
                         times_ms = cast(List[float], [])

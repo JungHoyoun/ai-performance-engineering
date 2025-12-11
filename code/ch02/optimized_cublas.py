@@ -35,9 +35,9 @@ class OptimizedCublasBenchmark(BaseBenchmark):
         self.m = 2048
         self.n = 2048
         self.k = 2048
-        self.jitter_exemption_reason = "cuBLAS benchmark: fixed matrix dimensions"
         self.A: Optional[torch.Tensor] = None
         self.B: Optional[torch.Tensor] = None
+        self.C: Optional[torch.Tensor] = None
         self._tf32_state: Optional[Tuple[Optional[str], Optional[str]]] = None
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,
@@ -45,7 +45,11 @@ class OptimizedCublasBenchmark(BaseBenchmark):
         )
 
     def setup(self) -> None:
-        """Enable TF32, allocate FP32 matrices, and warm up cuBLAS."""
+        """Enable TF32, allocate FP32 matrices, compute verification output, and warm up cuBLAS."""
+        # Seed FIRST for deterministic verification
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+        
         # Only use the new matmul precision APIs to avoid mixed-mode warnings.
         self._tf32_state = configure_tf32(
             enable_matmul=True,
@@ -55,9 +59,11 @@ class OptimizedCublasBenchmark(BaseBenchmark):
         )
         torch.set_float32_matmul_precision("high")
 
-        torch.manual_seed(42)
         self.A = torch.randn(self.m, self.k, device=self.device, dtype=torch.float32)
         self.B = torch.randn(self.k, self.n, device=self.device, dtype=torch.float32)
+        
+        # Compute verification output
+        self.C = torch.matmul(self.A, self.B)
         torch.cuda.synchronize(self.device)
 
         # Warmup a handful of GEMMs so cuBLAS Lt heuristics settle before measurement.
@@ -72,7 +78,7 @@ class OptimizedCublasBenchmark(BaseBenchmark):
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
         with nvtx_range("cublas", enable=enable_nvtx):
-            _ = torch.matmul(self.A, self.B)
+            self.C = torch.matmul(self.A, self.B)
         self._synchronize()
 
     def teardown(self) -> None:
@@ -106,15 +112,20 @@ class OptimizedCublasBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self.C is None:
+            raise RuntimeError("setup() must be called before verification")
+        return self.C
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"m": self.m, "n": self.n, "k": self.k}
+        return {"m": self.m, "n": self.n, "k": self.k, "dtype": "float32"}
 
     def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        """Return tolerance for numerical comparison.
+        
+        Note: Uses looser tolerance because TF32 has lower precision than FP32.
+        """
+        return (1e-2, 1e-1)
 
 
 def get_benchmark() -> BaseBenchmark:

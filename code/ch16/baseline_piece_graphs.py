@@ -28,6 +28,8 @@ class PieceGraphBlock(nn.Module):
 
     def __init__(self, hidden_dim: int = 512):
         super().__init__()
+        self.output = None
+        self._verify_input = None
         self.net = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
@@ -147,7 +149,9 @@ class BaselinePieceGraphsBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        return self.output.detach().clone()
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""

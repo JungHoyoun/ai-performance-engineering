@@ -178,7 +178,7 @@ class OptimizedDisaggregatedBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        raise RuntimeError("Multi-GPU required - verification not supported on single GPU")
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""

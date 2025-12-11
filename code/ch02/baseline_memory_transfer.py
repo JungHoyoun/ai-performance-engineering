@@ -26,10 +26,16 @@ class BaselineMemoryTransferBenchmark(BaseBenchmark):
         )
     
     def setup(self) -> None:
-        """Setup: Initialize tensors."""
+        """Setup: Initialize tensors and verification output."""
+        # Seed FIRST for deterministic verification
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+        
         self.host_data = torch.randn(self.N, dtype=torch.float32, pin_memory=True)
         self.device_data = torch.empty(self.N, dtype=torch.float32, device=self.device)
+        
+        # Copy data and compute checksum for verification
+        self.device_data.copy_(self.host_data, non_blocking=False)
         self._synchronize()
     
     def benchmark_fn(self) -> None:
@@ -71,16 +77,23 @@ class BaselineMemoryTransferBenchmark(BaseBenchmark):
         return None
 
     def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        """Return slice of transferred data for verification.
+        
+        Return first 1000 elements to verify data integrity without
+        transferring the entire buffer back.
+        """
+        if self.device_data is None:
+            raise RuntimeError("setup() must be called before verification")
+        # Return slice of actual data (not checksum)
+        return self.device_data[:1000].clone()
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"N": self.N}
+        return {"N": self.N, "dtype": "float32", "transfer_type": "h2d"}
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        return (1e-4, 1e-4)
 
 
 def get_benchmark() -> BaseBenchmark:

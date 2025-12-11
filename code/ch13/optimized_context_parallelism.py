@@ -340,7 +340,7 @@ class _ContextParallelismBenchmark(BaseBenchmark):
         return BenchmarkConfig(iterations=1, warmup=5, multi_gpu_required=True)
 
     def get_verify_output(self) -> torch.Tensor:
-        return torch.tensor([0.0], dtype=torch.float32)
+        raise RuntimeError("Multi-GPU benchmark - verification not supported on single GPU")
 
     def get_input_signature(self) -> dict:
         return {"type": "context_parallelism"}

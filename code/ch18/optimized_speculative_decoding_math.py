@@ -150,7 +150,7 @@ class OptimizedSpeculativeDecodingMathBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        raise RuntimeError("Math calculation benchmark - no tensor output")
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

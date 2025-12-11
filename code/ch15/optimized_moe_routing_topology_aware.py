@@ -52,6 +52,7 @@ class OptimizedMoERoutingTopologyAware:
         self.experts_per_gpu = experts_per_gpu
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.last_output = None  # For verification
         
         # Create NVLink topology map (simplified: assume NVSwitch)
         # In real implementation, query actual topology
@@ -115,6 +116,9 @@ class OptimizedMoERoutingTopologyAware:
         # Top-K selection with topology consideration
         routing_weights, selected_experts = torch.topk(routing_logits, self.top_k, dim=-1)
         routing_weights = F.softmax(routing_weights, dim=-1)
+        
+        # Capture output for verification
+        self.last_output = routing_weights.detach()
         
         # Calculate load balancing metrics
         probs = F.softmax(routing_logits, dim=-1)
@@ -208,6 +212,7 @@ class _MoERoutingTopologyAwareBenchmark(BaseBenchmark):
         super().__init__()
         self._impl = OptimizedMoERoutingTopologyAware()
         self._metrics = {}
+        self.output = None
         self.jitter_exemption_reason = "MoE routing topology-aware: fixed configuration"
         self.register_workload_metadata(requests_per_iteration=1.0)
 
@@ -216,6 +221,7 @@ class _MoERoutingTopologyAwareBenchmark(BaseBenchmark):
 
     def benchmark_fn(self) -> None:
         self._metrics = self._impl.run()
+        self.output = self._impl.last_output
         self._synchronize()
 
     def teardown(self) -> None:
@@ -225,7 +231,9 @@ class _MoERoutingTopologyAwareBenchmark(BaseBenchmark):
         return BenchmarkConfig(iterations=10, warmup=5)
 
     def get_verify_output(self) -> torch.Tensor:
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        return self.output.detach().clone()
 
     def get_input_signature(self) -> dict:
         return {"type": "moe_routing_topology_aware"}

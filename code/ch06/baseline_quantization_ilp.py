@@ -81,8 +81,11 @@ class BaselineQuantizationILPBenchmark(BaseBenchmark):
         return self.output
 
     def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (1e-5, 1e-5)
+        """Return tolerance for numerical comparison.
+        
+        FP16 quantization has precision differences vs FP32.
+        """
+        return (1e-2, 1e-2)
 
 
 

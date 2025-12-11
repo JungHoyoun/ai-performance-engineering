@@ -103,14 +103,15 @@ class BaselinePersistentMatmulTMABenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         if self.output is None:
-            return torch.tensor([0.0], dtype=torch.float32)
-        return torch.tensor([self.output.sum().item()], dtype=torch.float32)
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        return self.output.detach().clone()
 
     def get_input_signature(self) -> dict:
         return {"M": self.M, "N": self.N, "K": self.K}
 
     def get_output_tolerance(self) -> tuple:
-        return (0.1, 1.0)
+        """TMA matmul may have slight precision differences."""
+        return (1e-2, 1e-2)
 
 
 def get_benchmark() -> BaseBenchmark:

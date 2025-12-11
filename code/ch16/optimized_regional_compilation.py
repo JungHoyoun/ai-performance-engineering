@@ -47,6 +47,8 @@ class LargeTransformerBlock(nn.Module):
     
     def __init__(self, d_model: int = 8192, d_ff: int = 32768):
         super().__init__()
+        self.output = None
+        self._verify_input = None
         self.ln1 = nn.LayerNorm(d_model)
         self.attn = nn.MultiheadAttention(d_model, num_heads=64, batch_first=True)
         self.ln2 = nn.LayerNorm(d_model)
@@ -283,7 +285,9 @@ class OptimizedRegionalCompilationBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        return self.output.detach().clone()
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""

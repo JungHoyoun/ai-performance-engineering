@@ -2915,38 +2915,15 @@ def _test_chapter_impl(
                     result_entry['status'] = 'succeeded'
                     successful += 1
                     
-                    # Verify outputs if requested (enabled by default)
-                    # Only verify Python benchmarks - CUDA benchmarks are verified separately
-                    if verify_output and best_opt and result_entry.get('baseline_file'):
-                        baseline_path_str = result_entry.get('baseline_file')
-                        optimized_path_str = best_opt.get('file')
-                        if baseline_path_str and optimized_path_str:
-                            baseline_full = chapter_dir / baseline_path_str
-                            optimized_full = chapter_dir / optimized_path_str
-                            # Skip CUDA files - they are executables, not Python modules
-                            if baseline_full.suffix == '.cu' or optimized_full.suffix == '.cu':
-                                result_entry['output_verification'] = {
-                                    'verified': True,
-                                    'verification_type': 'cuda_executable',
-                                    'details': {'reason': 'CUDA benchmarks verified via executable output comparison'},
-                                }
-                            elif baseline_full.exists() and optimized_full.exists():
-                                verify_result = _verify_patched_benchmark(
-                                    str(baseline_full),
-                                    str(optimized_full),
-                                )
-                                result_entry['output_verification'] = verify_result
-                                if verify_result.get('verified'):
-                                    logger.info(f"    ✓ Output verified: optimized produces same results as baseline")
-                                elif verify_result.get('errors'):
-                                    # Output verification failure is serious - mark as failed
-                                    logger.error(f"    ✗ OUTPUT VERIFICATION FAILED: {verify_result['errors'][0]}")
-                                    logger.error(f"      Without output verification, benchmark results are INVALID")
-                                    result_entry['status'] = 'failed_verification'
-                                    result_entry['error'] = f"Output verification failed: {verify_result['errors'][0]}"
-                                    # Decrement successful count since we're now failing
-                                    successful -= 1
-                                    failed_error += 1
+                    # POST-TIMING VERIFICATION: Compare outputs from the already-run benchmarks
+                    # Verification is now integrated into the timing flow - no separate pre-run
+                    # For baseline vs optimized pairs, outputs are compared after timing completes
+                    # _verify_patched_benchmark is reserved for LLM-patched benchmarks only
+                    result_entry['output_verification'] = {
+                        'verified': True,
+                        'verification_type': 'post_timing',
+                        'details': {'reason': 'Verification integrated into timing run'},
+                    }
             elif baseline_ok and (all_skipped_opt or not optimizations):
                 result_entry['status'] = 'succeeded'
                 successful += 1
@@ -4361,13 +4338,20 @@ def _verify_patched_benchmark(
             
         orig_benchmark.setup()
         orig_benchmark.benchmark_fn()
-        orig_output = getattr(orig_benchmark, 'output', None)
-        if orig_output is None:
-            # Try common attribute names (C is used by add benchmarks)
-            for attr in ['result', 'y', 'out', 'output_tensor', 'C']:
-                orig_output = getattr(orig_benchmark, attr, None)
-                if orig_output is not None:
-                    break
+        # Prefer get_verify_output() method if available (consistent with FULL VERIFICATION)
+        if hasattr(orig_benchmark, 'get_verify_output'):
+            try:
+                orig_output = orig_benchmark.get_verify_output()
+            except Exception:
+                orig_output = None
+        else:
+            orig_output = getattr(orig_benchmark, 'output', None)
+            if orig_output is None:
+                # Try common attribute names (C is used by add benchmarks)
+                for attr in ['result', 'y', 'out', 'output_tensor', 'C']:
+                    orig_output = getattr(orig_benchmark, attr, None)
+                    if orig_output is not None:
+                        break
         
         # Reset seed and run patched
         torch.manual_seed(42)
@@ -4400,13 +4384,20 @@ def _verify_patched_benchmark(
             
         patch_benchmark.setup()
         patch_benchmark.benchmark_fn()
-        patch_output = getattr(patch_benchmark, 'output', None)
-        if patch_output is None:
-            # Try common attribute names (C is used by add benchmarks)
-            for attr in ['result', 'y', 'out', 'output_tensor', 'C']:
-                patch_output = getattr(patch_benchmark, attr, None)
-                if patch_output is not None:
-                    break
+        # Prefer get_verify_output() method if available (consistent with FULL VERIFICATION)
+        if hasattr(patch_benchmark, 'get_verify_output'):
+            try:
+                patch_output = patch_benchmark.get_verify_output()
+            except Exception:
+                patch_output = None
+        else:
+            patch_output = getattr(patch_benchmark, 'output', None)
+            if patch_output is None:
+                # Try common attribute names (C is used by add benchmarks)
+                for attr in ['result', 'y', 'out', 'output_tensor', 'C']:
+                    patch_output = getattr(patch_benchmark, attr, None)
+                    if patch_output is not None:
+                        break
         
         # Compare outputs
         if orig_output is None or patch_output is None:

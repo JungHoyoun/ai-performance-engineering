@@ -72,6 +72,8 @@ class BaselineFSDP2FP32CommBenchmark(BaseBenchmark):
         self.num_layers = 4
         self._last = 0.0
         self._comm_bytes = 0.0
+        self.output = None
+        self._verify_input = None
         
         tokens = self.batch_size * self.seq_len
         self._workload = WorkloadMetadata(
@@ -103,6 +105,12 @@ class BaselineFSDP2FP32CommBenchmark(BaseBenchmark):
             device=self.device, dtype=torch.bfloat16
         )
         
+        # Fixed input for verification (created after model init, same seed state)
+        self._verify_input = torch.randn(
+            self.batch_size, self.seq_len, self.hidden_dim,
+            device=self.device, dtype=torch.bfloat16
+        )
+        
         # Warmup
         for _ in range(3):
             with torch.no_grad():
@@ -128,6 +136,12 @@ class BaselineFSDP2FP32CommBenchmark(BaseBenchmark):
             self.optimizer.step()
             
             self._last = float(loss)
+            
+            # Capture verification output after training step
+            with torch.no_grad():
+                self.model.eval()
+                self.output = self.model(self._verify_input).float().clone()
+                self.model.train()
         self._synchronize()
 
     def teardown(self) -> None:
@@ -164,7 +178,9 @@ class BaselineFSDP2FP32CommBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        return self.output.detach().clone()
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""

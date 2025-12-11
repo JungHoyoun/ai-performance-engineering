@@ -189,7 +189,7 @@ class OptimizedTritonPersistentBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        raise RuntimeError("Triton benchmark - needs refactoring")
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""

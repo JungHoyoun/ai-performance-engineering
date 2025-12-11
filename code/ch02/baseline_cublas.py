@@ -25,8 +25,8 @@ class BaselineCublasBenchmark(BaseBenchmark):
         self.k = 2048
         self.A: Optional[torch.Tensor] = None
         self.B: Optional[torch.Tensor] = None
+        self.C: Optional[torch.Tensor] = None
         self._tf32_state: Optional[Tuple[Optional[str], Optional[str]]] = None
-        self.jitter_exemption_reason = "cuBLAS benchmark: fixed matrix dimensions"
         tokens = self.m * self.n
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,
@@ -34,19 +34,25 @@ class BaselineCublasBenchmark(BaseBenchmark):
         )
 
     def setup(self) -> None:
-        """Allocate FP32 matrices and disable TF32 acceleration."""
+        """Allocate FP32 matrices, disable TF32, and compute verification output."""
+        # Seed FIRST for deterministic verification
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+        
         self._tf32_state = configure_tf32(matmul_precision="highest", cudnn_precision="highest")
 
-        torch.manual_seed(42)
         self.A = torch.randn(self.m, self.k, device=self.device, dtype=torch.float32)
         self.B = torch.randn(self.k, self.n, device=self.device, dtype=torch.float32)
+        
+        # Compute verification output
+        self.C = torch.matmul(self.A, self.B)
         self._synchronize()
 
     def benchmark_fn(self) -> None:
         """Plain cuBLAS FP32 matmul."""
         assert self.A is not None and self.B is not None
         with self._nvtx_range("baseline_cublas_fp32"):
-            _ = torch.matmul(self.A, self.B)
+            self.C = torch.matmul(self.A, self.B)
         self._synchronize()
 
     def teardown(self) -> None:
@@ -81,15 +87,20 @@ class BaselineCublasBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self.C is None:
+            raise RuntimeError("setup() must be called before verification")
+        return self.C
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"m": self.m, "n": self.n, "k": self.k}
+        return {"m": self.m, "n": self.n, "k": self.k, "dtype": "float32"}
 
     def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        """Return tolerance for numerical comparison.
+        
+        Note: Uses looser tolerance because optimized uses TF32 which has lower precision.
+        """
+        return (1e-2, 1e-1)
 
 
 def get_benchmark() -> BaseBenchmark:

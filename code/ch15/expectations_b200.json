@@ -1,0 +1,32 @@
+{
+  "examples": {
+    "continuous_batching": {
+      "example": "continuous_batching",
+      "metadata": {
+        "best_optimization": "optimized_continuous_batching",
+        "best_optimization_file": "optimized_continuous_batching.py",
+        "best_optimization_speedup": 20.024132838533795,
+        "best_optimization_time_ms": 0.04004480000585318,
+        "git_commit": "9a4c942862319571235df0db76e32ea3bbe75b3e",
+        "updated_at": "2025-12-10T12:51:23.937751"
+      },
+      "metrics": {
+        "baseline_p75_ms": 0.8033599853515625,
+        "baseline_throughput.latency_ms": 0.8018623948097229,
+        "baseline_throughput.requests_per_s": 14965.161201813846,
+        "baseline_throughput.tokens_per_s": 183891900.84788853,
+        "baseline_time_ms": 0.8018623948097229,
+        "best_optimized_p75_ms": 0.03619199991226196,
+        "best_optimized_speedup": 20.024132838533795,
+        "best_optimized_throughput.latency_ms": 0.04004480000585318,
+        "best_optimized_throughput.requests_per_s": 3595972.510262309,
+        "best_optimized_throughput.tokens_per_s": 3682275850.5086045,
+        "best_optimized_time_ms": 0.04004480000585318,
+        "best_speedup": 20.024132838533795
+      },
+      "type": "python"
+    }
+  },
+  "hardware_key": "b200",
+  "schema_version": 2
+}

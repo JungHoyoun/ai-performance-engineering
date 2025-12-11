@@ -175,7 +175,7 @@ class _DisaggregatedPrefillDecodeBenchmark(BaseBenchmark):
         return BenchmarkConfig(iterations=3, warmup=5)
 
     def get_verify_output(self) -> torch.Tensor:
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        raise RuntimeError("Multi-GPU required - verification not supported on single GPU")
 
     def get_input_signature(self) -> dict:
         return {"type": "disaggregated_prefill_decode_baseline"}

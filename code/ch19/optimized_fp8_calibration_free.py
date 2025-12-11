@@ -310,7 +310,7 @@ class _FP8CalibrationFreeBenchmark(BaseBenchmark):
         return BenchmarkConfig(iterations=10, warmup=5)
 
     def get_verify_output(self) -> torch.Tensor:
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        raise RuntimeError("Nested harness benchmark - needs refactoring")
 
     def get_input_signature(self) -> dict:
         return {"type": "fp8_calibration_free"}

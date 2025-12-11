@@ -45,7 +45,8 @@ class OptimizedNUMAAwareBenchmark(BaseBenchmark):
         )
 
     def setup(self) -> None:
-        torch.manual_seed(9)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         # Pinned memory for efficient async H2D transfer (the optimization)
         self.host_tensor = torch.randn(128_000_000, dtype=torch.float32, pin_memory=True)
         # Double-buffering for overlapping copy with compute
@@ -113,7 +114,7 @@ class OptimizedNUMAAwareBenchmark(BaseBenchmark):
         """Return output tensor for verification comparison."""
         if self.output is not None:
             return self.output.detach().clone()
-        return torch.tensor([0.0], dtype=torch.float32, device=self.device)
+        raise RuntimeError("benchmark_fn() must be called before verification - output is None")
     
     def get_output_tolerance(self) -> tuple:
         """Return custom tolerance for sum output comparison."""

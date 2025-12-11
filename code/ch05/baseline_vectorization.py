@@ -82,7 +82,7 @@ class BaselineVectorizationBenchmark(BaseBenchmark):
         """Return output tensor for verification comparison."""
         if self.output is not None:
             return self.output.detach().clone()
-        return torch.tensor([0.0], dtype=torch.float32, device=self.device)
+        raise RuntimeError("benchmark_fn() must be called before verification - output is None")
     
     def get_output_tolerance(self) -> tuple:
         """Return custom tolerance for computation benchmark."""

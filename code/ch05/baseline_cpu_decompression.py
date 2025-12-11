@@ -58,7 +58,7 @@ class CPUDecompressionBenchmark(BaseBenchmark):
         )
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        raise RuntimeError("CPU-only benchmark - no tensor output")
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""

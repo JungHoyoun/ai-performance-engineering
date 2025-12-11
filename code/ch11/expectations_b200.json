@@ -82,20 +82,20 @@
       "metadata": {
         "best_optimization": "ordered",
         "best_optimization_file": "optimized_streams_ordered.cu",
-        "best_optimization_speedup": 110.85840058694059,
-        "best_optimization_time_ms": 0.04543333333333333,
-        "git_commit": "c0128fe94a287a5d65b3a121f4d33d00b2570fc5",
-        "updated_at": "2025-12-08T20:55:58.002161"
+        "best_optimization_speedup": 41.023682200152784,
+        "best_optimization_time_ms": 0.043633333333333336,
+        "git_commit": "9a4c942862319571235df0db76e32ea3bbe75b3e",
+        "updated_at": "2025-12-10T12:41:59.954988"
       },
       "metrics": {
         "baseline_p75_ms": 1.8,
         "baseline_p90_ms": 1.8,
         "baseline_time_ms": 1.79,
-        "best_optimized_p75_ms": 0.0337,
-        "best_optimized_p90_ms": 0.0337,
-        "best_optimized_speedup": 161.794500723589,
-        "best_optimized_time_ms": 0.033800000000000004,
-        "best_speedup": 161.794500723589
+        "best_optimized_p75_ms": 0.0443,
+        "best_optimized_p90_ms": 0.0443,
+        "best_optimized_speedup": 40.56531703590527,
+        "best_optimized_time_ms": 0.043633333333333336,
+        "best_speedup": 40.56531703590527
       },
       "type": "cuda"
     },

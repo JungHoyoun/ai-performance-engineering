@@ -304,7 +304,7 @@ class OptimizedSpeculativeDecodingMultiDraftBenchmark(BaseBenchmark):
     def get_verify_output(self) -> "torch.Tensor":
         """Return output tensor for verification comparison."""
         import torch
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        raise RuntimeError("Nested harness benchmark - needs refactoring")
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

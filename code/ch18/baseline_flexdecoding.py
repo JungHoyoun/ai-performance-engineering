@@ -136,15 +136,10 @@ class FlexDecodingHarness(BaseBenchmark):
         }
 
     def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison.
-        
-        Note: SDPA and FlexAttention produce numerically equivalent results
-        within reasonable tolerance. We verify the output tensor sum.
-        """
+        """Return output tensor for verification comparison."""
         if self._last_output is None:
             raise RuntimeError("Output not available - run benchmark first")
-        # Return sum as a single value for comparison
-        return torch.tensor([self._last_output.sum().item()], dtype=torch.float32)
+        return self._last_output.detach().clone()
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison.

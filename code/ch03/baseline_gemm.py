@@ -41,7 +41,8 @@ class BaselineGemmBenchmark(BaseBenchmark):
         )
 
     def setup(self) -> None:
-        torch.manual_seed(1)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         self._tf32_state = configure_tf32(enable_matmul=True, enable_cudnn=True)
         
         # Create input matrices - same as optimized version
@@ -108,7 +109,7 @@ class BaselineGemmBenchmark(BaseBenchmark):
         """Return output tensor for verification comparison."""
         if self.output is not None:
             return self.output.detach().clone()
-        return torch.tensor([0.0], dtype=torch.float32, device=self.device)
+        raise RuntimeError("benchmark_fn() must be called before verification - output is None")
 
     def get_output_tolerance(self) -> tuple:
         """Return custom tolerance for output comparison.

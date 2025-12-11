@@ -31,20 +31,20 @@
       "metadata": {
         "best_optimization": "optimized_decode_kernel",
         "best_optimization_file": "optimized_decode_kernel.py",
-        "best_optimization_speedup": 0.0,
-        "best_optimization_time_ms": 0.03748160041868687,
-        "git_commit": "75cbbbcfaaac628797e7636c22f2adb10d4d072f",
-        "updated_at": "2025-12-08T19:58:35.449690"
+        "best_optimization_speedup": 1.0,
+        "best_optimization_time_ms": 0.0,
+        "git_commit": "9a4c942862319571235df0db76e32ea3bbe75b3e",
+        "updated_at": "2025-12-10T13:09:49.477456"
       },
       "metrics": {
         "baseline_time_ms": 0.0,
         "best_optimized_p75_ms": 0.037408001720905304,
-        "best_optimized_speedup": 0.0,
+        "best_optimized_speedup": 1.0,
         "best_optimized_throughput.latency_ms": 0.03748160041868687,
         "best_optimized_throughput.requests_per_s": 26679.75723633826,
         "best_optimized_throughput.tokens_per_s": 111903012495.40251,
-        "best_optimized_time_ms": 0.03748160041868687,
-        "best_speedup": 0.0
+        "best_optimized_time_ms": 0.0,
+        "best_speedup": 1.0
       },
       "type": "python"
     },

@@ -70,14 +70,25 @@ class BaselineIlpBasicBenchmark(BaseBenchmark):
         )
     
     def setup(self) -> None:
-        """Setup: Initialize tensors."""
+        """Setup: Initialize tensors and verification output."""
+        # Seed FIRST for deterministic verification
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+        
         # Baseline: Sequential operations (low ILP)
         # Each operation depends on the previous one
         # Low instruction-level parallelism
         
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        
+        # Pre-compute verification output
+        val = self.input
+        val = val * 2.0
+        val = val + 1.0
+        val = val * 3.0
+        val = val - 5.0
+        self.output = val
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -147,7 +158,7 @@ class BaselineIlpBasicBenchmark(BaseBenchmark):
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        return (1e-5, 1e-5)
 
 
 def get_benchmark() -> BaseBenchmark:
