@@ -13,11 +13,12 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from ch02.uma_memory_utils import format_bytes, is_integrated_gpu, read_meminfo
 
 
-class BaselineUmaMemoryReportingBenchmark(BaseBenchmark):
+class BaselineUmaMemoryReportingBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Relies solely on cudaMemGetInfo with no UMA adjustment."""
 
     def __init__(self):
@@ -59,6 +60,14 @@ class BaselineUmaMemoryReportingBenchmark(BaseBenchmark):
         if self.metrics is None or tuple(self.metrics.shape) != tuple(summary_tensor.shape):
             self.metrics = torch.randn_like(summary_tensor)
         self.output = (summary_tensor + self.metrics).detach()
+        self._set_verification_payload(
+            inputs={"metrics": self.metrics},
+            output=self.output,
+            batch_size=1,
+            parameter_count=0,
+            output_tolerance=(0.1, 1.0),
+            precision_flags={"tf32": torch.backends.cuda.matmul.allow_tf32},
+        )
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
@@ -80,18 +89,15 @@ class BaselineUmaMemoryReportingBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output
+        return super().get_verify_output()
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        shape = tuple(self.metrics.shape) if self.metrics is not None else (1, 4)
-        return {"type": "uma_memory_baseline", "shapes": {"metrics": shape}}
+        return super().get_input_signature()
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        return super().get_output_tolerance()
 
     def teardown(self) -> None:
         self.metrics = None

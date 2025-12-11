@@ -18,6 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
@@ -64,7 +65,7 @@ class SimpleLM(nn.Module):
         return logits, x[:, -1:, :]
 
 
-class BaselineSpeculativeDecodeBenchmark(BaseBenchmark):
+class BaselineSpeculativeDecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: Standard autoregressive decoding (no speculation).
     
     Generates tokens one at a time using greedy decoding.

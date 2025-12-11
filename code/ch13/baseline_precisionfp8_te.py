@@ -19,6 +19,7 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -70,7 +71,7 @@ class TEFP16MLP(nn.Module):
         return x
 
 
-class BaselineTEFP8Benchmark(BaseBenchmark):
+class BaselineTEFP8Benchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline Transformer Engine run in float16 precision."""
 
     def __init__(self):
@@ -94,18 +95,21 @@ class BaselineTEFP8Benchmark(BaseBenchmark):
             tokens_per_iteration=float(tokens),
         )
         self.output = None
+        self.parameter_count = 0
         self.register_workload_metadata(
             requests_per_iteration=1.0,
             tokens_per_iteration=float(tokens),
         )
-
+        self._verify_input: Optional[torch.Tensor] = None
     def setup(self) -> None:
         self._tf32_state = configure_tf32(enable_matmul=False, enable_cudnn=False)
 
         torch.manual_seed(42)
-        torch.cuda.manual_seed_all(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         model = TEFP16MLP(hidden_dim=self.hidden_dim).to(self.device).train().half()
         self.model = model
+        self.parameter_count = sum(p.numel() for p in self.model.parameters())
         self.inputs = torch.randn(
             self.batch_size,
             self.hidden_dim,
@@ -115,6 +119,7 @@ class BaselineTEFP8Benchmark(BaseBenchmark):
         self.targets = torch.randn_like(self.inputs)
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01)
         self.criterion = nn.MSELoss()
+        self._verify_input = self.inputs.detach().clone()
 
         for _ in range(5):
             self._train_step()
@@ -141,6 +146,21 @@ class BaselineTEFP8Benchmark(BaseBenchmark):
             with torch.no_grad():
                 self.output = self.model(self.inputs).detach().clone()
         self._synchronize()
+        if self._verify_input is None or self.output is None:
+            raise RuntimeError("Verification input/output not initialized")
+        self._set_verification_payload(
+            inputs={"input": self._verify_input},
+            output=self.output,
+            batch_size=self._verify_input.shape[0],
+            parameter_count=self.parameter_count,
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.5, 5.0),
+        )
 
     def teardown(self) -> None:
         self.model = None
@@ -184,12 +204,6 @@ class BaselineTEFP8Benchmark(BaseBenchmark):
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
         return (0.5, 5.0)
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.detach().clone()
 
 
 def get_benchmark() -> BaseBenchmark:

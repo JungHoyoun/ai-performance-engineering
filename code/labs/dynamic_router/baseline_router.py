@@ -88,10 +88,9 @@ class BaselineRouterBenchmark(BaseBenchmark):
         self.num_requests = 1000
         self._last = 0.0
         self.output: Optional[torch.Tensor] = None
-        
-        self._workload = WorkloadMetadata(
+        self.register_workload_metadata(
             requests_per_iteration=float(self.num_requests),
-            tokens_per_iteration=float(self.num_requests * 100),  # ~100 tokens/request
+            tokens_per_iteration=float(self.num_requests * 100),
         )
 
     def setup(self) -> None:
@@ -121,6 +120,17 @@ class BaselineRouterBenchmark(BaseBenchmark):
         
         self._last = float(routed)
         self.output = torch.tensor([[self._last, float(self.num_gpus)]], dtype=torch.float32)
+        self._set_verification_payload(
+            inputs={
+                "num_gpus": torch.tensor([self.num_gpus], dtype=torch.int64),
+                "num_requests": torch.tensor([self.num_requests], dtype=torch.int64),
+            },
+            output=self.output,
+            batch_size=1,
+            parameter_count=0,
+            precision_flags={"fp16": False, "bf16": False, "tf32": False},
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -132,9 +142,6 @@ class BaselineRouterBenchmark(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=50, warmup=10)
     
-    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
-        return self._workload
-
     def get_custom_metrics(self) -> Optional[dict]:
         return {
             "baseline_router.strategy": "round_robin",
@@ -145,24 +152,6 @@ class BaselineRouterBenchmark(BaseBenchmark):
         if self.router is None:
             return "Router not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {
-            "num_gpus": self.num_gpus,
-            "num_requests": self.num_requests,
-            "shapes": {"metrics": (1, 2)},
-        }
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

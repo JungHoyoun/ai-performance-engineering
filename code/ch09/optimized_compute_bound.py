@@ -13,6 +13,7 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -20,7 +21,7 @@ from core.harness.benchmark_harness import (
 )
 
 
-class OptimizedComputeBoundBenchmark(BaseBenchmark):
+class OptimizedComputeBoundBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Compute-bound kernel - uses torch.compile to fuse the same math as baseline."""
     
     def __init__(self):
@@ -63,6 +64,21 @@ class OptimizedComputeBoundBenchmark(BaseBenchmark):
                 out = self.model(out)
             self.output = out
         self._synchronize()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"input": self.input},
+            output=self.output.detach().clone(),
+            batch_size=self.input.shape[0],
+            parameter_count=sum(p.numel() for p in self.model.parameters()),
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-1, 1e-1),
+        )
     
     def teardown(self) -> None:
         self.model = None
@@ -101,17 +117,6 @@ class OptimizedComputeBoundBenchmark(BaseBenchmark):
         if self.input is None or self.model is None:
             return "Model/input not initialized"
         return None
-    
-    def get_input_signature(self) -> dict:
-        return {"N": self.N, "repeats": self.repeats}
-    
-    def get_verify_output(self) -> torch.Tensor:
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-    
-    def get_output_tolerance(self) -> tuple:
-        return (1e-1, 1e-1)
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -11,10 +11,11 @@ try:
 except ImportError:
     pass
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 
 
-class BaselineMatmulBenchmark(BaseBenchmark):
+class BaselineMatmulBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: FP32 matmul with serialized tiling and no tensor cores."""
 
     def __init__(self):
@@ -53,6 +54,19 @@ class BaselineMatmulBenchmark(BaseBenchmark):
         with self._nvtx_range("matmul_baseline_fp32"):
             self._chunked_matmul()
         self._synchronize()
+        self._set_verification_payload(
+            inputs={"A": self.A, "B": self.B},
+            output=self.C.detach().clone(),
+            batch_size=self.A.shape[0],
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(5e-2, 5.0),
+        )
 
     def teardown(self) -> None:
         """Teardown: clean up tensors."""
@@ -81,20 +95,6 @@ class BaselineMatmulBenchmark(BaseBenchmark):
         if self.A is None or self.B is None or self.C is None:
             return "Matrices not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification."""
-        if self.C is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.C
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"n": self.n, "tile_k": self.tile_k}
-
-    def get_output_tolerance(self) -> tuple[float, float]:
-        # Allow looser tolerance because optimized path uses lower precision.
-        return (5e-2, 5.0)
 
 
 def get_benchmark() -> BaselineMatmulBenchmark:

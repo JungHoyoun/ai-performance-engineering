@@ -72,6 +72,7 @@ class AsyncInputPipelineBenchmark(BaseBenchmark):
         self.model: Optional[nn.Module] = None
         self.copy_stream: Optional[torch.cuda.Stream] = None
         self.compute_stream: Optional[torch.cuda.Stream] = None
+        self.output: Optional[torch.Tensor] = None
         self.register_workload_metadata(samples_per_iteration=self.cfg.batch_size)
 
     def setup(self) -> None:
@@ -116,7 +117,18 @@ class AsyncInputPipelineBenchmark(BaseBenchmark):
                 batch_gpu = batch_cpu.to(self.device, non_blocking=self.cfg.non_blocking)
 
             with torch.no_grad():
-                _ = self.model(batch_gpu)
+                out = self.model(batch_gpu)
+            self.output = out.detach()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() did not produce output")
+        self._set_verification_payload(
+            inputs={"batch": batch_gpu.detach() if isinstance(batch_gpu, torch.Tensor) else torch.as_tensor(batch_gpu)},
+            output=self.output,
+            batch_size=self.cfg.batch_size,
+            parameter_count=sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0,
+            precision_flags={"fp16": False, "bf16": False, "tf32": torch.backends.cuda.matmul.allow_tf32},
+            output_tolerance=(1e-4, 1e-4),
+        )
 
     def teardown(self) -> None:
         self.loader_iter = None
@@ -124,6 +136,7 @@ class AsyncInputPipelineBenchmark(BaseBenchmark):
         self.model = None
         self.copy_stream = None
         self.compute_stream = None
+        self.output = None
         super().teardown()
 
     def get_config(self) -> Optional[BenchmarkConfig]:
@@ -148,15 +161,3 @@ class AsyncInputPipelineBenchmark(BaseBenchmark):
             f"{self.label}.use_copy_stream": float(self.cfg.use_copy_stream),
             f"{self.label}.bytes_per_batch": float(bytes_per_batch),
         }
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"batch_size": self.cfg.batch_size, "label": self.label}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)

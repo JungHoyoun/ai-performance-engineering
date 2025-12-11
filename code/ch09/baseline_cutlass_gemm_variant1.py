@@ -19,6 +19,7 @@ if str(repo_root) not in sys.path:
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode
 from core.benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
+from core.benchmark.verification import simple_signature
 
 
 class BaselineCutlassGemmVariant1Benchmark(CudaBinaryBenchmark):
@@ -48,11 +49,7 @@ class BaselineCutlassGemmVariant1Benchmark(CudaBinaryBenchmark):
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"type": "cutlass_gemm_variant1"}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        return simple_signature(batch_size=1, dtype="float32", workload=1).to_dict()
 
 
 def get_benchmark() -> BaselineCutlassGemmVariant1Benchmark:

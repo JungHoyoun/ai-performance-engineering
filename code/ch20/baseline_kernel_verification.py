@@ -212,6 +212,7 @@ class BaselineKernelVerificationBenchmark(BaseBenchmark):
             tokens_per_iteration=float(self.shape[0] * self.shape[1]),
         )
         self._verification_results: Dict[str, Any] = {}
+        self.jitter_exemption_reason = "Skip jitter: manual kernel verification uses deterministic test suite; jitter would rerun expensive checks."
     
     def setup(self) -> None:
         """Setup: Initialize verifier and test functions."""
@@ -329,7 +330,18 @@ class BaselineKernelVerificationBenchmark(BaseBenchmark):
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"shape": self.shape}
+        return {
+            "shapes": {"input": self.shape},
+            "dtypes": {"input": "torch.float32"},
+            "batch_size": int(self.shape[0]),
+            "parameter_count": 0,
+            "precision_flags": {
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+        }
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

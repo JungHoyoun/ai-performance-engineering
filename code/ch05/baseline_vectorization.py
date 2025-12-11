@@ -6,10 +6,11 @@ from typing import Optional
 
 import torch
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
-class BaselineVectorizationBenchmark(BaseBenchmark):
+class BaselineVectorizationBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Scalar operations to contrast with vectorized paths."""
     
     def __init__(self):
@@ -39,6 +40,19 @@ class BaselineVectorizationBenchmark(BaseBenchmark):
                 result += self.data[i]
             self._synchronize()
         self.output = result
+        self._set_verification_payload(
+            inputs={"data": self.data},
+            output=self.output.detach().clone(),
+            batch_size=self.data.shape[0],
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-3, 1e-3),
+        )
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -70,22 +84,6 @@ class BaselineVectorizationBenchmark(BaseBenchmark):
         if self.data is None:
             return "Data not initialized"
         return None
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {
-            "N": self.N,
-        }
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is not None:
-            return self.output.detach().clone()
-        raise RuntimeError("benchmark_fn() must be called before verification - output is None")
-    
-    def get_output_tolerance(self) -> tuple:
-        """Return custom tolerance for computation benchmark."""
-        return (1e-3, 1e-3)
 
 
 

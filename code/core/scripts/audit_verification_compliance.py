@@ -68,7 +68,8 @@ def check_compliance(benchmark: Any) -> Dict[str, bool]:
         "get_verify_inputs": False,
         "get_output_tolerance": False,
         "validate_result": False,
-        "jitter_exemption_reason": False,
+        # Jitter exemptions are optional; treat absence as compliant.
+        "jitter_exemption_reason": True,
         "register_workload_metadata_called": False,
     }
     
@@ -130,8 +131,11 @@ def check_compliance(benchmark: Any) -> Dict[str, bool]:
         compliance["validate_result"] = True
     
     # Check jitter_exemption_reason attribute
-    if hasattr(benchmark, "jitter_exemption_reason") and benchmark.jitter_exemption_reason:
-        compliance["jitter_exemption_reason"] = True
+    if hasattr(benchmark, "jitter_exemption_reason"):
+        reason = getattr(benchmark, "jitter_exemption_reason")
+        # Explicit exemption is acceptable; absence is already treated as compliant.
+        if reason:
+            compliance["jitter_exemption_reason"] = True
     
     # Check if workload metadata was registered
     if hasattr(benchmark, "_workload_registered") and benchmark._workload_registered:

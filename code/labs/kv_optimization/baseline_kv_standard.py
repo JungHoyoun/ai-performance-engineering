@@ -62,6 +62,9 @@ class BaselineKVStandard(BaseBenchmark):
 
     def setup(self):
         """Initialize KV cache."""
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         # Pre-allocate KV cache
         # Shape: [batch, num_layers, 2, num_heads, max_seq, head_dim]
         self.kv_cache = torch.zeros(
@@ -153,6 +156,17 @@ class BaselineKVStandard(BaseBenchmark):
         # Capture a slice of KV cache for verification (layer 0, first token/head window)
         view = self.kv_cache[:1, :1, :, :, : min(1, self.kv_cache.shape[4]), : min(8, self.kv_cache.shape[5])]
         self.output = view.detach().float().clone()
+        self._set_verification_payload(
+            inputs={
+                "batch_size": torch.tensor([self.batch_size], dtype=torch.int64, device="cpu"),
+                "seq_lengths": self.seq_lengths.detach().clone(),
+            },
+            output=self.output,
+            batch_size=self.batch_size,
+            parameter_count=0,
+            precision_flags={"fp16": False, "bf16": True, "tf32": torch.backends.cuda.matmul.allow_tf32},
+            output_tolerance=(0.1, 1.0),
+        )
 
     def get_custom_metrics(self) -> Dict[str, Any]:
         return self._last_metrics
@@ -166,37 +180,6 @@ class BaselineKVStandard(BaseBenchmark):
         del self.kv_cache
         self.output = None
         super().teardown()
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {
-            "batch_size": self.batch_size,
-            "num_layers": self.num_layers,
-            "num_heads": self.num_heads,
-            "head_dim": self.head_dim,
-            "max_seq_length": self.max_seq_length,
-            "shapes": {
-                "kv_cache": (
-                    self.batch_size,
-                    self.num_layers,
-                    2,
-                    self.num_heads,
-                    self.max_seq_length,
-                    self.head_dim,
-                )
-            },
-            "dtypes": {"kv_cache": "bfloat16"},
-        }
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def run_benchmark(

@@ -7,6 +7,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
@@ -21,7 +22,7 @@ class TinyBlock(nn.Module):
         return self.linear2(self.relu(self.linear1(x)))
 
 
-class BaselineAIBenchmark(BaseBenchmark):
+class BaselineAIBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Runs several tiny blocks sequentially with CPU sync between them."""
 
     def __init__(self):
@@ -54,6 +55,21 @@ class BaselineAIBenchmark(BaseBenchmark):
                 out = block(out)
                 self._synchronize()
         self.output = out.detach()
+        if self.blocks is None:
+            raise RuntimeError("Model blocks not initialized")
+        self._set_verification_payload(
+            inputs={"inputs": self.inputs},
+            output=self.output,
+            batch_size=self.batch,
+            parameter_count=sum(p.numel() for p in self.blocks.parameters()),
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-3, 1e-3),
+        )
 
     def teardown(self) -> None:
         self.inputs = None
@@ -79,23 +95,6 @@ class BaselineAIBenchmark(BaseBenchmark):
         if self.inputs is None:
             return "Inputs missing"
         return None
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {
-            "batch": self.batch,
-            "hidden": self.hidden,
-        }
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is not None:
-            return self.output.detach().clone()
-        raise RuntimeError("benchmark_fn() must be called before verification - output is None")
-    
-    def get_output_tolerance(self) -> tuple:
-        """Return custom tolerance for inference benchmark."""
-        return (1e-3, 1e-3)
 
 
 

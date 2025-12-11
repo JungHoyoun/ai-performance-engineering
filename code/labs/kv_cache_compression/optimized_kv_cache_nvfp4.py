@@ -77,6 +77,25 @@ class OptimizedKVCacheNVFP4Benchmark(BaselineKVCacheBenchmark):
         if self.cache and self.cache.kv is not None:
             view = self.cache.kv[0, :, :, : min(1, self.cache.kv.shape[3]), : min(8, self.cache.kv.shape[4])]
             self.output = view.detach().float().clone()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={
+                "batch_size": torch.tensor([self.batch_size], dtype=torch.int64, device="cpu"),
+                "seq_meta": torch.tensor(
+                    [self.prefill_seq, self.decode_seq, self.decode_steps], dtype=torch.int64, device="cpu"
+                ),
+            },
+            output=self.output,
+            batch_size=self.batch_size,
+            parameter_count=sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0,
+            precision_flags={
+                "fp16": False,
+                "bf16": self.tensor_dtype == torch.bfloat16,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return NVFP4-specific metrics."""

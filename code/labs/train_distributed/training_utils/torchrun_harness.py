@@ -11,6 +11,7 @@ from core.harness.benchmark_harness import (
     LaunchVia,
     TorchrunLaunchSpec,
 )
+from core.benchmark.verification import simple_signature
 
 
 class TorchrunScriptBenchmark(BaseBenchmark):
@@ -62,20 +63,13 @@ class TorchrunScriptBenchmark(BaseBenchmark):
         raise RuntimeError("TorchrunScriptBenchmark should be executed via torchrun launcher.")
     
     def get_input_signature(self) -> Optional[dict]:
-        """Return input signature for verification.
-        
-        Torchrun benchmarks have parameters passed via script args.
-        """
-        return {
-            "script": self._script_path.name,
-            "target_label": self._target_label or self.name,
-            "multi_gpu_required": self._multi_gpu_required,
-        }
+        """Return input signature for verification (static script identity)."""
+        workload_id = abs(hash((self._script_path.name, tuple(self._base_args), self._target_label, self._multi_gpu_required))) % 10_000_000 + 1
+        return simple_signature(batch_size=1, dtype="float32", workload=workload_id, script_len=len(self._script_path.name))
 
     def get_verify_output(self) -> "torch.Tensor":
-        """Return output tensor for verification comparison."""
-        import torch
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        """Torchrun benchmarks run externally; verification not applicable."""
+        raise RuntimeError("SKIPPED: torchrun benchmark verification not applicable (external process)")
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

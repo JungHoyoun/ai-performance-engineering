@@ -13,6 +13,7 @@ import torch
 
 from typing import Optional
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -22,7 +23,7 @@ from core.harness.benchmark_harness import (
 )
 
 
-class OptimizedMemoryBoundBenchmark(BaseBenchmark):
+class OptimizedMemoryBoundBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Keeps data resident on the GPU and fuses updates via torch.compile."""
     
     def __init__(self):
@@ -68,6 +69,21 @@ class OptimizedMemoryBoundBenchmark(BaseBenchmark):
                 t = self.step_fn(t)
             self.output = t
         self._synchronize()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"tensor": self.data},
+            output=self.output.detach().clone(),
+            batch_size=self.data.shape[0],
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-1, 1e-1),
+        )
 
     
     def teardown(self) -> None:
@@ -103,20 +119,6 @@ class OptimizedMemoryBoundBenchmark(BaseBenchmark):
         if not torch.isfinite(self.data).all():
             return "Data contains non-finite values"
         return None
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"N": self.N, "repeats": self.repeats}  # Match baseline's repeats for signature
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.data is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output if self.output is not None else self.data
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (1e-1, 1e-1)  # Wide tolerance - different memory patterns
 
 
 

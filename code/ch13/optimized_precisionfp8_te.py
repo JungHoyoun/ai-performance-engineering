@@ -107,6 +107,8 @@ class OptimizedTEFP8Benchmark(BaseBenchmark):
             tokens_per_iteration=float(tokens),
         )
         self.output = None
+        self._verify_input: Optional[torch.Tensor] = None
+        self.parameter_count: int = 0
         self.register_workload_metadata(
             requests_per_iteration=1.0,
             tokens_per_iteration=float(tokens),
@@ -117,7 +119,8 @@ class OptimizedTEFP8Benchmark(BaseBenchmark):
         torch.backends.cudnn.benchmark = True
         torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
-        torch.cuda.manual_seed_all(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
 
         model = TEFP8MLP(hidden_dim=self.hidden_dim).to(self.device, dtype=self.compute_dtype).train()
         self.model = model
@@ -129,6 +132,7 @@ class OptimizedTEFP8Benchmark(BaseBenchmark):
         )
         self.input_pool = [fixed_input]
         self.target_pool = [torch.randn_like(fixed_input)]
+        self.parameter_count = sum(p.numel() for p in self.model.parameters())
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01, foreach=False)
         self.criterion = nn.MSELoss()
 
@@ -140,6 +144,7 @@ class OptimizedTEFP8Benchmark(BaseBenchmark):
         # Prepare static buffers for CUDA graph capture/replay.
         self.static_input = self.input_pool[0].clone()
         self.static_target = self.target_pool[0].clone()
+        self._verify_input = self.static_input.detach().clone()
         self.graph = torch.cuda.CUDAGraph()
         self.capture_stream = torch.cuda.Stream()
 
@@ -180,6 +185,21 @@ class OptimizedTEFP8Benchmark(BaseBenchmark):
             with torch.no_grad():
                 self.output = self.model(current_input).detach().clone()
         self._synchronize()
+        if self._verify_input is None or self.output is None:
+            raise RuntimeError("Verification input/output not initialized")
+        self._set_verification_payload(
+            inputs={"input": self._verify_input},
+            output=self.output,
+            batch_size=self._verify_input.shape[0],
+            parameter_count=self.parameter_count,
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": True,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.5, 5.0),
+        )
 
     def teardown(self) -> None:
         self.model = None
@@ -226,12 +246,6 @@ class OptimizedTEFP8Benchmark(BaseBenchmark):
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
         return (0.5, 5.0)
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.detach().clone()
 
 
 def get_benchmark() -> BaseBenchmark:

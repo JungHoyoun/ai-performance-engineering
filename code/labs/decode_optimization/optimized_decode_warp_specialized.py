@@ -152,10 +152,6 @@ class TritonFusedDecodeBenchmark(DecodeBenchmark):
         }
         self._finalize_output()
 
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return super().get_verify_output()
-
 
 
 def get_benchmark() -> TritonFusedDecodeBenchmark:

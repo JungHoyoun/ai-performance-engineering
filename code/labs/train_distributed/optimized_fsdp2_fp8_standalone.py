@@ -22,6 +22,7 @@ import os
 # Add common to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from core.benchmark.verification import simple_signature
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -93,6 +94,8 @@ class OptimizedFSDP2FP8(BaseBenchmark):
 
     def setup(self):
         """Initialize FSDP2 model with FP8."""
+        if getattr(self, "world_size", 1) < 2:
+            raise RuntimeError("SKIPPED: requires >=2 GPUs")
         self.register_workload_metadata(
             tokens_per_iteration=float(self.batch_size * self.seq_length),
         )
@@ -210,11 +213,20 @@ class OptimizedFSDP2FP8(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        raise RuntimeError("SKIPPED: torchrun/FSDP2 benchmark verification not applicable")
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"batch_size": self.batch_size, "seq_length": self.seq_length}
+        return simple_signature(
+            batch_size=self.batch_size,
+            dtype="float8_e4m3fn",
+            precision_flags={"fp8": True, "bf16": False, "tf32": False},
+            seq_length=self.seq_length,
+            hidden_size=self.hidden_size,
+            num_layers=self.num_layers,
+            micro_batch_size=self.micro_batch_size,
+            world_size=self.world_size,
+        )
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

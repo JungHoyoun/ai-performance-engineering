@@ -202,6 +202,15 @@ class OptimizedEndToEndBandwidthBenchmark(BaseBenchmark):
             return f"Expected {self.num_batches} outputs, got {len(self.outputs) if self.outputs else 0}"
         return None
 
+    def get_verify_output(self) -> torch.Tensor:
+        return super().get_verify_output()
+
+    def get_output_tolerance(self) -> tuple:
+        payload = getattr(self, "_verification_payload", None)
+        if payload is None:
+            return (0.1, 1.0)
+        return super().get_output_tolerance()
+
     def get_custom_streams(self) -> list[torch.cuda.Stream]:
         """Declare any non-default streams created (compile/Inductor)."""
         declared = set(self._tracked_streams)

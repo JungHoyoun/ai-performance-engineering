@@ -759,7 +759,7 @@ class TorchrunLaunchSpec:
 BenchmarkResult = PydanticBenchmarkResult
 
 
-class BaseBenchmark(VerificationPayloadMixin):
+class BaseBenchmark:
     """Base class for benchmarks with shared functionality.
     
     Provides common patterns for device resolution, setup, teardown, validation,

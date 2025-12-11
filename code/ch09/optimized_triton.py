@@ -26,6 +26,7 @@ except ImportError:
 
 from typing import Optional
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -59,7 +60,7 @@ if TRITON_AVAILABLE:
         tl.store(output_ptr + offsets, output_data, mask=mask)
 
 
-class OptimizedTritonBenchmark(BaseBenchmark):
+class OptimizedTritonBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Triton kernels for efficient GPU operations.
     
     Triton: Uses Triton kernels for optimized GPU operations.
@@ -117,6 +118,21 @@ class OptimizedTritonBenchmark(BaseBenchmark):
                 # Simulate Triton benefit with optimized PyTorch
                 self.output = self.input * 2.0 + 1.0
         self._synchronize()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"input": self.input},
+            output=self.output.detach().clone(),
+            batch_size=self.input.shape[0],
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-5, 1e-5),
+        )
             
             # Optimization: Triton benefits
             # - Python-like syntax for GPU kernels
@@ -153,20 +169,6 @@ class OptimizedTritonBenchmark(BaseBenchmark):
         if self.input is None or self.output is None:
             return "Tensors not initialized"
         return None
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"N": self.N}
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (1e-5, 1e-5)
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -79,7 +79,8 @@ class OptimizedDecodeKernelBenchmark(BaseBenchmark):
         except Exception:
             pass
         
-        torch.manual_seed(7)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         
         # Allocate contiguous tensors with explicit memory layout
         # TMA requires contiguous tensors with proper alignment
@@ -110,6 +111,17 @@ class OptimizedDecodeKernelBenchmark(BaseBenchmark):
         with nvtx_range("moe_cuda_decode_kernel_optimized", enable=enable_nvtx):
             run_optimized_kernel(self.input, self.output)
         torch.cuda.synchronize(self.device)
+        self._set_verification_payload(
+            inputs={
+                "rows": torch.tensor([self.rows], dtype=torch.int64, device="cpu"),
+                "cols": torch.tensor([self.cols], dtype=torch.int64, device="cpu"),
+            },
+            output=self.output.detach().clone(),
+            batch_size=1,
+            parameter_count=0,
+            precision_flags={"fp16": False, "bf16": False, "tf32": torch.backends.cuda.matmul.allow_tf32},
+            output_tolerance=(1e-3, 1e-3),
+        )
 
     def teardown(self) -> None:
         torch.cuda.empty_cache()

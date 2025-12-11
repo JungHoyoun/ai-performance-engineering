@@ -8,11 +8,12 @@ from typing import Optional
 import torch
 import torch.distributed as dist
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from core.benchmark.gpu_requirements import skip_if_insufficient_gpus
 
 
-class OptimizedDistributedBenchmark(BaseBenchmark):
+class OptimizedDistributedBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Distributed sum across ranks; falls back to single-GPU when world_size=1."""
     
     def __init__(self):
@@ -72,6 +73,23 @@ class OptimizedDistributedBenchmark(BaseBenchmark):
                 result = local_result
             _ = result
             self._synchronize()
+        self.output = result.detach().clone()
+        self._set_verification_payload(
+            inputs={
+                "data": self.data,
+                "world_size": torch.tensor([self.world_size], device=self.device),
+            },
+            output=self.output,
+            batch_size=self.data.shape[0],
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -105,20 +123,6 @@ class OptimizedDistributedBenchmark(BaseBenchmark):
         if self.data is None:
             return "Data not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.data is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.data.detach().clone()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"N": self.N}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

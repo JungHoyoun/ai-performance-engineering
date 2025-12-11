@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 from torch.optim import Optimizer
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from core.utils.compile_utils import configure_tf32, restore_tf32
 
@@ -33,7 +34,7 @@ class SimpleModel(nn.Module):
         return x
 
 
-class BaselinePrecisionMixedBenchmark(BaseBenchmark):
+class BaselinePrecisionMixedBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """FP32 baseline used to compare against mixed-precision autocast."""
 
     def __init__(self):
@@ -53,6 +54,8 @@ class BaselinePrecisionMixedBenchmark(BaseBenchmark):
             tokens_per_iteration=float(tokens * self.micro_steps),
         )
         self.output = None
+        self._verify_input: Optional[torch.Tensor] = None
+        self.parameter_count: int = 0
         self.register_workload_metadata(
             requests_per_iteration=float(self.micro_steps),
             tokens_per_iteration=float(tokens * self.micro_steps),
@@ -67,10 +70,12 @@ class BaselinePrecisionMixedBenchmark(BaseBenchmark):
             torch.backends.cudnn.deterministic = True
         
         self.model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device).train()
+        self.parameter_count = sum(p.numel() for p in self.model.parameters())
         self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
         self.targets = torch.randn_like(self.inputs)
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01)
         self.criterion = nn.MSELoss()
+        self._verify_input = self.inputs.detach().clone()
         
         for _ in range(3):
             self.optimizer.zero_grad()
@@ -90,6 +95,21 @@ class BaselinePrecisionMixedBenchmark(BaseBenchmark):
                 self.optimizer.step()
             self.output = outputs.detach().clone()
         self._synchronize()
+        if self._verify_input is None or self.output is None:
+            raise RuntimeError("Verification input/output not initialized")
+        self._set_verification_payload(
+            inputs={"input": self._verify_input},
+            output=self.output,
+            batch_size=self._verify_input.shape[0],
+            parameter_count=self.parameter_count,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         """Cleanup."""
@@ -129,16 +149,6 @@ class BaselinePrecisionMixedBenchmark(BaseBenchmark):
         if self.model is None:
             return "Model not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch_size": self.batch_size, "hidden_dim": self.hidden_dim}
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

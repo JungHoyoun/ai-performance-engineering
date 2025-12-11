@@ -14,6 +14,7 @@ import torch
 
 from core.harness.benchmark_harness import BenchmarkConfig
 from core.benchmark.cuda_binary_benchmark import BinaryRunResult, CudaBinaryBenchmark
+from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
 def _default_symmetric_size() -> str:
@@ -21,7 +22,7 @@ def _default_symmetric_size() -> str:
     return os.getenv("NVSHMEM_SYMMETRIC_SIZE", "128M")
 
 
-class NvshmemIbgdaMicrobench(CudaBinaryBenchmark):
+class NvshmemIbgdaMicrobench(VerificationPayloadMixin, CudaBinaryBenchmark):
     """Wrap the nvshmem_ibgda_microbench CUDA binary for the harness."""
 
     def __init__(
@@ -193,6 +194,10 @@ class NvshmemIbgdaMicrobench(CudaBinaryBenchmark):
         self._set_verification_payload(
             inputs={
                 "mode": torch.tensor([ord(self.mode[0])], device=device, dtype=torch.int64),
+                "bytes": torch.tensor([self.bytes_per_message], device=device, dtype=torch.int64),
+                "ctas": torch.tensor([self.ctas], device=device, dtype=torch.int64),
+                "threads": torch.tensor([self.threads], device=device, dtype=torch.int64),
+                "world_size": torch.tensor([self.world_size], device=device, dtype=torch.int64),
             },
             output=self._last_output,
             batch_size=1,
@@ -203,6 +208,7 @@ class NvshmemIbgdaMicrobench(CudaBinaryBenchmark):
                 "fp8": False,
                 "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
             },
+            output_tolerance=(0.1, 1.0),
         )
 
     def get_config(self) -> BenchmarkConfig:
@@ -227,11 +233,3 @@ class NvshmemIbgdaMicrobench(CudaBinaryBenchmark):
 
     def get_custom_metrics(self) -> Optional[Dict[str, float]]:
         return self._parsed_metrics
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return super().get_input_signature()
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)

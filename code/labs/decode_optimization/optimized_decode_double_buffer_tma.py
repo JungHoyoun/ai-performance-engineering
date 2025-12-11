@@ -28,10 +28,6 @@ class NanoChatWarpSpecializedCudaBenchmark(OptimizedDecodeKernelBenchmark):
         self.rows = 4096
         self.cols = 1024  # Keep same as base class - larger sizes may fail TMA encoding
 
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return super().get_verify_output()
-
 
 
 def get_benchmark() -> BaseBenchmark:

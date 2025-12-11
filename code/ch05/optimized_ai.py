@@ -7,6 +7,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from core.utils.compile_utils import enable_tf32
 
@@ -23,7 +24,7 @@ class TinyBlock(nn.Module):
         return self.linear2(self.relu(self.linear1(x)))
 
 
-class OptimizedAIBenchmark(BaseBenchmark):
+class OptimizedAIBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Chains the tiny blocks without CPU sync between them (the optimization)."""
 
     def __init__(self):
@@ -66,6 +67,19 @@ class OptimizedAIBenchmark(BaseBenchmark):
                 out = block(out)
             self._synchronize()
         self.output = out.detach()
+        self._set_verification_payload(
+            inputs={"inputs": self.static_input},
+            output=self.output,
+            batch_size=self.batch,
+            parameter_count=sum(p.numel() for p in self.blocks.parameters()),
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-3, 1e-3),
+        )
 
     def teardown(self) -> None:
         self.static_input = None
@@ -91,23 +105,6 @@ class OptimizedAIBenchmark(BaseBenchmark):
         if self.blocks is None or self.static_input is None:
             return "Model/input not initialized"
         return None
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {
-            "batch": self.batch,
-            "hidden": self.hidden,
-        }
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is not None:
-            return self.output.detach().clone()
-        raise RuntimeError("benchmark_fn() must be called before verification - output is None")
-    
-    def get_output_tolerance(self) -> tuple:
-        """Return custom tolerance for inference benchmark."""
-        return (1e-3, 1e-3)
 
 
 

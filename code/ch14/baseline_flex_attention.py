@@ -13,6 +13,7 @@ import math
 import torch
 from typing import Optional
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (  # noqa: E402
     BaseBenchmark,
     BenchmarkConfig,
@@ -22,7 +23,7 @@ from core.harness.benchmark_harness import (  # noqa: E402
 )
 
 
-class BaselineFlexAttentionBenchmark(BaseBenchmark):
+class BaselineFlexAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: Naive attention that iterates per head without fusion."""
 
     def __init__(self):
@@ -43,6 +44,8 @@ class BaselineFlexAttentionBenchmark(BaseBenchmark):
             tokens_per_iteration=float(tokens),
         )
         self.output = None
+        self._verify_input: Optional[torch.Tensor] = None
+        self.parameter_count: int = 0
         self.register_workload_metadata(
             requests_per_iteration=float(self.seq_len),
             tokens_per_iteration=float(tokens),
@@ -51,11 +54,14 @@ class BaselineFlexAttentionBenchmark(BaseBenchmark):
     def setup(self) -> None:
         """Setup: materialize query/key/value tensors."""
         torch.manual_seed(42)
-        torch.cuda.manual_seed_all(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         shape = (self.seq_len, self.num_heads, self.head_dim)
         self.q = torch.randn(shape, device=self.device, dtype=self.dtype)
         self.k = torch.randn(shape, device=self.device, dtype=self.dtype)
         self.v = torch.randn(shape, device=self.device, dtype=self.dtype)
+        # Store a slice for verification to avoid huge tensor copies
+        self._verify_input = self.q[:1, :1, :].detach().clone()
         torch.cuda.synchronize(self.device)
 
     def benchmark_fn(self) -> None:
@@ -89,6 +95,21 @@ class BaselineFlexAttentionBenchmark(BaseBenchmark):
                 1, self.seq_len, self.embed_dim * self.repeat_passes
             ).contiguous()
             self._synchronize()
+        if self._verify_input is None or self.output is None:
+            raise RuntimeError("Verification input/output not initialized")
+        self._set_verification_payload(
+            inputs={"input": self._verify_input},
+            output=self.output.detach().clone(),
+            batch_size=self._verify_input.shape[0],
+            parameter_count=0,
+            precision_flags={
+                "fp16": self.dtype == torch.float16,
+                "bf16": self.dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
 
     def teardown(self) -> None:

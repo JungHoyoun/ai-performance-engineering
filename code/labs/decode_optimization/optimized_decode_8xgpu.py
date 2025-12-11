@@ -32,6 +32,7 @@ class MultiGPUDecodeBenchmark(BaseBenchmark):
         self.metrics = torch.randn((1, 1), dtype=torch.float32)
         self.output: Optional[torch.Tensor] = None
         self.register_workload_metadata(requests_per_iteration=1.0)
+        self.verification_not_applicable_reason = "SKIPPED: requires >=2 GPUs (torchrun only)"
 
     def benchmark_fn(self) -> None:  # pragma: no cover - torchrun path only
         raise RuntimeError("SKIPPED: requires >=2 GPUs (torchrun path only)")
@@ -76,7 +77,7 @@ class MultiGPUDecodeBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        raise RuntimeError("benchmark_fn() must be called before verification")
+        raise RuntimeError("SKIPPED: requires >=2 GPUs")
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
@@ -150,6 +151,5 @@ def get_benchmark() -> BaseBenchmark:
 
 if __name__ == "__main__":
     main()
-
 
 

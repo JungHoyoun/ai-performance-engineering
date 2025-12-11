@@ -12,6 +12,7 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (  # noqa: E402
     BaseBenchmark,
     BenchmarkConfig,
@@ -36,7 +37,7 @@ def baseline_elementwise(input_tensor: torch.Tensor, output: torch.Tensor, **_: 
     output.copy_(input_tensor * 2.0 + 1.0)
 
 
-class BaselineTritonBenchmark(BaseBenchmark):
+class BaselineTritonBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline element-wise operation using standard PyTorch (compared to Triton kernel)."""
 
     def __init__(self):
@@ -63,6 +64,21 @@ class BaselineTritonBenchmark(BaseBenchmark):
         with nvtx_range("baseline_triton", enable=enable_nvtx):
             baseline_elementwise(self.input, self.output)
             torch.cuda.synchronize(self.device)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"input": self.input},
+            output=self.output.detach().clone(),
+            batch_size=self.input.shape[0],
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-5, 1e-5),
+        )
 
     def teardown(self) -> None:
         self.input = None
@@ -89,20 +105,6 @@ class BaselineTritonBenchmark(BaseBenchmark):
         if self.output is None:
             return "Output tensor not initialized"
         return None
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"N": self.N}
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (1e-5, 1e-5)
 
 
 def get_benchmark() -> BaseBenchmark:

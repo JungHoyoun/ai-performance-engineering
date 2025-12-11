@@ -216,6 +216,7 @@ class OptimizedIntegratedKVCacheBenchmark(BaseBenchmark):
         self.sequence_lengths = [512, 1024, 2048]
         self.block_size = 8
         self.register_workload_metadata(requests_per_iteration=1.0)
+        self.output: Optional[torch.Tensor] = None
     
     def setup(self) -> None:
         """Setup: Initialize model with integrated KV cache."""
@@ -248,6 +249,7 @@ class OptimizedIntegratedKVCacheBenchmark(BaseBenchmark):
         for seq_len in self.sequence_lengths:
             x = torch.randn(self.batch_size, seq_len, self.hidden_dim, device=self.device, dtype=torch.float16)
             self.inputs.append(x)
+        self._verify_input = self.inputs[0] if self.inputs else None
         
         torch.cuda.synchronize()
     
@@ -274,7 +276,16 @@ class OptimizedIntegratedKVCacheBenchmark(BaseBenchmark):
                         hidden = layer(hidden, self.kv_cache, request_id, layer_idx, pos)
                 
                 self.kv_cache.free(request_id)
-
+        self.output = hidden.detach().clone() if hidden is not None else None
+        if self._verify_input is None:
+            raise RuntimeError("setup() must populate inputs before verification")
+        self._set_verification_payload(
+            inputs={"input": self._verify_input},
+            output=self.output,
+            batch_size=self.batch_size,
+            parameter_count=sum(p.numel() for p in self.layers.parameters()) if self.layers is not None else 0,
+            output_tolerance=(0.1, 1.0),
+        )
     
     def teardown(self) -> None:
         """Cleanup."""
@@ -316,16 +327,28 @@ class OptimizedIntegratedKVCacheBenchmark(BaseBenchmark):
         }
 
     def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        # KV cache integration benchmark
-        import torch
-        if self._last is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return torch.tensor([float(self._last)], dtype=torch.float32)
+        return super().get_verify_output()
+
+    def get_input_signature(self) -> dict:
+        verify_shape = tuple(self._verify_input.shape) if hasattr(self, "_verify_input") and self._verify_input is not None else (self.batch_size, self.sequence_lengths[0], self.hidden_dim)
+        return {
+            "shapes": {"input": verify_shape},
+            "dtypes": {"input": "torch.float16"},
+            "batch_size": self.batch_size,
+            "parameter_count": sum(p.numel() for p in self.layers.parameters()) if self.layers is not None else 0,
+            "precision_flags": {
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+        }
 
     def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        payload = getattr(self, "_verification_payload", None)
+        if payload is None:
+            return (0.1, 1.0)
+        return super().get_output_tolerance()
 
 
 def get_benchmark() -> BaseBenchmark:

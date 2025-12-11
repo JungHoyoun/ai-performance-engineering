@@ -16,6 +16,7 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin  # noqa: E402
 from core.harness.benchmark_harness import BaseBenchmark, WorkloadMetadata  # noqa: E402
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 
@@ -26,10 +27,11 @@ def _encode_rle(length: int = 1024, value: int = 7) -> torch.Tensor:
     return runs
 
 
-class GPUDecompressionBenchmark(BaseBenchmark):
+class GPUDecompressionBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def __init__(self) -> None:
         super().__init__()
         self.encoded: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
         self._workload = WorkloadMetadata(bytes_per_iteration=0.0)
 
     def setup(self) -> None:
@@ -54,6 +56,20 @@ class GPUDecompressionBenchmark(BaseBenchmark):
             out = self._decode_rle(self.encoded)
         torch.cuda.synchronize(self.device)
         latency_ms = self._record_stop(start)
+        self.output = out.detach().clone()
+        self._set_verification_payload(
+            inputs={"encoded": self.encoded},
+            output=self.output,
+            batch_size=self.output.shape[0],
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
         return {"latency_ms": latency_ms, "output_len": int(out.numel())}
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
@@ -69,17 +85,6 @@ class GPUDecompressionBenchmark(BaseBenchmark):
             read_time_ms=getattr(self, '_read_time_ms', 1.0),
             write_time_ms=getattr(self, '_write_time_ms', 1.0),
         )
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        raise RuntimeError("Decompression benchmark - bytes output only")
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"type": "gpu_decompression"}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

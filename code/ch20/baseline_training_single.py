@@ -119,6 +119,15 @@ class BaselineTrainingSingleBenchmark(BaseBenchmark):
             return "Model not initialized"
         return None
 
+    def get_verify_output(self) -> torch.Tensor:
+        return super().get_verify_output()
+
+    def get_output_tolerance(self) -> tuple:
+        payload = getattr(self, "_verification_payload", None)
+        if payload is None:
+            return (0.1, 1.0)
+        return super().get_output_tolerance()
+
 
 def get_benchmark() -> BaseBenchmark:
     return BaselineTrainingSingleBenchmark()

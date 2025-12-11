@@ -21,6 +21,7 @@ except ImportError:  # pragma: no cover - older PyTorch fallback
 
 from typing import Optional
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (  # noqa: E402
     BaseBenchmark,
     BenchmarkConfig,
@@ -61,7 +62,7 @@ class FlexAttentionBlock(nn.Module):
         return self.out_proj(context)
 
 
-class OptimizedFlexAttentionBenchmark(BaseBenchmark):
+class OptimizedFlexAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Uses FlexAttention for flexible attention patterns."""
     
     def __init__(self):
@@ -80,6 +81,8 @@ class OptimizedFlexAttentionBenchmark(BaseBenchmark):
             tokens_per_iteration=float(tokens),
         )
         self.output = None
+        self._verify_input: Optional[torch.Tensor] = None
+        self.parameter_count: int = 0
         self.register_workload_metadata(
             requests_per_iteration=float(self.batch),
             tokens_per_iteration=float(tokens),
@@ -93,10 +96,12 @@ class OptimizedFlexAttentionBenchmark(BaseBenchmark):
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
-        torch.cuda.manual_seed_all(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         block = FlexAttentionBlock(self.embed_dim, self.num_heads, self.dtype).to(self.device)
         block = block.eval()
         self.model = block
+        self.parameter_count = sum(p.numel() for p in self.model.parameters())
 
         self.graph_input = torch.randn(
             self.batch,
@@ -105,6 +110,7 @@ class OptimizedFlexAttentionBenchmark(BaseBenchmark):
             device=self.device,
             dtype=self.dtype,
         )
+        self._verify_input = self.graph_input.detach().clone()
         for _ in range(3):
             with torch.no_grad():
                 _ = self.model(self.graph_input)
@@ -128,6 +134,21 @@ class OptimizedFlexAttentionBenchmark(BaseBenchmark):
             self._last = float(out.sum())
             self.output = out.detach().clone()
             self._synchronize()
+        if self._verify_input is None or self.output is None:
+            raise RuntimeError("Verification input/output not initialized")
+        self._set_verification_payload(
+            inputs={"input": self._verify_input},
+            output=self.output.detach().clone(),
+            batch_size=self._verify_input.shape[0],
+            parameter_count=self.parameter_count,
+            precision_flags={
+                "fp16": self.dtype == torch.float16,
+                "bf16": self.dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.5, 5.0),
+        )
 
     
     def teardown(self) -> None:
@@ -163,20 +184,6 @@ class OptimizedFlexAttentionBenchmark(BaseBenchmark):
         if self.model is None or self.graph_input is None:
             return "Model not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.float()
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch": self.batch, "seq_len": self.seq_len, "embed_dim": self.embed_dim}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.5, 5.0)
 
 
 def get_benchmark() -> BaseBenchmark:

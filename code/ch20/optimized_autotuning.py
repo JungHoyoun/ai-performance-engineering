@@ -52,6 +52,8 @@ class OptimizedAutotuningBenchmark(BaseBenchmark):
             requests_per_iteration=float(self.batch),
             tokens_per_iteration=float(tokens),
         )
+        self._verify_input: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
 
     def setup(self) -> None:
         torch.manual_seed(0)
@@ -76,6 +78,7 @@ class OptimizedAutotuningBenchmark(BaseBenchmark):
             dynamic=False,
         )
         self.inputs = torch.randn(self.batch, self.hidden_dim, device=self.device, dtype=torch.bfloat16)
+        self._verify_input = self.inputs[0:1].clone()
         # Warm a couple runs to trigger compile/autotune caches
         for _ in range(3):
             sdpa_ctx = prefer_sdpa_backends() if prefer_sdpa_backends is not None else nullcontext()
@@ -94,6 +97,15 @@ class OptimizedAutotuningBenchmark(BaseBenchmark):
         if self._verify_input is not None and self.model is not None:
             with torch.no_grad():
                 self.output = self.model(self._verify_input).float().clone()
+        if self._verify_input is None:
+            raise RuntimeError("setup() must prepare verify input before verification")
+        self._set_verification_payload(
+            inputs={"verify_input": self._verify_input},
+            output=self.output if self.output is not None else torch.zeros_like(self._verify_input),
+            batch_size=self._verify_input.shape[0],
+            parameter_count=sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0,
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         self.model = None
@@ -126,20 +138,28 @@ class OptimizedAutotuningBenchmark(BaseBenchmark):
         if self.inputs is None:
             return "Input tensor not initialized"
         return None
-
     def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.detach().clone()
+        return super().get_verify_output()
 
     def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"batch": self.batch, "hidden_dim": self.hidden_dim}
+        return {
+            "shapes": {"verify_input": (self.batch, self.hidden_dim)},
+            "dtypes": {"verify_input": "torch.bfloat16"},
+            "batch_size": self.batch,
+            "parameter_count": sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0,
+            "precision_flags": {
+                "fp16": False,
+                "bf16": True,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+        }
 
     def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        payload = getattr(self, "_verification_payload", None)
+        if payload is None:
+            return (0.1, 1.0)
+        return super().get_output_tolerance()
 
 
 def get_benchmark() -> BaseBenchmark:

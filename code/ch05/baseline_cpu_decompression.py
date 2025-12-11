@@ -17,11 +17,12 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin  # noqa: E402
 from core.harness.benchmark_harness import BaseBenchmark, WorkloadMetadata  # noqa: E402
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 
 
-class CPUDecompressionBenchmark(BaseBenchmark):
+class CPUDecompressionBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def __init__(self) -> None:
         super().__init__()
         self.compressed: Optional[bytes] = None
@@ -44,6 +45,20 @@ class CPUDecompressionBenchmark(BaseBenchmark):
         # Convert decompressed bytes to tensor for verification
         import numpy as np
         self.output = torch.from_numpy(np.frombuffer(decompressed, dtype=np.float32).copy())
+        compressed_tensor = torch.tensor(list(self.compressed), dtype=torch.uint8)
+        self._set_verification_payload(
+            inputs={"compressed": compressed_tensor},
+            output=self.output.detach().clone(),
+            batch_size=self.output.shape[0],
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": False,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
         return {"latency_ms": latency_ms, "compressed_bytes": len(self.compressed)}
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
@@ -59,19 +74,6 @@ class CPUDecompressionBenchmark(BaseBenchmark):
             read_time_ms=getattr(self, '_read_time_ms', 1.0),
             write_time_ms=getattr(self, '_write_time_ms', 1.0),
         )
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.clone()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"type": "cpu_decompression"}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:
