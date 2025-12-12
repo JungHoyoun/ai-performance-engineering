@@ -27,6 +27,7 @@ import numba  # noqa: F401
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, ExecutionMode, WorkloadMetadata
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -139,7 +140,7 @@ class OptimizedVLLMV1Integration:
         torch.cuda.empty_cache()
 
 
-class OptimizedVLLMV1IntegrationBenchmark(BaseBenchmark):
+class OptimizedVLLMV1IntegrationBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Benchmark wrapper for the optimized vLLM path."""
 
     def __init__(self):
@@ -148,6 +149,7 @@ class OptimizedVLLMV1IntegrationBenchmark(BaseBenchmark):
         self._metrics: Dict[str, Any] = {}
         self.output: Optional[torch.Tensor] = None
         self._ran = False
+        self._verification_payload = None
         self.register_workload_metadata(requests_per_iteration=8.0)
 
     def setup(self):
@@ -172,6 +174,17 @@ class OptimizedVLLMV1IntegrationBenchmark(BaseBenchmark):
             dtype=torch.float32,
         )
         self._ran = True
+        self._set_verification_payload(
+            inputs={
+                "batch_size": torch.tensor(self.runner.batch_size),
+                "max_tokens": torch.tensor(self.runner.max_tokens),
+            },
+            output=self.output,
+            batch_size=self.runner.batch_size,
+            parameter_count=0,
+            precision_flags={"fp16": False, "bf16": True, "fp8": False, "tf32": torch.backends.cuda.matmul.allow_tf32},
+            output_tolerance=(0.1, 1.0),
+        )
         self._synchronize()
 
     def teardown(self) -> None:
@@ -209,24 +222,6 @@ class OptimizedVLLMV1IntegrationBenchmark(BaseBenchmark):
 
     def get_custom_metrics(self) -> Dict[str, Any]:
         return self._metrics
-
-    def get_input_signature(self) -> Dict[str, Any]:
-        return {
-            "batch_size": 8,
-            "max_tokens": 128,
-            "model_name": "facebook/opt-125m",
-            "enable_chunked_prefill": True,
-        }
-
-    def get_verify_output(self) -> "torch.Tensor":
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.detach().clone()
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

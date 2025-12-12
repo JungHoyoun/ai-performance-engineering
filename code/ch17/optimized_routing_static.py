@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 
 from core.utils.compile_utils import enable_tf32
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
@@ -31,7 +32,7 @@ class SimpleModel(nn.Module):
         return self.output(x)
 
 
-class OptimizedRoutingBenchmark(BaseBenchmark):
+class OptimizedRoutingBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Dynamic routing that mixes model sizes."""
     
     def __init__(self):
@@ -55,6 +56,8 @@ class OptimizedRoutingBenchmark(BaseBenchmark):
         )
         self.output: Optional[torch.Tensor] = None
         self._verify_input: Optional[torch.Tensor] = None
+        self.parameter_count: int = 0
+        self._verification_payload = None
         self.register_workload_metadata(
             requests_per_iteration=float(len(self.routing_order)),
             tokens_per_iteration=float(tokens),
@@ -89,6 +92,9 @@ class OptimizedRoutingBenchmark(BaseBenchmark):
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
         self._verify_input = torch.randn(self.batch_size, 2048, device=self.device, dtype=dtype_large)
+        self.parameter_count = sum(p.numel() for p in self.small_model.parameters()) + \
+            sum(p.numel() for p in self.medium_model.parameters()) + \
+            sum(p.numel() for p in self.large_model.parameters())
         self._synchronize()
     
     def benchmark_fn(self) -> None:
@@ -113,6 +119,22 @@ class OptimizedRoutingBenchmark(BaseBenchmark):
                 with torch.no_grad():
                     self.output = self.large_model(self._verify_input).detach().float().clone()
         self._synchronize()
+        if self.output is None or self._verify_input is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        dtype = self.output.dtype
+        self._set_verification_payload(
+            inputs={"verify_input": self._verify_input},
+            output=self.output,
+            batch_size=self._verify_input.shape[0],
+            parameter_count=self.parameter_count,
+            precision_flags={
+                "fp16": dtype == torch.float16,
+                "bf16": dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(1.0, 10.0),
+        )
 
     def teardown(self) -> None:
         self.small_model = None
@@ -146,20 +168,6 @@ class OptimizedRoutingBenchmark(BaseBenchmark):
 
     def validate_result(self) -> Optional[str]:
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.detach().float()
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch_size": self.batch_size, "hidden_dim": self.hidden_dim}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison - wider due to different model sizes."""
-        return (1.0, 10.0)
 
 
 def get_benchmark() -> OptimizedRoutingBenchmark:

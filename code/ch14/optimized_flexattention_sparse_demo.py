@@ -36,6 +36,7 @@ from typing import Optional, Callable
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -175,6 +176,8 @@ class FlexAttentionBenchmark:
         
         # Use flex_attention directly (compilation happens internally)
         self._compiled_flex = flex_attention
+        self._last_output: Optional[torch.Tensor] = None
+        self._last_block_mask: Optional[torch.Tensor] = None
     
     def benchmark_pattern(
         self,
@@ -182,6 +185,7 @@ class FlexAttentionBenchmark:
         mask_fn: Callable,
         num_warmup: int = 3,
         num_iterations: int = 10,
+        store_output: bool = False,
     ) -> dict:
         """Benchmark a specific attention pattern."""
         
@@ -197,6 +201,8 @@ class FlexAttentionBenchmark:
             KV_LEN=self.seq_len,
             device=self.device,
         )
+        if store_output:
+            self._last_block_mask = block_mask
         
         # Warmup
         for _ in range(num_warmup):
@@ -208,11 +214,17 @@ class FlexAttentionBenchmark:
         end = torch.cuda.Event(enable_timing=True)
         
         start.record()
+        last_output = None
         for _ in range(num_iterations):
-            _ = self._compiled_flex(self.q, self.k, self.v, block_mask=block_mask)
+            last_output = self._compiled_flex(self.q, self.k, self.v, block_mask=block_mask)
         end.record()
         torch.cuda.synchronize()
         
+        if store_output and last_output is not None:
+            self._last_output = last_output
+        elif store_output:
+            self._last_output = None
+
         elapsed_ms = start.elapsed_time(end) / num_iterations
         
         # Calculate metrics
@@ -447,7 +459,7 @@ if __name__ == "__main__":
 # Benchmark Harness Integration
 #============================================================================
 
-class FlexAttentionSparseDemoBenchmark(BaseBenchmark):
+class FlexAttentionSparseDemoBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Benchmark harness wrapper for FlexAttention sparse demo."""
 
     def __init__(self):
@@ -458,6 +470,8 @@ class FlexAttentionSparseDemoBenchmark(BaseBenchmark):
         self.head_dim = 128
         self.seq_len = 2048
         self._last = 0.0
+        self.output = None
+        self._verification_payload = None
         
         tokens = self.batch_size * self.seq_len
         self._workload = WorkloadMetadata(
@@ -483,10 +497,44 @@ class FlexAttentionSparseDemoBenchmark(BaseBenchmark):
 
     def benchmark_fn(self) -> None:
         """Benchmark: FlexAttention with causal mask."""
-        if HAS_FLEX_ATTENTION and self.demo_benchmark is not None:
-            result = self.demo_benchmark.benchmark_pattern("Causal", causal_mask, num_warmup=10, num_iterations=1)
-            self._last = result.get("elapsed_ms", 0.0)
+        if not HAS_FLEX_ATTENTION:
+            raise RuntimeError("FlexAttention not available (requires PyTorch 2.5+)")
+        if self.demo_benchmark is None:
+            raise RuntimeError("Benchmark not initialized")
+
+        result = self.demo_benchmark.benchmark_pattern(
+            "Causal",
+            causal_mask,
+            num_warmup=10,
+            num_iterations=1,
+            store_output=True,
+        )
+        self._last = result.get("elapsed_ms", 0.0)
+        self.output = self.demo_benchmark._last_output
         self._synchronize()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        block_mask = getattr(self.demo_benchmark, "_last_block_mask", None)
+        inputs = {
+            "q": self.demo_benchmark.q,
+            "k": self.demo_benchmark.k,
+            "v": self.demo_benchmark.v,
+        }
+        if block_mask is not None:
+            inputs["block_mask"] = block_mask
+        self._set_verification_payload(
+            inputs=inputs,
+            output=self.output,
+            batch_size=self.batch_size,
+            parameter_count=0,
+            precision_flags={
+                "fp16": self.demo_benchmark.q.dtype == torch.float16,
+                "bf16": self.demo_benchmark.q.dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -515,18 +563,6 @@ class FlexAttentionSparseDemoBenchmark(BaseBenchmark):
         if self.demo_benchmark is None:
             return "Benchmark not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        raise RuntimeError("Demo benchmark - no verification output")
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"batch_size": self.batch_size, "seq_len": self.seq_len}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

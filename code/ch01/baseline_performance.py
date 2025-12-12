@@ -25,6 +25,7 @@ from core.utils.compile_utils import compile_model  # Local helper applies TF32 
 from typing import Optional
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from ch01.workload_config import WORKLOAD
 
 
@@ -52,7 +53,7 @@ def _should_use_compile(device: torch.device) -> bool:
     return False
 
 
-class BaselinePerformanceBenchmark(BaseBenchmark):
+class BaselinePerformanceBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Benchmark implementation following BaseBenchmark."""
     
     def __init__(self):

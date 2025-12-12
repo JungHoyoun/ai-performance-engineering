@@ -9,6 +9,7 @@ import random
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
@@ -26,7 +27,7 @@ class LargeModel(nn.Module):
         return self.output(x)
 
 
-class BaselineRoutingStaticBenchmark(BaseBenchmark):
+class BaselineRoutingStaticBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Static routing baseline: every request uses the large model."""
 
     def __init__(self):
@@ -44,6 +45,8 @@ class BaselineRoutingStaticBenchmark(BaseBenchmark):
         )
         self.output: Optional[torch.Tensor] = None
         self._verify_input: Optional[torch.Tensor] = None
+        self.parameter_count: int = 0
+        self._verification_payload = None
         self.register_workload_metadata(
             requests_per_iteration=float(self.requests_per_iteration),
             tokens_per_iteration=float(tokens),
@@ -60,6 +63,7 @@ class BaselineRoutingStaticBenchmark(BaseBenchmark):
         if self.device.type == "cuda":
             self.model = self.model.half()
         self.model.eval()
+        self.parameter_count = sum(p.numel() for p in self.model.parameters())
 
         dtype = next(self.model.parameters()).dtype
         self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=dtype)
@@ -79,6 +83,22 @@ class BaselineRoutingStaticBenchmark(BaseBenchmark):
                 with torch.no_grad():
                     self.output = self.model(self._verify_input).detach().float().clone()
         self._synchronize()
+        if self.output is None or self._verify_input is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        dtype = self.output.dtype
+        self._set_verification_payload(
+            inputs={"verify_input": self._verify_input},
+            output=self.output,
+            batch_size=self._verify_input.shape[0],
+            parameter_count=self.parameter_count,
+            precision_flags={
+                "fp16": dtype == torch.float16,
+                "bf16": dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.5, 5.0),
+        )
 
     def teardown(self) -> None:
         self.model = None
@@ -107,20 +127,6 @@ class BaselineRoutingStaticBenchmark(BaseBenchmark):
         if self.model is None or self.inputs is None:
             return "Model/input not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.detach().float()
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch_size": self.batch_size, "hidden_dim": self.hidden_dim}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.5, 5.0)
 
 
 def get_benchmark() -> BaselineRoutingStaticBenchmark:

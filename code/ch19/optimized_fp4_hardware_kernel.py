@@ -14,10 +14,12 @@ from typing import Optional
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
+    WorkloadMetadata,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 
 
-class OptimizedFP4HardwareKernelBenchmark(BaseBenchmark):
+class OptimizedFP4HardwareKernelBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Invoke the fp4 intrinsics binary."""
 
     def __init__(self) -> None:
@@ -26,6 +28,9 @@ class OptimizedFP4HardwareKernelBenchmark(BaseBenchmark):
         self.bin_path = self.chapter_dir / "optimized_fp4_hardware_kernel"
         self.output = None
         self._verify_input = None
+        self._verification_payload = None
+        self._workload = WorkloadMetadata(requests_per_iteration=1.0)
+        self.register_workload_metadata(requests_per_iteration=1.0)
 
     def setup(self) -> None:
         if not self.bin_path.exists():
@@ -46,6 +51,8 @@ class OptimizedFP4HardwareKernelBenchmark(BaseBenchmark):
         torch.manual_seed(42)
         a = torch.randn(4, 4)
         self.output = (a @ a).flatten()[:4].float().clone()
+        if self.output is None or self._verify_input is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
         self._set_verification_payload(
             inputs={"input": self._verify_input},
             output=self.output,

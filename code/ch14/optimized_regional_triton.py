@@ -28,6 +28,7 @@ from core.harness.benchmark_harness import (  # noqa: E402
     BenchmarkMode,
     WorkloadMetadata,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 
 try:
     import triton
@@ -199,7 +200,7 @@ class TinyTransformerBlock(nn.Module):
         return x
 
 
-class OptimizedRegionalTritonBenchmark(BaseBenchmark):
+class OptimizedRegionalTritonBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Triton-fused MLP as the compiled region plus eager rest."""
 
     def __init__(self):
@@ -218,6 +219,9 @@ class OptimizedRegionalTritonBenchmark(BaseBenchmark):
             tokens_per_iteration=float(max_tokens),
         )
         self.output = None
+        self._last_input: Optional[torch.Tensor] = None
+        self.parameter_count: int = 0
+        self._verification_payload = None
         self.register_workload_metadata(
             requests_per_iteration=1.0,
             tokens_per_iteration=float(max_tokens),
@@ -240,6 +244,7 @@ class OptimizedRegionalTritonBenchmark(BaseBenchmark):
                 device=self.device,
                 dtype=torch.bfloat16,
             )
+        self.parameter_count = sum(p.numel() for p in self.model.parameters())
 
         self.register_workload_metadata(
             requests_per_iteration=self._workload.requests_per_iteration,
@@ -258,9 +263,26 @@ class OptimizedRegionalTritonBenchmark(BaseBenchmark):
         seq_len = self._next_sequence_length()
         x = self.inputs[seq_len]
         with torch.no_grad(), self._nvtx_range("optimized_regional_triton"):
+            self._last_input = x
             out = self.model(x)
             self.output = out.detach().float().clone()
         self._synchronize()
+        if self.output is None or self._last_input is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        dtype = self._last_input.dtype
+        self._set_verification_payload(
+            inputs={"input": self._last_input},
+            output=self.output,
+            batch_size=self._last_input.shape[0],
+            parameter_count=self.parameter_count,
+            precision_flags={
+                "fp16": dtype == torch.float16,
+                "bf16": dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.5, 5.0),
+        )
 
     def teardown(self) -> None:
         self.model = None
@@ -294,20 +316,6 @@ class OptimizedRegionalTritonBenchmark(BaseBenchmark):
         if self.model is None:
             return "Model not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.float()
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"hidden": self.hidden, "batch_size": self.batch_size}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.5, 5.0)
 
 
 def get_benchmark() -> BaseBenchmark:

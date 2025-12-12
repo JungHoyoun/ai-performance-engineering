@@ -13,6 +13,7 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -35,7 +36,7 @@ def _disable_flash_sdp() -> None:
         )
 
 
-class OptimizedSpeculativeDecodingMathBenchmark(BaseBenchmark):
+class OptimizedSpeculativeDecodingMathBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Speculative decoding with flash disabled (math path for GB10)."""
 
     def __init__(self):
@@ -62,17 +63,7 @@ class OptimizedSpeculativeDecodingMathBenchmark(BaseBenchmark):
             requests_per_iteration=1.0,
             tokens_per_iteration=float(tokens),
         )
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {
-            "batch_size": self.batch_size,
-            "vocab_size": self.vocab_size,
-            "hidden_size": self.hidden_size,
-            "num_draft_tokens": self.num_draft_tokens,
-            "num_sequences": self.num_sequences,
-            "num_draft_models": self.num_draft_models,
-        }
+        self._verification_payload = None
 
     def setup(self) -> None:
         _disable_flash_sdp()
@@ -120,6 +111,16 @@ class OptimizedSpeculativeDecodingMathBenchmark(BaseBenchmark):
                 # Capture output for verification
                 self.output = current_ids.detach()
         self._synchronize()
+        if self.output is None or self.input_ids is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        self._set_verification_payload(
+            inputs={"input_ids": self.input_ids},
+            output=self.output.float(),
+            batch_size=self.input_ids.shape[0],
+            parameter_count=sum(p.numel() for p in self.target_model.parameters()) if self.target_model else 0,
+            precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": torch.backends.cuda.matmul.allow_tf32},
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         self.target_model = None
@@ -149,16 +150,6 @@ class OptimizedSpeculativeDecodingMathBenchmark(BaseBenchmark):
         if self.input_ids is None:
             return "Input IDs not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.float().clone()
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

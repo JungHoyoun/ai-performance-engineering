@@ -12,6 +12,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig  # noqa: E402
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from ch18.v1_engine_loop_common import MockRequestOutput, build_demo_stack
 from ch18.optimized_v1_engine_loop import run_engine_loop
 
@@ -53,7 +54,7 @@ def _demo() -> None:
 from typing import Optional
 
 
-class BaselineV1EngineLoopBenchmark(BaseBenchmark):
+class BaselineV1EngineLoopBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Benchmark for baseline V1 engine polling loop."""
     
     def __init__(self) -> None:
@@ -61,6 +62,7 @@ class BaselineV1EngineLoopBenchmark(BaseBenchmark):
         self.engine_core = None
         self.core_client = None
         self.output = None
+        self._verification_payload = None
         self.register_workload_metadata(requests_per_iteration=1.0)
     
     def get_config(self) -> BenchmarkConfig:
@@ -94,24 +96,18 @@ class BaselineV1EngineLoopBenchmark(BaseBenchmark):
             float(verify_core.calls),
             float(len(verify_outputs)),
         ], dtype=torch.float32)
+        self._set_verification_payload(
+            inputs={"seed": torch.tensor(42)},
+            output=self.output,
+            batch_size=1,
+            parameter_count=0,
+            precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": False},
+            output_tolerance=(0.1, 1.0),
+        )
         return {
             "steps": self.engine_core.calls,
             "tokens_generated": len(outputs),
         }
-
-    def get_verify_output(self) -> "torch.Tensor":
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.detach().clone()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"type": "v1_engine_loop"}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

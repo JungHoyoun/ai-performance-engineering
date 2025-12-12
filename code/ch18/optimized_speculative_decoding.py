@@ -23,6 +23,7 @@ import torch
 import torch.nn as nn
 from typing import Optional
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -32,7 +33,7 @@ from core.harness.benchmark_harness import (
 )
 
 
-class OptimizedSpeculativeDecodingBenchmark(BaseBenchmark):
+class OptimizedSpeculativeDecodingBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Batch verification of speculative tokens.
     
     The key insight: Instead of K sequential target model calls,
@@ -58,6 +59,7 @@ class OptimizedSpeculativeDecodingBenchmark(BaseBenchmark):
             requests_per_iteration=1.0,
             tokens_per_iteration=float(self.batch_size * self.num_iterations * self.speculative_k),
         )
+        self._verification_payload = None
     
     def setup(self) -> None:
         """Setup target model for batch verification."""
@@ -99,17 +101,6 @@ class OptimizedSpeculativeDecodingBenchmark(BaseBenchmark):
             tokens_per_iteration=self._workload.tokens_per_iteration,
         )
     
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {
-            "batch_size": self.batch_size,
-            "vocab_size": self.vocab_size,
-            "hidden_size": self.hidden_size,
-            "num_draft_tokens": self.speculative_k,
-            "num_sequences": self.num_iterations,
-            "num_draft_models": self.num_draft_models,
-        }
-    
     def benchmark_fn(self) -> None:
         """Benchmark: Batch verification of K speculative tokens.
         
@@ -137,6 +128,16 @@ class OptimizedSpeculativeDecodingBenchmark(BaseBenchmark):
                     self.output = predictions.detach()
         
         self._synchronize()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        self._set_verification_payload(
+            inputs={"sequences": self.sequences},
+            output=self.output.float(),
+            batch_size=self.batch_size,
+            parameter_count=sum(p.numel() for p in self.target_model.parameters()) if self.target_model else 0,
+            precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": torch.backends.cuda.matmul.allow_tf32},
+            output_tolerance=(0.1, 1.0),
+        )
     
     def teardown(self) -> None:
         self.target_model = None
@@ -156,16 +157,6 @@ class OptimizedSpeculativeDecodingBenchmark(BaseBenchmark):
             verify_time_ms=getattr(self, '_verify_ms', 10.0),
             num_rounds=getattr(self, '_num_rounds', 8),
         )
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.float().clone()
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

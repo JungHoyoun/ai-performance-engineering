@@ -16,9 +16,11 @@ from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
 )
+from core.harness.benchmark_harness import WorkloadMetadata
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 
 
-class BaselineFP4HardwareKernelBenchmark(BaseBenchmark):
+class BaselineFP4HardwareKernelBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Invoke the manual FP4 kernel binary."""
 
     def __init__(self) -> None:
@@ -27,6 +29,9 @@ class BaselineFP4HardwareKernelBenchmark(BaseBenchmark):
         self.bin_path = self.chapter_dir / "baseline_fp4_hardware_kernel"
         self.output = None
         self._verify_input = None
+        self._verification_payload = None
+        self._workload = WorkloadMetadata(requests_per_iteration=1.0)
+        self.register_workload_metadata(requests_per_iteration=1.0)
 
     def setup(self) -> None:
         # Build without arch suffix so we know the binary name deterministically.

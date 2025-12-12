@@ -22,6 +22,7 @@ from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, Benc
 from core.utils.logger import get_logger
 
 logger = get_logger(__name__)
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 
 
 class BaselineSpeculativeDecoding:
@@ -199,7 +200,7 @@ def run_benchmark(
     }
 
 
-class BaselineSpeculativeDecodingBenchmark(BaseBenchmark):
+class BaselineSpeculativeDecodingBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Harness wrapper to expose the baseline decode loop."""
 
     def __init__(self):
@@ -207,12 +208,24 @@ class BaselineSpeculativeDecodingBenchmark(BaseBenchmark):
         self._metrics: Dict[str, Any] = {}
         self._inner_benchmark = None
         self.output = None
+        self._verification_payload = None
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def benchmark_fn(self) -> None:
         self._inner_benchmark, self._metrics = run_benchmark(return_benchmark=True)
         self.output = self._inner_benchmark.last_output
         self._synchronize()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        # Use the generated token ids as verification output.
+        self._set_verification_payload(
+            inputs={"input_ids": self._inner_benchmark.input_ids},
+            output=self.output.float(),
+            batch_size=self._inner_benchmark.input_ids.shape[0],
+            parameter_count=0,
+            precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": torch.backends.cuda.matmul.allow_tf32},
+            output_tolerance=(0.1, 1.0),
+        )
     
     def teardown(self) -> None:
         if self._inner_benchmark is not None:
@@ -227,27 +240,6 @@ class BaselineSpeculativeDecodingBenchmark(BaseBenchmark):
 
     def get_custom_metrics(self) -> Dict[str, Any]:
         return self._metrics
-
-    def get_input_signature(self) -> Dict[str, Any]:
-        # Keep signature aligned with optimized variants for verification
-        return {
-            "batch_size": 4,
-            "vocab_size": 32000,
-            "hidden_size": 4096,
-            "num_draft_tokens": 8,
-            "num_sequences": 10,
-            "num_draft_models": 3,
-        }
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.float().clone()
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

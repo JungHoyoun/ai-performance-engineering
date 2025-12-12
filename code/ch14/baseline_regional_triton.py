@@ -27,6 +27,7 @@ from core.harness.benchmark_harness import (  # noqa: E402
     BenchmarkMode,
     WorkloadMetadata,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 
 
 class MLP(nn.Module):
@@ -64,7 +65,7 @@ class TinyTransformerBlock(nn.Module):
         return x
 
 
-class BaselineRegionalTritonBenchmark(BaseBenchmark):
+class BaselineRegionalTritonBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Full-graph compile baseline without Triton fusion."""
 
     def __init__(self):
@@ -83,6 +84,9 @@ class BaselineRegionalTritonBenchmark(BaseBenchmark):
             tokens_per_iteration=float(max_tokens),
         )
         self.output = None
+        self._last_input: Optional[torch.Tensor] = None
+        self.parameter_count: int = 0
+        self._verification_payload = None
         self.register_workload_metadata(
             requests_per_iteration=1.0,
             tokens_per_iteration=float(max_tokens),
@@ -105,6 +109,7 @@ class BaselineRegionalTritonBenchmark(BaseBenchmark):
                 device=self.device,
                 dtype=torch.bfloat16,
             )
+        self.parameter_count = sum(p.numel() for p in self.model.parameters())
 
         self.register_workload_metadata(
             requests_per_iteration=self._workload.requests_per_iteration,
@@ -131,8 +136,25 @@ class BaselineRegionalTritonBenchmark(BaseBenchmark):
             mode="default",
         )
         with torch.no_grad(), self._nvtx_range("baseline_regional_triton"):
+            self._last_input = x
             self.output = compiled_model(x)
         self._synchronize()
+        if self.output is None or self._last_input is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        dtype = self._last_input.dtype
+        self._set_verification_payload(
+            inputs={"input": self._last_input},
+            output=self.output.detach(),
+            batch_size=self._last_input.shape[0],
+            parameter_count=self.parameter_count,
+            precision_flags={
+                "fp16": dtype == torch.float16,
+                "bf16": dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.5, 5.0),
+        )
 
     def teardown(self) -> None:
         self.model = None
@@ -166,20 +188,6 @@ class BaselineRegionalTritonBenchmark(BaseBenchmark):
         if self.model is None:
             return "Model not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.float()
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"hidden": self.hidden, "batch_size": self.batch_size}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.5, 5.0)
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -13,9 +13,10 @@ except ImportError:
     pass
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 
 
-class BaselineGuidedDecodingBenchmark(BaseBenchmark):
+class BaselineGuidedDecodingBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: standard decoding without schema/structure guidance."""
     
     def __init__(self):
@@ -32,6 +33,10 @@ class BaselineGuidedDecodingBenchmark(BaseBenchmark):
         self.parameter_count = 0
         tokens = self.batch_size * self.seq_len
         self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
+        self.register_workload_metadata(
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(tokens),
         )

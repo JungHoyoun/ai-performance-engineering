@@ -12,10 +12,11 @@ from typing import Dict, List, Optional
 
 import torch
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
-class BaselineMoERouterUniformBenchmark(BaseBenchmark):
+class BaselineMoERouterUniformBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Uniform expert selection ignoring fabric distance."""
 
     def __init__(self):
@@ -28,6 +29,8 @@ class BaselineMoERouterUniformBenchmark(BaseBenchmark):
             tokens_per_iteration=float(self.tokens),
         )
         self._last_assignment: Dict[int, int] = {}
+        self.output: Optional[torch.Tensor] = None
+        self._verification_payload = None
 
     def setup(self) -> None:
         torch.manual_seed(0)
@@ -41,6 +44,19 @@ class BaselineMoERouterUniformBenchmark(BaseBenchmark):
                 expert = random.choice(self.experts)
                 assignment[token_id] = expert
             self._last_assignment = assignment
+            self.output = torch.tensor(
+                [assignment[t] for t in range(self.tokens)],
+                device=self.device,
+                dtype=torch.int32,
+            )
+            self._set_verification_payload(
+                inputs={"tokens": torch.tensor(self.tokens, device=self.device)},
+                output=self.output,
+                batch_size=self.tokens,
+                parameter_count=0,
+                precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": False},
+                output_tolerance=(0.0, 0.0),
+            )
             self._synchronize()
 
     def teardown(self) -> None:
@@ -68,20 +84,6 @@ class BaselineMoERouterUniformBenchmark(BaseBenchmark):
         if not self._last_assignment:
             return "No assignments produced"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.tokens is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.tokens.detach().clone()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"num_experts": self.num_experts}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -23,6 +23,7 @@ from core.harness.benchmark_harness import (  # noqa: E402
     BenchmarkConfig,
     WorkloadMetadata,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.utils.compile_utils import enable_tf32  # noqa: E402
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 
@@ -55,7 +56,7 @@ class _AttentionBlock(nn.Module):
         return x + ff_out
 
 
-class OptimizedDisaggregatedBenchmark(BaseBenchmark):
+class OptimizedDisaggregatedBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Prefill on a long context + decode on a short context using separate streams."""
 
     def __init__(self) -> None:
@@ -80,6 +81,9 @@ class OptimizedDisaggregatedBenchmark(BaseBenchmark):
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(self.batch_size * (self.prefill_seq + self.decode_seq)),
         )
+        self.output: Optional[torch.Tensor] = None
+        self.parameter_count: int = 0
+        self._verification_payload = None
 
     def setup(self) -> None:
         enable_tf32()
@@ -119,6 +123,9 @@ class OptimizedDisaggregatedBenchmark(BaseBenchmark):
             for _ in range(2):
                 _ = self.decode_model(self.decode_input)
         torch.cuda.synchronize()
+        self.parameter_count = sum(p.numel() for p in self.prefill_model.parameters()) + sum(
+            p.numel() for p in self.decode_model.parameters()
+        )
 
     def benchmark_fn(self) -> None:
         if any(item is None for item in (self.prefill_model, self.decode_model, self.prefill_input, self.decode_input)):
@@ -140,7 +147,24 @@ class OptimizedDisaggregatedBenchmark(BaseBenchmark):
                 # Wait for both streams and accumulate a checksum for determinism.
                 torch.cuda.current_stream().wait_stream(self.prefill_stream)
                 torch.cuda.current_stream().wait_stream(self.decode_stream)
-                self._checksum = float(prefill_out.float().sum() + decode_out.float().sum())
+                self.output = torch.stack([prefill_out.float().sum(), decode_out.float().sum()])
+                self._checksum = float(self.output.sum())
+                self._set_verification_payload(
+                    inputs={
+                        "prefill_input": self.prefill_input,
+                        "decode_input": self.decode_input,
+                    },
+                    output=self.output,
+                    batch_size=self.batch_size,
+                    parameter_count=self.parameter_count,
+                    precision_flags={
+                        "fp16": False,
+                        "bf16": self.dtype == torch.bfloat16,
+                        "fp8": False,
+                        "tf32": torch.backends.cuda.matmul.allow_tf32,
+                    },
+                    output_tolerance=(0.1, 1.0),
+                )
 
     def teardown(self) -> None:
         self.prefill_model = None
@@ -174,18 +198,6 @@ class OptimizedDisaggregatedBenchmark(BaseBenchmark):
         if self.prefill_input is None or self.decode_input is None:
             return "Inputs not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        raise RuntimeError("Multi-GPU required - verification not supported on single GPU")
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"batch_size": self.batch_size, "hidden": self.hidden}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

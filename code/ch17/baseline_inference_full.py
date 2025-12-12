@@ -7,6 +7,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
@@ -24,7 +25,7 @@ class FullDepthModel(nn.Module):
         return self.head(x)
 
 
-class BaselineInferenceFullBenchmark(BaseBenchmark):
+class BaselineInferenceFullBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Always executes every layer (no early exit)."""
 
     def __init__(self):
@@ -40,6 +41,8 @@ class BaselineInferenceFullBenchmark(BaseBenchmark):
             tokens_per_iteration=float(tokens),
         )
         self.output = None
+        self.parameter_count: int = 0
+        self._verification_payload = None
         self.register_workload_metadata(
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(tokens),
@@ -54,6 +57,7 @@ class BaselineInferenceFullBenchmark(BaseBenchmark):
         if self.device.type == "cuda":
             self.model = self.model.half()
         self.model.eval()
+        self.parameter_count = sum(p.numel() for p in self.model.parameters())
 
         input_dtype = next(self.model.parameters()).dtype
         self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=input_dtype)
@@ -66,6 +70,22 @@ class BaselineInferenceFullBenchmark(BaseBenchmark):
             with torch.no_grad():
                 self.output = self.model(self.inputs)
         self._synchronize()
+        if self.output is None or self.inputs is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        dtype = self.output.dtype
+        self._set_verification_payload(
+            inputs={"input": self.inputs},
+            output=self.output,
+            batch_size=self.batch_size,
+            parameter_count=self.parameter_count,
+            precision_flags={
+                "fp16": dtype == torch.float16,
+                "bf16": dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.5, 5.0),
+        )
 
     def teardown(self) -> None:
         self.model = None
@@ -94,20 +114,6 @@ class BaselineInferenceFullBenchmark(BaseBenchmark):
         if self.model is None or self.inputs is None:
             return "Model/input not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.float()
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch_size": self.batch_size, "hidden_dim": self.hidden_dim, "num_layers": self.num_layers}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.5, 5.0)
 
 
 def get_benchmark() -> BaselineInferenceFullBenchmark:

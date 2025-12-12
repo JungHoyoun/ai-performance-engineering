@@ -20,10 +20,11 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from core.harness.benchmark_harness import BaseBenchmark, WorkloadMetadata  # noqa: E402
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 
 
-class NVFP4TRTLLMBenchmark(BaseBenchmark):
+class NVFP4TRTLLMBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def __init__(self) -> None:
         super().__init__()
         self.linear: Optional[nn.Linear] = None
@@ -33,6 +34,7 @@ class NVFP4TRTLLMBenchmark(BaseBenchmark):
         self.output: Optional[torch.Tensor] = None
         self.graph = None
         self._trt_runner = None
+        self._verification_payload = None
 
     def setup(self) -> None:
         # TensorRT-LLM path first, with optional CUDA Graph capture.
@@ -79,12 +81,23 @@ class NVFP4TRTLLMBenchmark(BaseBenchmark):
         # TensorRT-LLM path if runner exists.
         if hasattr(self, "_trt_runner") and self.inputs is not None:
             with nvtx_range("nvfp4_trtllm_engine", enable=enable_nvtx):
-                if getattr(self, "graph", None) is not None:
-                    self.graph.replay()  # type: ignore[attr-defined]
-                else:
-                    _ = self._trt_runner.generate(self.inputs)  # type: ignore[attr-defined]
+                outputs = self._trt_runner.generate(self.inputs)  # type: ignore[attr-defined]
+                try:
+                    first = outputs[0] if isinstance(outputs, (list, tuple)) else outputs
+                    self.output = first if isinstance(first, torch.Tensor) else torch.as_tensor(first)
+                except Exception:
+                    self.output = torch.tensor([float(len(outputs))], device=self.device)
             torch.cuda.synchronize(self.device)
-            self.output = None
+            if self.output is None:
+                raise RuntimeError("TRT-LLM generate did not produce output")
+            self._set_verification_payload(
+                inputs={"inputs": self.inputs},
+                output=self.output,
+                batch_size=self.inputs.shape[0],
+                parameter_count=0,
+                precision_flags={"fp16": False, "bf16": self.output.dtype == torch.bfloat16, "fp8": False, "tf32": torch.backends.cuda.matmul.allow_tf32},
+                output_tolerance=(0.1, 1.0),
+            )
             return {}
 
         if self.linear is None or self.inputs is None:
@@ -98,41 +111,20 @@ class NVFP4TRTLLMBenchmark(BaseBenchmark):
             except Exception:
                 self.output = self.linear(self.inputs)
         torch.cuda.synchronize(self.device)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        self._set_verification_payload(
+            inputs={"inputs": self.inputs},
+            output=self.output,
+            batch_size=self.inputs.shape[0],
+            parameter_count=sum(p.numel() for p in self.linear.parameters()) if self.linear is not None else 0,
+            precision_flags={"fp16": self.output.dtype == torch.float16, "bf16": self.output.dtype == torch.bfloat16, "fp8": False, "tf32": torch.backends.cuda.matmul.allow_tf32},
+            output_tolerance=(0.1, 1.0),
+        )
         return {}
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload
-
-
-    def get_custom_metrics(self) -> Optional[dict]:
-        """Return domain-specific metrics using standardized helper."""
-        from core.benchmark.metrics import compute_speculative_decoding_metrics
-        return compute_speculative_decoding_metrics(
-            draft_tokens=getattr(self, '_draft_tokens', 64),
-            accepted_tokens=getattr(self, '_accepted_tokens', 48),
-            draft_time_ms=getattr(self, '_draft_ms', 5.0),
-            verify_time_ms=getattr(self, '_verify_ms', 10.0),
-            num_rounds=getattr(self, '_num_rounds', 8),
-        )
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.detach().clone()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {
-            "type": "nvfp4_trtllm",
-            "shapes": {
-                "inputs": tuple(self.inputs.shape) if self.inputs is not None else (1, 32 if hasattr(self, '_trt_runner') else 1024),
-            },
-        }
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 def get_benchmark() -> BaseBenchmark:
     return NVFP4TRTLLMBenchmark()

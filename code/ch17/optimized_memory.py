@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 
 from core.utils.compile_utils import enable_tf32
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 BATCH_SIZE = 512
@@ -16,7 +17,7 @@ HIDDEN_DIM = 2048
 REPETITIONS = 8
 
 
-class OptimizedMemoryBenchmark(BaseBenchmark):
+class OptimizedMemoryBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: GPU memory management with capture and buffer reuse."""
     
     def __init__(self):
@@ -35,6 +36,8 @@ class OptimizedMemoryBenchmark(BaseBenchmark):
             tokens_per_iteration=float(tokens),
         )
         self.output = None
+        self.parameter_count: int = 0
+        self._verification_payload = None
         self.register_workload_metadata(
             requests_per_iteration=float(self.repetitions),
             tokens_per_iteration=float(tokens),
@@ -80,6 +83,7 @@ class OptimizedMemoryBenchmark(BaseBenchmark):
             self.transform_buffer.tanh_()
             self.graph_output.copy_(self.model(self.transform_buffer))
         self._synchronize()
+        self.parameter_count = sum(p.numel() for p in self.model.parameters())
     
     def benchmark_fn(self) -> None:
         if (
@@ -97,6 +101,16 @@ class OptimizedMemoryBenchmark(BaseBenchmark):
                     self.graph.replay()
                 self.output = self.graph_output.clone()
         self._synchronize()
+        if self.output is None or self.device_buffer is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        self._set_verification_payload(
+            inputs={"input": self.device_buffer},
+            output=self.output,
+            batch_size=self.batch_size,
+            parameter_count=self.parameter_count,
+            precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": torch.backends.cuda.matmul.allow_tf32},
+            output_tolerance=(0.1, 1.0),
+        )
     
     def teardown(self) -> None:
         self.model = None
@@ -131,20 +145,6 @@ class OptimizedMemoryBenchmark(BaseBenchmark):
         if self.model is None:
             return "Model not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch_size": self.batch_size, "input_dim": self.input_dim}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> OptimizedMemoryBenchmark:

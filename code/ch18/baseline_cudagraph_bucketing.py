@@ -23,6 +23,7 @@ from ch18.cudagraph_bucketing_common import (  # noqa: E402
     pad_fn_from_vllm_config,
 )
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig  # noqa: E402
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 
 
 class BaselineCUDAGraphBucketing:
@@ -84,7 +85,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     print(sim.format_summary())
 
 
-class BaselineCUDAGraphBucketingBenchmark(BaseBenchmark):
+class BaselineCUDAGraphBucketingBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Benchmark wrapper so the simulator can run via aisp bench."""
 
     def __init__(self) -> None:
@@ -93,6 +94,7 @@ class BaselineCUDAGraphBucketingBenchmark(BaseBenchmark):
         self.use_vllm_bins = True
         self._last = None
         self.output: Optional[torch.Tensor] = None
+        self._verification_payload = None
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def _resolve_device(self) -> torch.device:
@@ -122,6 +124,16 @@ class BaselineCUDAGraphBucketingBenchmark(BaseBenchmark):
             [float(len(traffic)), float(total_tokens)],
             dtype=torch.float32,
         )
+        self._set_verification_payload(
+            inputs={
+                "traffic_shape": torch.tensor([len(traffic)], dtype=torch.int64),
+            },
+            output=self.output,
+            batch_size=len(traffic) if len(traffic) > 0 else 1,
+            parameter_count=0,
+            precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": False},
+            output_tolerance=(0.0, 0.0),
+        )
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return speculative decoding metrics for cudagraph_bucketing."""
@@ -136,26 +148,6 @@ class BaselineCUDAGraphBucketingBenchmark(BaseBenchmark):
 
     def get_config(self) -> Optional[BenchmarkConfig]:
         return BenchmarkConfig(iterations=1, warmup=5, enable_profiling=False)
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison.
-        
-        CPU-only simulation: convert stats to tensor for verification.
-        This ensures the simulation produces consistent results.
-        """
-        if self._last is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        if self.output is None:
-            raise RuntimeError("Output tensor missing - run benchmark first")
-        return self.output.detach().clone()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"vllm_model": self.vllm_model}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -20,10 +20,11 @@ from typing import Optional
 
 from core.utils.compile_utils import enable_tf32
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, BenchmarkHarness, BenchmarkMode, WorkloadMetadata
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.benchmark.utils import warn_benchmark_scaling
 
 
-class OptimizedIlpBasicBenchmark(BaseBenchmark):
+class OptimizedIlpBasicBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Independent operations with high ILP.
     
     ILP: Uses independent operations to maximize instruction-level parallelism.
@@ -63,6 +64,10 @@ class OptimizedIlpBasicBenchmark(BaseBenchmark):
         )
         tokens = self.N
         self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(tokens),
+        )
+        self.register_workload_metadata(
             requests_per_iteration=1.0,
             tokens_per_iteration=float(tokens),
         )

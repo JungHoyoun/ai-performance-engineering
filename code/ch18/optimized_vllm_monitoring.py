@@ -16,6 +16,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig  # noqa: E402
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from ch18.monitoring_bundle import MonitoringBundle, write_bundle  # noqa: E402
 from ch18.monitoring_config import MetricNames, AlertThresholds, load_monitoring_overrides  # noqa: E402
 
@@ -577,7 +578,7 @@ def build_optimized_bundle(metrics: MetricNames, thresholds: AlertThresholds) ->
     )
 
 
-class OptimizedVLLMMonitoringBenchmark(BaseBenchmark):
+class OptimizedVLLMMonitoringBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Benchmark wrapper so aisp bench can emit the bundle."""
 
     def __init__(self, outdir: Optional[Path] = None, config_path: Optional[Path] = None):
@@ -590,6 +591,7 @@ class OptimizedVLLMMonitoringBenchmark(BaseBenchmark):
         self._thresholds: Optional[AlertThresholds] = None
         self._paths: List[Path] = []
         self._written = False
+        self._verification_payload = None
         # Config generation: writes YAML files, no GPU computation to verify
         self.verification_not_applicable_reason = "Config generation benchmark - writes YAML/Prometheus config, no GPU computation"
         self.register_workload_metadata(requests_per_iteration=1.0)
@@ -608,6 +610,28 @@ class OptimizedVLLMMonitoringBenchmark(BaseBenchmark):
         bundle = build_optimized_bundle(self._metrics, self._thresholds)
         self._paths = write_bundle(bundle, self._outdir)
         self._written = True
+        total_bytes = sum(p.stat().st_size for p in self._paths if p.exists())
+        thresholds_tensor = torch.tensor(
+            [
+                float(self._thresholds.ttft_p90_warn if self._thresholds else 0.0),
+                float(self._thresholds.ttft_p99_crit if self._thresholds else 0.0),
+                float(self._thresholds.kv_warn if self._thresholds else 0.0),
+                float(self._thresholds.kv_crit if self._thresholds else 0.0),
+            ],
+            device=self._device_override,
+        )
+        output = torch.tensor(
+            [float(len(self._paths)), float(total_bytes)],
+            device=self._device_override,
+        )
+        self._set_verification_payload(
+            inputs={"thresholds": thresholds_tensor},
+            output=output,
+            batch_size=1,
+            parameter_count=0,
+            precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": False},
+            output_tolerance=(0.0, 0.0),
+        )
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=1, warmup=5)
@@ -624,22 +648,6 @@ class OptimizedVLLMMonitoringBenchmark(BaseBenchmark):
             "kv_warn": float(self._thresholds.kv_warn if self._thresholds else 0.0),
             "kv_crit": float(self._thresholds.kv_crit if self._thresholds else 0.0),
         }
-
-    def get_verify_output(self) -> "torch.Tensor":
-        """Return output tensor for verification comparison."""
-        import torch
-        raise RuntimeError(
-            "VERIFICATION_SKIP: Config generation benchmark. "
-            "Writes config files to disk, no GPU computation to verify."
-        )
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"type": "vllm_monitoring_optimized"}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

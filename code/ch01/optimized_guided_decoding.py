@@ -21,9 +21,10 @@ from typing import Optional
 
 from core.utils.compile_utils import enable_tf32
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, BenchmarkHarness, BenchmarkMode, WorkloadMetadata
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 
 
-class OptimizedGuidedDecodingBenchmark(BaseBenchmark):
+class OptimizedGuidedDecodingBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Guided decoding with schema constraints.
     
     Guided decoding: Uses schema/constraints to guide token generation.
@@ -45,6 +46,10 @@ class OptimizedGuidedDecodingBenchmark(BaseBenchmark):
         self.parameter_count = 0
         tokens = self.batch_size * self.seq_len
         self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
+        self.register_workload_metadata(
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(tokens),
         )

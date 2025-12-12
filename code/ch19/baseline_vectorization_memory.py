@@ -19,10 +19,11 @@ from core.harness.benchmark_harness import (  # noqa: E402
     BenchmarkMode,
     WorkloadMetadata,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 
 
-class VectorizationBenchmark(BaseBenchmark):
+class VectorizationBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: naive elementwise ops without vectorization."""
 
     def __init__(self):
@@ -32,6 +33,11 @@ class VectorizationBenchmark(BaseBenchmark):
         self.repeats = 32
         self.N = 8_192_000
         self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.repeats),
+            tokens_per_iteration=float(self.N * self.repeats),
+        )
+        self._verification_payload = None
+        self.register_workload_metadata(
             requests_per_iteration=float(self.repeats),
             tokens_per_iteration=float(self.N * self.repeats),
         )

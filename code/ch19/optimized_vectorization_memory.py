@@ -28,10 +28,11 @@ from core.harness.benchmark_harness import (
     BenchmarkMode,
     WorkloadMetadata,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
 
 
-class OptimizedVectorizationMemoryBenchmark(BaseBenchmark):
+class OptimizedVectorizationMemoryBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Same operation as baseline but with FP16 precision.
     
     FP16 uses half the memory of FP32:
@@ -48,6 +49,11 @@ class OptimizedVectorizationMemoryBenchmark(BaseBenchmark):
         self.repeats = 32
         self.N = 8_192_000
         self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.repeats),
+            tokens_per_iteration=float(self.N * self.repeats),
+        )
+        self._verification_payload = None
+        self.register_workload_metadata(
             requests_per_iteration=float(self.repeats),
             tokens_per_iteration=float(self.N * self.repeats),
         )
@@ -70,6 +76,8 @@ class OptimizedVectorizationMemoryBenchmark(BaseBenchmark):
                 t = (t * 1.0001) + 0.0001
             self.output = t.detach()
             torch.cuda.synchronize(self.device)
+        if self.tensor is None or self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output")
         self._set_verification_payload(
             inputs={"tensor": self.tensor},
             output=self.output,

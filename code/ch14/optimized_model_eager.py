@@ -19,6 +19,7 @@ import torch.nn as nn
 
 from typing import Optional
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.utils.compile_utils import enable_tf32, compile_model
 from core.harness.benchmark_harness import (  # noqa: E402
     BaseBenchmark,
@@ -70,7 +71,7 @@ class SimpleTransformer(nn.Module):
         return self.output(x)
 
 
-class OptimizedModelCompiledBenchmark(BaseBenchmark):
+class OptimizedModelCompiledBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Benchmark implementation with torch.compile optimization.
     
     Chapter 14 Optimization: torch.compile with max-autotune mode for optimal
@@ -95,6 +96,8 @@ class OptimizedModelCompiledBenchmark(BaseBenchmark):
             tokens_per_iteration=float(tokens),
         )
         self.output = None
+        self.parameter_count: int = 0
+        self._verification_payload = None
         self.register_workload_metadata(
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(tokens),
@@ -115,6 +118,7 @@ class OptimizedModelCompiledBenchmark(BaseBenchmark):
         dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
         model = SimpleTransformer().to(self.device, dtype=dtype).eval()
         self.model = model
+        self.parameter_count = sum(p.numel() for p in self.model.parameters())
         
         # Use max-autotune for best performance (searches through kernel configs)
         self.compiled_model = compile_model(
@@ -153,6 +157,22 @@ class OptimizedModelCompiledBenchmark(BaseBenchmark):
             with torch.no_grad():
                 self.output = self.compiled_model(self.input_ids)
         self._synchronize()
+        if self.output is None or self.input_ids is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        dtype = self.output.dtype
+        self._set_verification_payload(
+            inputs={"input_ids": self.input_ids},
+            output=self.output,
+            batch_size=self.batch_size,
+            parameter_count=self.parameter_count,
+            precision_flags={
+                "fp16": dtype == torch.float16,
+                "bf16": dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.5, 5.0),
+        )
 
     def teardown(self) -> None:
         """Cleanup."""
@@ -182,21 +202,6 @@ class OptimizedModelCompiledBenchmark(BaseBenchmark):
     def validate_result(self) -> Optional[str]:
         """Optional validation."""
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.float()  # Convert bf16/fp16 to fp32
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch_size": self.batch_size, "seq_len": self.seq_len}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        # bf16/fp16 vs fp32 can have larger differences
-        return (0.5, 5.0)
 
 
 def get_benchmark() -> BaseBenchmark:

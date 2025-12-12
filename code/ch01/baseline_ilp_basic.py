@@ -19,6 +19,7 @@ except ImportError:
 from typing import Optional
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.benchmark.utils import warn_benchmark_scaling
 
 
@@ -29,7 +30,7 @@ def resolve_device() -> torch.device:
     return torch.device("cuda")
 
 
-class BaselineIlpBasicBenchmark(BaseBenchmark):
+class BaselineIlpBasicBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: Sequential operations with low ILP.
     
     ILP: This baseline has low instruction-level parallelism.
@@ -68,6 +69,7 @@ class BaselineIlpBasicBenchmark(BaseBenchmark):
             impact_description="Smaller workloads may not fully demonstrate ILP benefits; speedup ratios may be lower than production-scale",
             recommendation="For accurate production benchmarks, use GPUs with >=16GB memory"
         )
+        self.register_workload_metadata(samples_per_iteration=float(self.N))
     
     def setup(self) -> None:
         """Setup: Initialize tensors and verification output."""

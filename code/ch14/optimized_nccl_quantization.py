@@ -13,6 +13,7 @@ import torch
 
 from typing import Optional
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (  # noqa: E402
     BaseBenchmark,
     BenchmarkConfig,
@@ -21,7 +22,7 @@ from core.harness.benchmark_harness import (  # noqa: E402
     WorkloadMetadata,
 )
 
-class OptimizedNcclQuantizationBenchmark(BaseBenchmark):
+class OptimizedNcclQuantizationBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Quantization with NCCL collective operations."""
     
     def __init__(self):
@@ -39,6 +40,7 @@ class OptimizedNcclQuantizationBenchmark(BaseBenchmark):
             tokens_per_iteration=float(tokens),
         )
         self.output = None
+        self._verification_payload = None
         self.register_workload_metadata(
             requests_per_iteration=float(self.num_chunks),
             tokens_per_iteration=float(tokens),
@@ -75,6 +77,21 @@ class OptimizedNcclQuantizationBenchmark(BaseBenchmark):
                 self.output = dequant.clone()
             self.stream.synchronize()
         self._synchronize()
+        if self.output is None or self.tensor is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        self._set_verification_payload(
+            inputs={"input": self.tensor},
+            output=self.output,
+            batch_size=self.num_chunks,
+            parameter_count=0,
+            precision_flags={
+                "fp16": self.tensor.dtype == torch.float16,
+                "bf16": self.tensor.dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.5, 5.0),
+        )
 
     
     def teardown(self) -> None:
@@ -109,20 +126,6 @@ class OptimizedNcclQuantizationBenchmark(BaseBenchmark):
         if self.tensor is None:
             return "Tensor not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.float()
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"num_chunks": self.num_chunks, "chunk_len": self.chunk_len}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.5, 5.0)
 
 
 def get_benchmark() -> BaseBenchmark:

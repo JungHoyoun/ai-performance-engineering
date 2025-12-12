@@ -40,6 +40,7 @@ from core.harness.benchmark_harness import (
     BenchmarkMode,
     WorkloadMetadata,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 
 
 # Require CUDA Python - no fallbacks
@@ -153,7 +154,7 @@ extern "C" __global__ void fused_layernorm_gelu_mask(
 '''
 
 
-class OptimizedCudaPythonBenchmark(BaseBenchmark):
+class OptimizedCudaPythonBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Native CUDA Python with fused kernel.
     
     Demonstrates CUDA Python first-class support:
@@ -193,6 +194,7 @@ class OptimizedCudaPythonBenchmark(BaseBenchmark):
             tokens_per_iteration=float(tokens),
         )
         self._flops = 0
+        self._verification_payload = None
     
     def _compile_kernel(self) -> bool:
         """Compile the fused kernel using nvrtc."""
@@ -350,6 +352,18 @@ class OptimizedCudaPythonBenchmark(BaseBenchmark):
             self._run_fused_kernel()
         
         self._synchronize()
+        self._set_verification_payload(
+            inputs={
+                "input": self.input.detach(),
+                "mask": self.mask.detach(),
+                "weight": self.weight.detach(),
+                "bias": self.bias.detach(),
+            },
+            output=self.output.detach(),
+            batch_size=int(self.batch),
+            parameter_count=0,
+            output_tolerance=(1e-3, 1e-3),
+        )
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -390,20 +404,6 @@ class OptimizedCudaPythonBenchmark(BaseBenchmark):
         if torch.isnan(self.output).any():
             return "Output contains NaN"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.float()
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch": self.batch, "seq_len": self.seq_len, "hidden": self.hidden}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.5, 5.0)
 
 
 def get_benchmark() -> BaseBenchmark:

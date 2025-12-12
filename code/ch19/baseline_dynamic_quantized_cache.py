@@ -27,9 +27,10 @@ from core.harness.benchmark_harness import (  # noqa: E402
     BenchmarkConfig,
     WorkloadMetadata,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 
 
-class _DynamicQuantizedCacheBenchmark(BaseBenchmark):
+class _DynamicQuantizedCacheBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Base class for KV cache quantization benchmarks."""
 
     def __init__(self, *, schedule_bits: List[int], use_fp32_baseline: bool = False):
@@ -43,6 +44,12 @@ class _DynamicQuantizedCacheBenchmark(BaseBenchmark):
             requests_per_iteration=1.0,
             tokens_per_iteration=float(total_tokens),
         )
+        self._verification_payload = None
+        self.register_workload_metadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(total_tokens),
+        )
+        self._verification_payload = None
 
     def setup(self) -> None:
         torch.manual_seed(7)

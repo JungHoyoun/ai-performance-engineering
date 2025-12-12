@@ -24,6 +24,7 @@ from core.harness.benchmark_harness import (
     BenchmarkHarness,
     BenchmarkMode,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
@@ -31,7 +32,7 @@ def resolve_device() -> torch.device:
         raise RuntimeError("CUDA required for ch19")
     return torch.device("cuda")
 
-class OptimizedMemoryDoubleBufferingBenchmark(BaseBenchmark):
+class OptimizedMemoryDoubleBufferingBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: double buffering for overlapping operations."""
     
     def __init__(self):
@@ -49,6 +50,7 @@ class OptimizedMemoryDoubleBufferingBenchmark(BaseBenchmark):
         self.hidden_dim = 1024
         self.micro_batches = 16
         self.host_batches: list[torch.Tensor] = []
+        self._verification_payload = None
         self.register_workload_metadata(requests_per_iteration=float(self.micro_batches))
     
     def setup(self) -> None:
@@ -134,6 +136,8 @@ class OptimizedMemoryDoubleBufferingBenchmark(BaseBenchmark):
                             next_event.record()
                 self.compute_stream.synchronize()
         torch.cuda.synchronize()
+        if self.output is None or (self.buffer_a is None and self.buffer_b is None):
+            raise RuntimeError("benchmark_fn() must produce output and buffers")
         self._set_verification_payload(
             inputs={"buffer": self.buffer_a if self.buffer_a is not None else self.buffer_b},
             output=self.output,

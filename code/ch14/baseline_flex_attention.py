@@ -44,8 +44,8 @@ class BaselineFlexAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
             tokens_per_iteration=float(tokens),
         )
         self.output = None
-        self._verify_input: Optional[torch.Tensor] = None
         self.parameter_count: int = 0
+        self._verification_payload = None
         self.register_workload_metadata(
             requests_per_iteration=float(self.seq_len),
             tokens_per_iteration=float(tokens),
@@ -60,8 +60,6 @@ class BaselineFlexAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.q = torch.randn(shape, device=self.device, dtype=self.dtype)
         self.k = torch.randn(shape, device=self.device, dtype=self.dtype)
         self.v = torch.randn(shape, device=self.device, dtype=self.dtype)
-        # Store a slice for verification to avoid huge tensor copies
-        self._verify_input = self.q[:1, :1, :].detach().clone()
         torch.cuda.synchronize(self.device)
 
     def benchmark_fn(self) -> None:
@@ -95,12 +93,16 @@ class BaselineFlexAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 1, self.seq_len, self.embed_dim * self.repeat_passes
             ).contiguous()
             self._synchronize()
-        if self._verify_input is None or self.output is None:
+        if self.output is None or self.q is None or self.k is None or self.v is None:
             raise RuntimeError("Verification input/output not initialized")
         self._set_verification_payload(
-            inputs={"input": self._verify_input},
+            inputs={
+                "q": self.q.detach(),
+                "k": self.k.detach(),
+                "v": self.v.detach(),
+            },
             output=self.output.detach().clone(),
-            batch_size=self._verify_input.shape[0],
+            batch_size=1,
             parameter_count=0,
             precision_flags={
                 "fp16": self.dtype == torch.float16,
@@ -144,20 +146,6 @@ class BaselineFlexAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         if self.q is None or self.k is None or self.v is None:
             return "Tensors not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.float()
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"seq_len": self.seq_len, "num_heads": self.num_heads, "head_dim": self.head_dim}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

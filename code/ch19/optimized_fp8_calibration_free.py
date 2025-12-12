@@ -23,6 +23,7 @@ from core.harness.benchmark_harness import (
     BenchmarkMode,
     WorkloadMetadata,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -166,6 +167,8 @@ class OptimizedFP8CalibrationFree:
         self.use_te = use_te and TE_AVAILABLE
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.output_slice: Optional[torch.Tensor] = None
+        self.output_mean: Optional[float] = None
         
         if self.use_te:
             logger.info("Using Transformer Engine FP8 with dynamic scaling")
@@ -230,10 +233,13 @@ class OptimizedFP8CalibrationFree:
         # Check output validity
         if torch.isnan(x).any():
             logger.error("NaN detected in output!")
-            return float('inf')
+            return torch.tensor(float("inf"), device=self.device)
         
-        # Return mean absolute value for verification
-        return x.abs().mean().item()
+        self.output_slice = (
+            x[:1, :1, : min(16, x.shape[-1])].to(torch.float32).detach().clone()
+        )
+        self.output_mean = x.abs().mean().item()
+        return self.output_slice
     
     def cleanup(self):
         """Clean up resources."""
@@ -280,45 +286,50 @@ def run_benchmark(
     
     return {
         "mean_time_ms": result.timing.mean_ms,
-        "output_mean": output_mean,
+        "output_mean": (
+            benchmark.output_mean
+            if benchmark.output_mean is not None
+            else (output_mean.abs().mean().item() if isinstance(output_mean, torch.Tensor) else float(output_mean))
+        ),
         "use_te": benchmark.use_te,
         "num_layers": num_layers,
     }
 
 
-class _FP8CalibrationFreeBenchmark(BaseBenchmark):
+class _FP8CalibrationFreeBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Wrapper benchmark for calibration-free FP8."""
 
     def __init__(self) -> None:
         super().__init__()
         self._impl = OptimizedFP8CalibrationFree()
-        self._output = None
-        self.register_workload_metadata(requests_per_iteration=1.0)
+        self._output: Optional[torch.Tensor] = None
+        self._verification_payload = None
+        tokens = float(self._impl.batch_size * self._impl.seq_length)
+        self.register_workload_metadata(requests_per_iteration=1.0, tokens_per_iteration=tokens)
 
     def setup(self) -> None:
         self._impl.setup()
 
     def benchmark_fn(self) -> None:
-        self._output = self._impl.run()
+        output = self._impl.run()
+        self._output = output if isinstance(output, torch.Tensor) else torch.tensor(output)
         self._synchronize()
+        if self._impl.input is None or self._output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"input": self._impl.input},
+            output=self._output,
+            batch_size=self._impl.batch_size,
+            parameter_count=sum(p.numel() for p in self._impl.layers.parameters()) if hasattr(self._impl, "layers") else 0,
+            output_tolerance=(0.1, 1.0),
+            precision_flags={"fp16": False, "bf16": True, "fp8": True, "tf32": False},
+        )
 
     def teardown(self) -> None:
         self._impl.cleanup()
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=10, warmup=5)
-
-    def get_verify_output(self) -> torch.Tensor:
-        if self._output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self._output.detach().clone()
-
-    def get_input_signature(self) -> dict:
-        return {"type": "fp8_calibration_free"}
-
-    def get_output_tolerance(self) -> tuple:
-        return (0.1, 1.0)
-
 
 def get_benchmark() -> BaseBenchmark:
     return _FP8CalibrationFreeBenchmark()

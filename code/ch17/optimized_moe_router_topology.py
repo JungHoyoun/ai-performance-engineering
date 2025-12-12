@@ -11,10 +11,11 @@ from typing import Dict, List, Optional
 
 import torch
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
-class OptimizedMoERouterTopologyBenchmark(BaseBenchmark):
+class OptimizedMoERouterTopologyBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Fabric-aware expert routing with island preference."""
 
     def __init__(self):
@@ -27,6 +28,8 @@ class OptimizedMoERouterTopologyBenchmark(BaseBenchmark):
             requests_per_iteration=float(self.tokens),
             tokens_per_iteration=float(self.tokens),
         )
+        self.output: Optional[torch.Tensor] = None
+        self._verification_payload = None
 
     def setup(self) -> None:
         # 4 islands × 4 experts each
@@ -67,6 +70,19 @@ class OptimizedMoERouterTopologyBenchmark(BaseBenchmark):
                 expert = self._route(token, local_island, loads)
                 assignment[token] = expert
             self._last_assignment = assignment
+            self.output = torch.tensor(
+                [assignment[t] for t in range(self.tokens)],
+                device=self.device,
+                dtype=torch.int32,
+            )
+            self._set_verification_payload(
+                inputs={"tokens": torch.tensor(self.tokens, device=self.device)},
+                output=self.output,
+                batch_size=self.tokens,
+                parameter_count=0,
+                precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": False},
+                output_tolerance=(0.0, 0.0),
+            )
             self._synchronize()
 
     def teardown(self) -> None:
@@ -94,20 +110,6 @@ class OptimizedMoERouterTopologyBenchmark(BaseBenchmark):
         if not self._last_assignment:
             return "No assignments produced"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.tokens is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.tokens.detach().clone()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"tokens": self.tokens}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

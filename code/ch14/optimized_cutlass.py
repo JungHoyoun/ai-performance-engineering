@@ -13,6 +13,7 @@ import torch
 
 from typing import Optional, Tuple
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (  # noqa: E402
     BaseBenchmark,
     BenchmarkConfig,
@@ -31,7 +32,7 @@ def _try_cutlass_gemm(a: torch.Tensor, b: torch.Tensor):
         return torch.matmul(a, b), False
 
 
-class OptimizedCutlassBenchmark(BaseBenchmark):
+class OptimizedCutlassBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Single GEMM call using PyTorch's optimized kernels.
     
     Contrast with baseline's naive blocked matmul (many small GEMM calls).
@@ -60,6 +61,7 @@ class OptimizedCutlassBenchmark(BaseBenchmark):
             requests_per_iteration=1.0,
             tokens_per_iteration=float(self.m * self.n),
         )
+        self._verification_payload = None
     
     def setup(self) -> None:
         """Setup: Initialize matrices with optimal configuration."""
@@ -105,6 +107,24 @@ class OptimizedCutlassBenchmark(BaseBenchmark):
                 # Fallback: Still faster than baseline's blocked matmul
                 torch.matmul(self.A, self.B, out=self.C)
             self._synchronize()
+        if self.A is None or self.B is None or self.C is None:
+            raise RuntimeError("Benchmark not initialized")
+        self._set_verification_payload(
+            inputs={
+                "A": self.A.detach(),
+                "B": self.B.detach(),
+            },
+            output=self.C.detach(),
+            batch_size=1,
+            parameter_count=0,
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": True,
+            },
+            output_tolerance=(0.1, 2.0),
+        )
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -125,15 +145,6 @@ class OptimizedCutlassBenchmark(BaseBenchmark):
             enable_profiling=False,
         )
 
-    def get_input_signature(self) -> dict:
-        """Report workload parameters for verification."""
-        return {
-            "m": self.m,
-            "n": self.n,
-            "k": self.k,
-            "precision": "fp16_cutlass",
-        }
-    
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
         from core.benchmark.metrics import compute_triton_metrics
@@ -149,16 +160,6 @@ class OptimizedCutlassBenchmark(BaseBenchmark):
         if self.A is None or self.B is None or self.C is None:
             return "Matrices not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.C is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.C
-
-    def get_output_tolerance(self) -> tuple:
-        """Allow small numerical drift vs baseline blocked matmul."""
-        return (0.1, 2.0)
 
 
 def get_benchmark() -> BaseBenchmark:

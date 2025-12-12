@@ -43,6 +43,7 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -408,7 +409,7 @@ class OptimizedSDPAAttention(nn.Module):
         return self.out_proj(output)
 
 
-class SlidingWindowDemoBenchmark(BaseBenchmark):
+class SlidingWindowDemoBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Flash Attention via SDPA for O(n) memory attention.
     
     Key optimization over baseline:
@@ -430,6 +431,8 @@ class SlidingWindowDemoBenchmark(BaseBenchmark):
         self.seq_len = 4096
         self.embed_dim = 1024
         self._last = 0.0
+        self.parameter_count: int = 0
+        self._verification_payload = None
         
         tokens = self.batch_size * self.seq_len
         self._workload = WorkloadMetadata(
@@ -448,6 +451,7 @@ class SlidingWindowDemoBenchmark(BaseBenchmark):
             embed_dim=self.embed_dim,
             num_heads=self.num_heads,
         ).to(self.device, self.dtype).eval()
+        self.parameter_count = sum(p.numel() for p in self.model.parameters())
         
         self.x = torch.randn(
             self.batch_size, self.seq_len, self.embed_dim,
@@ -466,6 +470,21 @@ class SlidingWindowDemoBenchmark(BaseBenchmark):
             self.output = self.model(self.x)
             self._last = float(self.output.sum())
             self._synchronize()
+        if self.output is None or self.x is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        self._set_verification_payload(
+            inputs={"input": self.x},
+            output=self.output,
+            batch_size=self.batch_size,
+            parameter_count=self.parameter_count,
+            precision_flags={
+                "fp16": self.dtype == torch.float16,
+                "bf16": self.dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -494,20 +513,6 @@ class SlidingWindowDemoBenchmark(BaseBenchmark):
             return "Model not initialized"
         return None
 
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.detach().clone()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"batch_size": self.batch_size, "seq_len": self.seq_len}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
-
 
 def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
@@ -516,4 +521,3 @@ def get_benchmark() -> BaseBenchmark:
 
 if __name__ == "__main__":
     benchmark_sliding_window()
-

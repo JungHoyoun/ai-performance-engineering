@@ -23,6 +23,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -81,7 +82,7 @@ class NaiveAttentionModule(nn.Module):
         return self.out_proj(output)
 
 
-class BaselineSlidingWindowBenchmark(BaseBenchmark):
+class BaselineSlidingWindowBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: Naive O(n²) attention (slow)."""
 
     def __init__(self):
@@ -101,6 +102,8 @@ class BaselineSlidingWindowBenchmark(BaseBenchmark):
             tokens_per_iteration=float(tokens),
         )
         self.output = None
+        self.parameter_count: int = 0
+        self._verification_payload = None
         self.register_workload_metadata(
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(tokens),
@@ -113,6 +116,7 @@ class BaselineSlidingWindowBenchmark(BaseBenchmark):
         self.model = NaiveAttentionModule(
             self.embed_dim, self.num_heads
         ).to(self.device, self.dtype).eval()
+        self.parameter_count = sum(p.numel() for p in self.model.parameters())
         
         self.x = torch.randn(
             self.batch_size, self.seq_len, self.embed_dim,
@@ -131,6 +135,21 @@ class BaselineSlidingWindowBenchmark(BaseBenchmark):
             self.output = self.model(self.x)
             self._last = float(self.output.sum())
             self._synchronize()
+        if self.output is None or self.x is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        self._set_verification_payload(
+            inputs={"input": self.x},
+            output=self.output,
+            batch_size=self.batch_size,
+            parameter_count=self.parameter_count,
+            precision_flags={
+                "fp16": self.dtype == torch.float16,
+                "bf16": self.dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -155,20 +174,6 @@ class BaselineSlidingWindowBenchmark(BaseBenchmark):
         if self.model is None or self.x is None:
             return "Model not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch_size": self.batch_size, "seq_len": self.seq_len, "embed_dim": self.embed_dim}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

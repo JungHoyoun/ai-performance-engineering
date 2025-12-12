@@ -20,11 +20,12 @@ except ImportError:
 from typing import Optional
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.benchmark.verification import InputSignature, PrecisionFlags
 from core.utils.compile_utils import enable_tf32
 
 
-class BaselineGuidedDecodingMathBenchmark(BaseBenchmark):
+class BaselineGuidedDecodingMathBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: guided decoding with schema, forcing SDP to math only."""
 
     def __init__(self):
@@ -42,6 +43,10 @@ class BaselineGuidedDecodingMathBenchmark(BaseBenchmark):
         self.parameter_count = 0
         tokens = self.batch_size * self.seq_len
         self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
+        self.register_workload_metadata(
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(tokens),
         )

@@ -18,6 +18,7 @@ from core.harness.benchmark_harness import (  # noqa: E402
     BenchmarkHarness,
     BenchmarkMode,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 from ch19.mxfp8_moe_common import (  # noqa: E402
     MX_BLOCK_SIZE,
@@ -52,7 +53,7 @@ class _NaiveMXFP8Matmul:
         return act @ wt.transpose(0, 1)
 
 
-class BaselineMXFP8MoEBenchmark(BaseBenchmark):
+class BaselineMXFP8MoEBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """MXFP8 MoE forward path with unfused quantization and per-expert GEMMs."""
 
     def __init__(self) -> None:
@@ -70,6 +71,7 @@ class BaselineMXFP8MoEBenchmark(BaseBenchmark):
         self.m_splits: List[int] = []
         self.weights: Optional[torch.Tensor] = None
         self.matmul_ref: Optional[_NaiveMXFP8Matmul] = None
+        self._verification_payload = None
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def setup(self) -> None:
@@ -125,6 +127,8 @@ class BaselineMXFP8MoEBenchmark(BaseBenchmark):
         with nvtx_range("mxfp8_moe_baseline", enable=enable_nvtx):
             self.output = self._run_naive()
         self._synchronize()
+        if self.output is None or self.inputs is None or self.weights is None:
+            raise RuntimeError("benchmark_fn() must produce output")
         self._set_verification_payload(
             inputs={"inputs": self.inputs},
             output=self.output,

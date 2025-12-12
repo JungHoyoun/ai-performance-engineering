@@ -44,6 +44,7 @@ from ch18.cudagraph_bucketing_metrics import (  # noqa: E402
     export_stats_to_prometheus,
 )
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata  # noqa: E402
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 
 
 # ============================================================
@@ -350,7 +351,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     )
 
 
-class OptimizedCUDAGraphBucketingBenchmark(BaseBenchmark):
+class OptimizedCUDAGraphBucketingBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Benchmark wrapper demonstrating CUDA graph bucketing for inference.
     
     Tests both:
@@ -369,6 +370,7 @@ class OptimizedCUDAGraphBucketingBenchmark(BaseBenchmark):
         self._compile_stats: Optional[dict] = None
         self._graph_bucketing: Optional[CUDAGraphBucketing] = None
         self._graph_stats: Optional[Dict[str, int]] = None
+        self._verification_payload = None
         
         # Workload metadata
         batch_size = 32
@@ -434,6 +436,14 @@ class OptimizedCUDAGraphBucketingBenchmark(BaseBenchmark):
             ],
             dtype=torch.float32,
         )
+        self._set_verification_payload(
+            inputs={"traffic_shape": torch.tensor([len(traffic)], device=self.device)},
+            output=self.output,
+            batch_size=len(traffic) if len(traffic) > 0 else 1,
+            parameter_count=0,
+            precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": False},
+            output_tolerance=(0.0, 0.0),
+        )
         
         self._compile_stats = optimized.run_compile_validation()
         
@@ -475,20 +485,6 @@ class OptimizedCUDAGraphBucketingBenchmark(BaseBenchmark):
 
     def get_config(self) -> Optional[BenchmarkConfig]:
         return BenchmarkConfig(iterations=3, warmup=10, enable_profiling=False)
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.detach().clone()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"vllm_model": self.vllm_model}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

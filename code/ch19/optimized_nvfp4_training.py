@@ -18,7 +18,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
+from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 
 try:
     from transformer_engine.pytorch import Linear as TELinear
@@ -65,7 +66,7 @@ class _NVFP4Block(nn.Module):
         return y.reshape(*orig_shape)
 
 
-class OptimizedNVFP4TrainingBenchmark(BaseBenchmark):
+class OptimizedNVFP4TrainingBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """NVFP4 quantized training using Transformer Engine.
     
     This demonstrates the memory and compute benefits of NVFP4 (4-bit) quantization
@@ -89,6 +90,8 @@ class OptimizedNVFP4TrainingBenchmark(BaseBenchmark):
         self.optimizer: Optional[torch.optim.Optimizer] = None
         self.inputs: List[torch.Tensor] = []
         self.targets: List[torch.Tensor] = []
+        self._verify_input: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
         
         # NVFP4 recipe with calibration
         self.nvfp4_recipe = (
@@ -105,7 +108,16 @@ class OptimizedNVFP4TrainingBenchmark(BaseBenchmark):
         self.active_recipe = None
         self.use_nvfp4 = False
         self._probe_error: Optional[Exception] = None
-        self.register_workload_metadata(requests_per_iteration=float(self.micro_batches))
+        self._verification_payload = None
+        tokens = self.batch_size * self.seq_len * self.micro_batches
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.micro_batches),
+            tokens_per_iteration=float(tokens),
+        )
+        self.register_workload_metadata(
+            requests_per_iteration=float(self.micro_batches),
+            tokens_per_iteration=float(tokens),
+        )
 
     def setup(self) -> None:
         if not TE_AVAILABLE:
@@ -146,6 +158,13 @@ class OptimizedNVFP4TrainingBenchmark(BaseBenchmark):
         self.targets = [
             torch.randn_like(self.inputs[0]) for _ in range(self.micro_batches)
         ]
+        self._verify_input = torch.randn(
+            self.batch_size,
+            self.seq_len,
+            self.hidden_dim,
+            device=self.device,
+            dtype=torch.bfloat16,
+        )
         
         # Calibration warmup (important for quantization)
         self._calibration_warmup()
@@ -186,9 +205,26 @@ class OptimizedNVFP4TrainingBenchmark(BaseBenchmark):
                 self._train_step(idx)
         torch.cuda.synchronize()
         # Capture output AFTER benchmark for verification
-        if self._verify_input is not None and self.model is not None:
-            with torch.no_grad():
-                self.output = self.model(self._verify_input).float().clone()
+        if self._verify_input is None or self.model is None:
+            raise RuntimeError("Verification input/model missing")
+        with torch.no_grad():
+            with te_autocast(enabled=True, recipe=self.active_recipe):
+                out = self.model(self._verify_input)
+            self.output = out.float().clone()
+        precision_flags = {
+            "fp16": False,
+            "bf16": True,
+            "fp8": not self.use_nvfp4,
+            "tf32": torch.backends.cuda.matmul.allow_tf32,
+        }
+        self._set_verification_payload(
+            inputs={"verify_input": self._verify_input},
+            output=self.output,
+            batch_size=self.batch_size,
+            parameter_count=sum(p.numel() for p in self.model.parameters()),
+            precision_flags=precision_flags,
+            output_tolerance=(0.5, 5.0),
+        )
 
     def teardown(self) -> None:
         self.model = None
@@ -221,20 +257,6 @@ class OptimizedNVFP4TrainingBenchmark(BaseBenchmark):
         if not self.inputs:
             return "Input tensors missing"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.detach().clone()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"batch_size": self.batch_size, "seq_len": self.seq_len}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

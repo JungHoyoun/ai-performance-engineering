@@ -19,6 +19,7 @@ import torch
 from typing import Optional
 
 from core.utils.compile_utils import enable_tf32
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -28,7 +29,7 @@ from core.harness.benchmark_harness import (
 )
 
 
-class OptimizedTensorCoresBenchmark(BaseBenchmark):
+class OptimizedTensorCoresBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Tensor core accelerated matrix operations."""
     
     def __init__(self):
@@ -42,6 +43,7 @@ class OptimizedTensorCoresBenchmark(BaseBenchmark):
             tokens_per_iteration=float(self.size * self.size),
         )
         self.output = None
+        self._verification_payload = None
     
     def setup(self) -> None:
         """Setup: Initialize matrices in FP16/BF16 for tensor cores."""
@@ -70,6 +72,21 @@ class OptimizedTensorCoresBenchmark(BaseBenchmark):
         with self._nvtx_range("optimized_tensor_cores"):
             self.output = torch.matmul(self.A, self.B)
         self._synchronize()
+        if self.output is None or self.A is None or self.B is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        self._set_verification_payload(
+            inputs={"A": self.A, "B": self.B},
+            output=self.output,
+            batch_size=1,
+            parameter_count=0,
+            precision_flags={
+                "fp16": self.dtype == torch.float16,
+                "bf16": self.dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.5, 5.0),
+        )
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -103,20 +120,6 @@ class OptimizedTensorCoresBenchmark(BaseBenchmark):
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.float()
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"size": self.size}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison - wider due to BF16/FP16."""
-        return (0.5, 5.0)
 
 
 def get_benchmark() -> BaseBenchmark:

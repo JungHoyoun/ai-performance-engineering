@@ -17,6 +17,7 @@ import torch.nn as nn
 
 from typing import Optional
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (  # noqa: E402
     BaseBenchmark,
     BenchmarkConfig,
@@ -54,7 +55,7 @@ class SimpleTransformer(nn.Module):
         return self.output(x)
 
 
-class BaselineModelEagerBenchmark(BaseBenchmark):
+class BaselineModelEagerBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Benchmark implementation following BaseBenchmark."""
     
     def __init__(self):
@@ -71,6 +72,8 @@ class BaselineModelEagerBenchmark(BaseBenchmark):
             tokens_per_iteration=float(tokens),
         )
         self.output = None
+        self.parameter_count: int = 0
+        self._verification_payload = None
         self.register_workload_metadata(
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(tokens),
@@ -82,6 +85,7 @@ class BaselineModelEagerBenchmark(BaseBenchmark):
         torch.cuda.manual_seed_all(42)
         self.model = SimpleTransformer().to(self.device).eval()
         self.input_ids = torch.randint(0, self.vocab_size, (self.batch_size, self.seq_len), device=self.device)
+        self.parameter_count = sum(p.numel() for p in self.model.parameters())
         
         # Warmup
         for _ in range(10):
@@ -102,6 +106,21 @@ class BaselineModelEagerBenchmark(BaseBenchmark):
             with torch.no_grad():
                 self.output = self.model(self.input_ids)
         self._synchronize()
+        if self.output is None or self.input_ids is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        self._set_verification_payload(
+            inputs={"input_ids": self.input_ids},
+            output=self.output,
+            batch_size=self.batch_size,
+            parameter_count=self.parameter_count,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         """Cleanup."""
@@ -132,20 +151,6 @@ class BaselineModelEagerBenchmark(BaseBenchmark):
     def validate_result(self) -> Optional[str]:
         """Optional validation."""
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch_size": self.batch_size, "seq_len": self.seq_len}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

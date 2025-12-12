@@ -15,6 +15,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from core.harness.benchmark_harness import BaseBenchmark, WorkloadMetadata  # noqa: E402
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 
 # Use new SDPA API when available
@@ -36,12 +37,13 @@ def _math_sdpa_context():
     return nullcontext()
 
 
-class BaselinePagedAttnBenchmark(BaseBenchmark):
+class BaselinePagedAttnBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def __init__(self) -> None:
         super().__init__()
         self.qkv: Optional[torch.Tensor] = None
         self.output = None
         self._workload = WorkloadMetadata(tokens_per_iteration=0.0)
+        self._verification_payload = None
 
     def setup(self) -> None:
         torch.manual_seed(0)
@@ -71,6 +73,21 @@ class BaselinePagedAttnBenchmark(BaseBenchmark):
             with nvtx_range("paged_attn_baseline", enable=enable_nvtx):
                 self.output = F.scaled_dot_product_attention(q, k, v)
         torch.cuda.synchronize(self.device)
+        if self.output is None or self.qkv is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        self._set_verification_payload(
+            inputs={"qkv": self.qkv},
+            output=self.output,
+            batch_size=self.qkv.shape[0],
+            parameter_count=0,
+            precision_flags={
+                "fp16": self.qkv.dtype == torch.float16,
+                "bf16": self.qkv.dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
         return {}
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
@@ -87,20 +104,6 @@ class BaselinePagedAttnBenchmark(BaseBenchmark):
             verify_time_ms=getattr(self, '_verify_ms', 10.0),
             num_rounds=getattr(self, '_num_rounds', 8),
         )
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.detach().clone()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"type": "paged_attention"}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 def get_benchmark() -> BaseBenchmark:
     return BaselinePagedAttnBenchmark()

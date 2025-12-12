@@ -20,10 +20,11 @@ from core.harness.benchmark_harness import (  # noqa: E402
     BenchmarkMode,
     WorkloadMetadata,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 
 
-class MemoryDoubleBufferingBenchmark(BaseBenchmark):
+class MemoryDoubleBufferingBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: single stream, single buffer (no overlap)."""
 
     def __init__(self):
@@ -39,6 +40,11 @@ class MemoryDoubleBufferingBenchmark(BaseBenchmark):
         self.micro_batches = 16
         tokens = self.batch_size * self.seq_len * self.micro_batches
         self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.micro_batches),
+            tokens_per_iteration=float(tokens),
+        )
+        self._verification_payload = None
+        self.register_workload_metadata(
             requests_per_iteration=float(self.micro_batches),
             tokens_per_iteration=float(tokens),
         )
@@ -90,13 +96,21 @@ class MemoryDoubleBufferingBenchmark(BaseBenchmark):
                     with torch.cuda.stream(self.stream):
                         self.output = self.model(self.buffer)
                     self.stream.synchronize()
+        if self.output is None or self.buffer is None or self.model is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        dtype = self.output.dtype
         self._set_verification_payload(
             inputs={"buffer": self.buffer},
             output=self.output,
             batch_size=self.batch_size,
-            parameter_count=sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0,
+            parameter_count=sum(p.numel() for p in self.model.parameters()),
             output_tolerance=(0.1, 1.0),
-            precision_flags={"fp16": True, "bf16": False, "fp8": False, "tf32": False},
+            precision_flags={
+                "fp16": dtype == torch.float16,
+                "bf16": dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
         )
 
     def teardown(self) -> None:

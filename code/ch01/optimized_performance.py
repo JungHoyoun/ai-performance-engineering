@@ -21,10 +21,11 @@ except ImportError:
 from typing import Optional
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, BenchmarkHarness, BenchmarkMode, WorkloadMetadata
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from ch01.workload_config import WORKLOAD
 
 
-class OptimizedPerformanceBatchBenchmark(BaseBenchmark):
+class OptimizedPerformanceBatchBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Benchmark implementation with larger batch size optimization."""
     
     def __init__(self, batch_size: int = 32):

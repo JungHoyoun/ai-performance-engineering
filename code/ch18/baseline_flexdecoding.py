@@ -19,10 +19,11 @@ from core.harness.benchmark_harness import (  # noqa: E402
     BenchmarkConfig,
     WorkloadMetadata,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from ch18 import flexdecoding as flexdemo  # noqa: E402
 
 
-class FlexDecodingHarness(BaseBenchmark):
+class FlexDecodingHarness(VerificationPayloadMixin, BaseBenchmark):
     """Shared benchmarking harness for baseline/optimized FlexDecoding runs."""
 
     def __init__(self, *, use_flex_attention: bool, require_flex: bool, decode_tokens: int = 128):
@@ -36,6 +37,8 @@ class FlexDecodingHarness(BaseBenchmark):
         self.decode_token: Optional[torch.Tensor] = None
         self._history: Dict[str, List[float]] = {"prefill_ms": [], "decode_ms": []}
         self._last_output: Optional[torch.Tensor] = None
+        self.parameter_count: int = 0
+        self._verification_payload = None
         total_tokens = self.config.max_seq_len + self.decode_tokens
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,
@@ -55,6 +58,7 @@ class FlexDecodingHarness(BaseBenchmark):
         self.model = flexdemo.FlexDecodingModule(self.config).to(self.device).eval()
         self.model.ensure_compiled()
         flexdemo.HAS_FLEX = previous_flag
+        self.parameter_count = sum(p.numel() for p in self.model.parameters())
 
         torch.manual_seed(0)
         self.prefill_tokens = torch.randn(1, self.config.window * 2, self.config.dim, device=self.device)
@@ -89,6 +93,24 @@ class FlexDecodingHarness(BaseBenchmark):
 
         self._history["prefill_ms"].extend(prefill_times)
         self._history["decode_ms"].extend(decode_times)
+        if self._last_output is None or self.prefill_tokens is None or self.decode_token is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        self._set_verification_payload(
+            inputs={
+                "prefill_tokens": self.prefill_tokens,
+                "decode_token": self.decode_token,
+            },
+            output=self._last_output,
+            batch_size=self.prefill_tokens.shape[0],
+            parameter_count=self.parameter_count,
+            precision_flags={
+                "fp16": self._last_output.dtype == torch.float16,
+                "bf16": self._last_output.dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(1e-1, 10.0),
+        )
         return {"prefill_ms": prefill_times, "decode_ms": decode_times}
 
     # ---------------------------------------------------------------- lifecycle
@@ -122,31 +144,6 @@ class FlexDecodingHarness(BaseBenchmark):
         if not self._history["decode_ms"]:
             return "No decode samples collected"
         return None
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {
-            "dim": self.config.dim,
-            "heads": self.config.heads,
-            "window": self.config.window,
-            "max_seq_len": self.config.max_seq_len,
-            "decode_tokens": self.decode_tokens,
-            "use_flex_attention": self.use_flex_attention,
-        }
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self._last_output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self._last_output.detach().clone()
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison.
-        
-        SDPA and FlexAttention may have different numerical precision paths,
-        so we use a looser tolerance.
-        """
-        return (1e-1, 10.0)
 
 
 class BaselineFlexDecodingBenchmark(FlexDecodingHarness):

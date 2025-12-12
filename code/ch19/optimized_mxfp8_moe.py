@@ -20,6 +20,7 @@ from core.harness.benchmark_harness import (  # noqa: E402
     BenchmarkHarness,
     BenchmarkMode,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 from ch19 import arch_config  # noqa: E402
 from ch19.mxfp8_moe_common import (  # noqa: E402
@@ -46,7 +47,7 @@ except Exception as exc:  # pragma: no cover
 _log = logger.get_logger(__name__)
 
 
-class OptimizedMXFP8MoEBenchmark(BaseBenchmark):
+class OptimizedMXFP8MoEBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """MXFP8 MoE forward path with grouped GEMMs and fused quantization in TE."""
 
     def __init__(self) -> None:
@@ -73,6 +74,7 @@ class OptimizedMXFP8MoEBenchmark(BaseBenchmark):
         self._graph: Optional[torch.cuda.CUDAGraph] = None
         self._graph_out: Optional[torch.Tensor] = None
         self._graph_weight: Optional[torch.Tensor] = None
+        self._verification_payload = None
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     @staticmethod
@@ -267,6 +269,8 @@ class OptimizedMXFP8MoEBenchmark(BaseBenchmark):
             else:
                 self.output = self._forward_grouped()
         self._synchronize()
+        if self.output is None or self.inputs is None or self.weights is None:
+            raise RuntimeError("benchmark_fn() must produce output")
         self._set_verification_payload(
             inputs={"inputs": self.inputs},
             output=self.output,

@@ -8,6 +8,7 @@ import warnings
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 BATCH_SIZE = 512
@@ -16,7 +17,7 @@ HIDDEN_DIM = 2048
 REPETITIONS = 8
 
 
-class BaselineMemoryBenchmark(BaseBenchmark):
+class BaselineMemoryBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: Standard GPU memory allocation."""
     
     def __init__(self):
@@ -36,6 +37,9 @@ class BaselineMemoryBenchmark(BaseBenchmark):
             tokens_per_iteration=float(tokens),
         )
         self.output = None
+        self._last_input: Optional[torch.Tensor] = None
+        self.parameter_count: int = 0
+        self._verification_payload = None
         self.register_workload_metadata(
             requests_per_iteration=float(self.repetitions),
             tokens_per_iteration=float(tokens),
@@ -69,6 +73,7 @@ class BaselineMemoryBenchmark(BaseBenchmark):
             nn.GELU(),
             nn.Linear(HIDDEN_DIM, self.input_dim),
         ).to(self.device, dtype=torch.float32).eval()
+        self.parameter_count = sum(p.numel() for p in self.model.parameters())
         self.host_batches = [
             torch.randint(
                 0,
@@ -88,13 +93,24 @@ class BaselineMemoryBenchmark(BaseBenchmark):
             with torch.no_grad():
                 for compressed in self.host_batches:
                     host_batch = compressed.to(dtype=torch.float32)
-                    host_batch.mul_(1.0 / 255.0)
-                    host_batch.add_(-0.5)
-                    host_batch.mul_(2.0)
-                    host_batch.tanh_()
-                    device_batch = host_batch.to(self.device, dtype=torch.float32, non_blocking=False)
-                    self.output = self.model(device_batch)
+                host_batch.mul_(1.0 / 255.0)
+                host_batch.add_(-0.5)
+                host_batch.mul_(2.0)
+                host_batch.tanh_()
+                device_batch = host_batch.to(self.device, dtype=torch.float32, non_blocking=False)
+                self._last_input = device_batch
+                self.output = self.model(device_batch)
         self._synchronize()
+        if self.output is None or self._last_input is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        self._set_verification_payload(
+            inputs={"input": self._last_input},
+            output=self.output,
+            batch_size=self.batch_size,
+            parameter_count=self.parameter_count,
+            precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": torch.backends.cuda.matmul.allow_tf32},
+            output_tolerance=(0.1, 1.0),
+        )
     
     def teardown(self) -> None:
         if self._threads_overridden and self._prev_threads is not None:
@@ -130,20 +146,6 @@ class BaselineMemoryBenchmark(BaseBenchmark):
         if self.model is None:
             return "Model not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch_size": self.batch_size, "input_dim": self.input_dim}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaselineMemoryBenchmark:

@@ -24,6 +24,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig  # noqa: E402
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 
 # Defer decode_kernels import so the harness can load this module even if the
 # optional vLLM dependencies are absent. We still require CUDA; otherwise the
@@ -221,7 +222,7 @@ def main() -> None:
         export_prom_metrics("baseline", metrics, backend=backend, port=args.prom_port, duration_s=args.prom_duration)
 
 
-class VLLMDecodeGraphsBenchmark(BaseBenchmark):
+class VLLMDecodeGraphsBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """
     Runs the ragged decode driver under the harness so we capture graph
     recaptures, allocator growth, and eager KV compaction costs.
@@ -238,6 +239,7 @@ class VLLMDecodeGraphsBenchmark(BaseBenchmark):
         self._driver: Optional[BaselineDecodeDriver] = None
         self._last_metrics: Optional[DecodeMetrics] = None
         self.output: Optional[torch.Tensor] = None
+        self._verification_payload = None
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def get_config(self) -> BenchmarkConfig:
@@ -263,6 +265,14 @@ class VLLMDecodeGraphsBenchmark(BaseBenchmark):
             [float(len(self._trace)), total_tokens],
             dtype=torch.float32,
         )
+        self._set_verification_payload(
+            inputs={"trace": torch.tensor(self._trace, device=DEVICE)},
+            output=self.output,
+            batch_size=1,
+            parameter_count=0,
+            precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": False},
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         super().teardown()
@@ -278,20 +288,6 @@ class VLLMDecodeGraphsBenchmark(BaseBenchmark):
             "vllm_decode_graphs.allocator_mb": float(self._last_metrics.allocator_bytes) / (1024 * 1024),
             "vllm_decode_graphs.compactions": float(self._last_metrics.compactions),
         }
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.detach().clone()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"steps": self.steps, "hidden": self.hidden}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -12,10 +12,11 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
-class BaselinePipelineParallelismBenchmark(BaseBenchmark):
+class BaselinePipelineParallelismBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: Sequential processing without pipeline parallelism (single GPU)."""
     
     def __init__(self):
@@ -30,6 +31,8 @@ class BaselinePipelineParallelismBenchmark(BaseBenchmark):
             tokens_per_iteration=float(tokens),
         )
         self.output = None
+        self.parameter_count: int = 0
+        self._verification_payload = None
         self.register_workload_metadata(
             samples_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(tokens),
@@ -50,6 +53,7 @@ class BaselinePipelineParallelismBenchmark(BaseBenchmark):
             nn.GELU(),
             nn.Linear(self.hidden_size * 2, self.hidden_size),
         ).to(self.device).eval()
+        self.parameter_count = sum(p.numel() for p in self.model.parameters())
         
         # Input data for inference
         self.input_data = torch.randn(self.batch_size, self.hidden_size, device=self.device)
@@ -63,7 +67,24 @@ class BaselinePipelineParallelismBenchmark(BaseBenchmark):
                 for layer in self.model:
                     activations = layer(activations)
                     self._synchronize()
+                self.output = activations
         self._synchronize()
+        if self.output is None or self.input_data is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        dtype = self.output.dtype
+        self._set_verification_payload(
+            inputs={"input": self.input_data},
+            output=self.output,
+            batch_size=self.batch_size,
+            parameter_count=self.parameter_count,
+            precision_flags={
+                "fp16": dtype == torch.float16,
+                "bf16": dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -83,20 +104,6 @@ class BaselinePipelineParallelismBenchmark(BaseBenchmark):
         if self.model is None:
             return "Model not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch_size": self.batch_size, "hidden_size": self.hidden_size}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload

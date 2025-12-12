@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 
 from core.utils.compile_utils import enable_tf32
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -18,7 +19,7 @@ from core.harness.benchmark_harness import (
 )
 
 
-class OptimizedPipelineParallelismBenchmark(BaseBenchmark):
+class OptimizedPipelineParallelismBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Pipeline parallelism with layers split across GPUs.
     
     When only 1 GPU is available, uses optimized single-GPU path with:
@@ -44,6 +45,8 @@ class OptimizedPipelineParallelismBenchmark(BaseBenchmark):
         self._single_gpu_mode: bool = False
         self._compiled_model: Optional[nn.Module] = None
         self._input_data: Optional[torch.Tensor] = None
+        self.parameter_count: int = 0
+        self._verification_payload = None
         tokens = self.batch_size * self.hidden_size
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.micro_batches),
@@ -77,6 +80,7 @@ class OptimizedPipelineParallelismBenchmark(BaseBenchmark):
                 nn.GELU(),
                 nn.Linear(self.hidden_size * 2, self.hidden_size),
             ).to(self.device, dtype=torch.bfloat16).eval()
+            self.parameter_count = sum(p.numel() for p in model.parameters())
             
             # Compile for kernel fusion and optimization
             try:
@@ -133,6 +137,20 @@ class OptimizedPipelineParallelismBenchmark(BaseBenchmark):
             self._synchronize()
             self._bubble_fraction = 0.0  # No pipeline bubble
             self._last_stage_durations_ms = [0.0]
+            dtype = self.output.dtype
+            self._set_verification_payload(
+                inputs={"input": self._input_data},
+                output=self.output,
+                batch_size=self._input_data.shape[0],
+                parameter_count=self.parameter_count,
+                precision_flags={
+                    "fp16": dtype == torch.float16,
+                    "bf16": dtype == torch.bfloat16,
+                    "fp8": False,
+                    "tf32": torch.backends.cuda.matmul.allow_tf32,
+                },
+                output_tolerance=(0.5, 5.0),
+            )
             return
         
         # Multi-GPU pipeline path
@@ -183,6 +201,25 @@ class OptimizedPipelineParallelismBenchmark(BaseBenchmark):
         final_outputs = [o for o in stage_buffers[num_stages] if o is not None]
         if final_outputs:
             self.output = torch.cat(final_outputs, dim=0)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        dtype = self.output.dtype
+        self.parameter_count = self.parameter_count or sum(
+            p.numel() for stage in self.pipeline_stages for p in stage.parameters()
+        )
+        self._set_verification_payload(
+            inputs={"input": self.microbatch_inputs[0] if self.microbatch_inputs else torch.zeros(1, self.hidden_size, device=self.device)},
+            output=self.output,
+            batch_size=self.output.shape[0],
+            parameter_count=self.parameter_count,
+            precision_flags={
+                "fp16": dtype == torch.float16,
+                "bf16": dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.5, 5.0),
+        )
 
     def teardown(self) -> None:
         self.pipeline_stages = []
@@ -236,20 +273,6 @@ class OptimizedPipelineParallelismBenchmark(BaseBenchmark):
         if not self.pipeline_stages:
             return "Pipeline stages not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.float()
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch_size": self.batch_size, "hidden_size": self.hidden_size}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison - wider due to BF16 and compile."""
-        return (0.5, 5.0)
 
 
 def get_benchmark() -> OptimizedPipelineParallelismBenchmark:

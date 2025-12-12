@@ -33,6 +33,7 @@ from core.harness.benchmark_harness import (
     BenchmarkMode,
     WorkloadMetadata,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 
 
 # FP4 E2M1 representable values
@@ -242,7 +243,7 @@ class BaselineFP4MLP(nn.Module):
         return x
 
 
-class BaselineFP4WeightQuantizationBenchmark(BaseBenchmark):
+class BaselineFP4WeightQuantizationBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: FP4 with per-forward dequantization (slow).
     
     Anti-pattern: Dequantize weights on every forward pass.
@@ -267,6 +268,7 @@ class BaselineFP4WeightQuantizationBenchmark(BaseBenchmark):
             tokens_per_iteration=float(tokens),
         )
         self.output = None
+        self._verification_payload = None
         self.register_workload_metadata(
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(tokens),
@@ -310,13 +312,21 @@ class BaselineFP4WeightQuantizationBenchmark(BaseBenchmark):
                 output = self.model(self.input)
                 self.output = output.detach()
         self._synchronize()
+        if self.output is None or self.input is None or self.model is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        dtype = self.output.dtype
         self._set_verification_payload(
             inputs={"input": self.input},
-            output=self.output.float() if self.output is not None else None,
+            output=self.output.float(),
             batch_size=self.batch_size,
-            parameter_count=sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0,
+            parameter_count=sum(p.numel() for p in self.model.parameters()),
             output_tolerance=(0.5, 5.0),
-            precision_flags={"fp16": True, "bf16": False, "fp8": False, "tf32": False},
+            precision_flags={
+                "fp16": dtype == torch.float16,
+                "bf16": dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": False,
+            },
         )
     
     def teardown(self) -> None:

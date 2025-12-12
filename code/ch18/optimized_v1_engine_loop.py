@@ -20,6 +20,7 @@ except Exception:  # pragma: no cover - vLLM may be absent locally
 from ch18.v1_engine_loop_common import MockRequestOutput, build_demo_stack
 
 OutputType = RequestOutput if RequestOutput is not None else MockRequestOutput
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 
 
 def run_engine_loop(engine_core: Any, core_client: Any) -> Iterator[OutputType]:
@@ -61,7 +62,7 @@ def _demo() -> None:
     print("Optimized loop demo:", summary)
 
 
-class OptimizedV1EngineLoopBenchmark(BaseBenchmark):
+class OptimizedV1EngineLoopBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Benchmark for optimized V1 EngineCore/CoreClient polling loop with KV reclamation."""
 
     def __init__(self):
@@ -70,6 +71,7 @@ class OptimizedV1EngineLoopBenchmark(BaseBenchmark):
         self._core_client = None
         self._outputs = None
         self.output = None
+        self._verification_payload = None
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def get_config(self) -> BenchmarkConfig:
@@ -90,6 +92,14 @@ class OptimizedV1EngineLoopBenchmark(BaseBenchmark):
             float(self._engine_core.calls),
             float(len(self._outputs)),
         ], dtype=torch.float32)
+        self._set_verification_payload(
+            inputs={"seed": torch.tensor(42)},
+            output=self.output,
+            batch_size=1,
+            parameter_count=0,
+            precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": False},
+            output_tolerance=(0.1, 1.0),
+        )
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
@@ -101,20 +111,6 @@ class OptimizedV1EngineLoopBenchmark(BaseBenchmark):
             verify_time_ms=getattr(self, '_verify_ms', 10.0),
             num_rounds=getattr(self, '_num_rounds', 8),
         )
-
-    def get_verify_output(self) -> "torch.Tensor":
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.detach().clone()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"type": "v1_engine_loop_optimized"}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

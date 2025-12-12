@@ -7,6 +7,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
@@ -47,7 +48,7 @@ class EarlyExitModel(nn.Module):
         return self.exits[exit_idx](x)
 
 
-class OptimizedEarlyExitBenchmark(BaseBenchmark):
+class OptimizedEarlyExitBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Adaptive early-exit inference (approximate cost model)."""
     
     def __init__(self):
@@ -64,6 +65,8 @@ class OptimizedEarlyExitBenchmark(BaseBenchmark):
             tokens_per_iteration=float(tokens),
         )
         self.output = None
+        self.parameter_count: int = 0
+        self._verification_payload = None
         self.register_workload_metadata(
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(tokens),
@@ -101,6 +104,7 @@ class OptimizedEarlyExitBenchmark(BaseBenchmark):
         random.seed(42)
         torch.manual_seed(42)
         self._synchronize()
+        self.parameter_count = sum(p.numel() for p in self.model.parameters())
     
     def benchmark_fn(self) -> None:
         if self.model is None or self.x is None:
@@ -109,6 +113,22 @@ class OptimizedEarlyExitBenchmark(BaseBenchmark):
             with torch.no_grad():
                 self.output = self.model.forward_early_exit(self.x, exit_distribution=self.exit_distribution)
         self._synchronize()
+        if self.output is None or self.x is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        dtype = self.output.dtype
+        self._set_verification_payload(
+            inputs={"input": self.x},
+            output=self.output,
+            batch_size=self.batch_size,
+            parameter_count=self.parameter_count,
+            precision_flags={
+                "fp16": dtype == torch.float16,
+                "bf16": dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(1.0, 10.0),
+        )
 
     def teardown(self) -> None:
         self.model = None
@@ -138,20 +158,6 @@ class OptimizedEarlyExitBenchmark(BaseBenchmark):
 
     def validate_result(self) -> Optional[str]:
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.float()
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch_size": self.batch_size, "hidden_dim": self.hidden_dim, "num_layers": self.num_layers}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison - wider due to different exit points."""
-        return (1.0, 10.0)
 
 
 def get_benchmark() -> OptimizedEarlyExitBenchmark:

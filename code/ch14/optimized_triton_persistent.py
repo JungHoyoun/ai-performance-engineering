@@ -16,6 +16,7 @@ if str(repo_root) not in sys.path:
 import torch
 from typing import Optional
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -34,7 +35,7 @@ def matmul_batched_fused(a_batch: torch.Tensor, b_batch: torch.Tensor) -> torch.
     return torch.bmm(a_batch, b_batch)
 
 
-class OptimizedTritonPersistentBenchmark(BaseBenchmark):
+class OptimizedTritonPersistentBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Single fused kernel for batched operations.
     
     Uses torch.bmm which efficiently handles all batch elements
@@ -58,6 +59,7 @@ class OptimizedTritonPersistentBenchmark(BaseBenchmark):
             tokens_per_iteration=float(self.batch_size * self.M * self.N),
         )
         self.output = None
+        self._verification_payload = None
         self.register_workload_metadata(
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(self.batch_size * self.M * self.N),
@@ -80,6 +82,21 @@ class OptimizedTritonPersistentBenchmark(BaseBenchmark):
         self.output = matmul_batched_fused(self.a, self.b)
         self._last = float(self.output.sum())
         self._synchronize()
+        if self.output is None or self.a is None or self.b is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        self._set_verification_payload(
+            inputs={"a": self.a, "b": self.b},
+            output=self.output,
+            batch_size=self.batch_size,
+            parameter_count=0,
+            precision_flags={
+                "fp16": self.dtype == torch.float16,
+                "bf16": self.dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -112,20 +129,6 @@ class OptimizedTritonPersistentBenchmark(BaseBenchmark):
         if self.a is None or self.b is None:
             return "Matrices not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch_size": self.batch_size, "M": self.M, "N": self.N, "K": self.K}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

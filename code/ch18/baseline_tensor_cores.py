@@ -18,6 +18,7 @@ import torch
 
 from typing import Optional
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -27,7 +28,7 @@ from core.harness.benchmark_harness import (
 )
 
 
-class BaselineTensorCoresBenchmark(BaseBenchmark):
+class BaselineTensorCoresBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: FP32 matrix operations without tensor cores."""
     
     def __init__(self):
@@ -40,6 +41,7 @@ class BaselineTensorCoresBenchmark(BaseBenchmark):
             tokens_per_iteration=float(self.size * self.size),
         )
         self.output = None
+        self._verification_payload = None
         self.register_workload_metadata(
             requests_per_iteration=1.0,
             tokens_per_iteration=float(self.size * self.size),
@@ -66,6 +68,16 @@ class BaselineTensorCoresBenchmark(BaseBenchmark):
         with self._nvtx_range("baseline_tensor_cores"):
             self.output = torch.matmul(self.A, self.B)
         self._synchronize()
+        if self.output is None or self.A is None or self.B is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        self._set_verification_payload(
+            inputs={"A": self.A, "B": self.B},
+            output=self.output,
+            batch_size=1,
+            parameter_count=0,
+            precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": False},
+            output_tolerance=(0.1, 1.0),
+        )
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -99,20 +111,6 @@ class BaselineTensorCoresBenchmark(BaseBenchmark):
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"size": self.size}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

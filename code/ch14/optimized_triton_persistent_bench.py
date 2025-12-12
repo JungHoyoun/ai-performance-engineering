@@ -18,6 +18,7 @@ import triton
 import triton.language as tl
 from typing import Optional
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -110,7 +111,7 @@ def matmul_persistent(a: torch.Tensor, b: torch.Tensor, num_sms: int = 108) -> t
     return c
 
 
-class OptimizedTritonPersistentBenchmark(BaseBenchmark):
+class OptimizedTritonPersistentBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Persistent Triton GEMM with swizzled tile ordering."""
 
     def __init__(self):
@@ -132,6 +133,7 @@ class OptimizedTritonPersistentBenchmark(BaseBenchmark):
             requests_per_iteration=1.0,
             tokens_per_iteration=float(self.M * self.N),
         )
+        self._verification_payload = None
 
     def setup(self) -> None:
         """Setup: Initialize matrices."""
@@ -155,6 +157,21 @@ class OptimizedTritonPersistentBenchmark(BaseBenchmark):
         self.output = matmul_persistent(self.a, self.b, self.num_sms)
         self._last = float(self.output.sum())
         self._synchronize()
+        if self.output is None or self.a is None or self.b is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        self._set_verification_payload(
+            inputs={"a": self.a, "b": self.b},
+            output=self.output,
+            batch_size=1,
+            parameter_count=0,
+            precision_flags={
+                "fp16": self.dtype == torch.float16,
+                "bf16": self.dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -187,20 +204,6 @@ class OptimizedTritonPersistentBenchmark(BaseBenchmark):
         if self.a is None or self.b is None:
             return "Matrices not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.detach().clone()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"M": self.M, "N": self.N, "K": self.K}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -45,7 +45,7 @@ class _SkipBenchmark(BaseBenchmark):
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"skip": True}
+        raise RuntimeError("SKIPPED: prefill/decode multigpu requires >=2 GPUs")
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

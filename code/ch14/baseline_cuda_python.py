@@ -33,9 +33,10 @@ from core.harness.benchmark_harness import (
     BenchmarkMode,
     WorkloadMetadata,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 
 
-class BaselineCudaPythonBenchmark(BaseBenchmark):
+class BaselineCudaPythonBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: Standard PyTorch operations (no native CUDA Python).
     
     Demonstrates common operations that are candidates for CUDA Python:
@@ -71,6 +72,7 @@ class BaselineCudaPythonBenchmark(BaseBenchmark):
             requests_per_iteration=float(self.batch),
             tokens_per_iteration=float(tokens),
         )
+        self._verification_payload = None
     
     def setup(self) -> None:
         """Setup: Initialize tensors for operations."""
@@ -131,6 +133,18 @@ class BaselineCudaPythonBenchmark(BaseBenchmark):
             self.output = masked + self.input
         
         self._synchronize()
+        self._set_verification_payload(
+            inputs={
+                "input": self.input.detach(),
+                "mask": self.mask.detach(),
+                "weight": self.weight.detach(),
+                "bias": self.bias.detach(),
+            },
+            output=self.output.detach(),
+            batch_size=int(self.batch),
+            parameter_count=0,
+            output_tolerance=(1e-3, 1e-3),
+        )
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -170,20 +184,6 @@ class BaselineCudaPythonBenchmark(BaseBenchmark):
         if torch.isnan(self.output).any():
             return "Output contains NaN"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch": self.batch, "seq_len": self.seq_len, "hidden": self.hidden}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -18,6 +18,7 @@ from core.harness.benchmark_harness import (  # noqa: E402
     BenchmarkConfig,
     WorkloadMetadata,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 
 
@@ -53,7 +54,7 @@ class SimpleLLM(nn.Module):
         return torch.cat(outputs, dim=1)
 
 
-class BaselinePrefillDecodeMonolithicBenchmark(BaseBenchmark):
+class BaselinePrefillDecodeMonolithicBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Monolithic prefill+decode baseline (no disaggregation)."""
 
     def __init__(self):
@@ -70,6 +71,9 @@ class BaselinePrefillDecodeMonolithicBenchmark(BaseBenchmark):
             requests_per_iteration=1.0,
             tokens_per_iteration=self.prefill_seq + self.decode_seq,
         )
+        self.output: Optional[torch.Tensor] = None
+        self.parameter_count: int = 0
+        self._verification_payload = None
 
     def setup(self) -> None:
         self.model = SimpleLLM(hidden_dim=1024, num_layers=12).to(self.device).to(torch.bfloat16).eval()
@@ -77,6 +81,7 @@ class BaselinePrefillDecodeMonolithicBenchmark(BaseBenchmark):
         with torch.no_grad():
             self.kv_cache = self.model.prefill(self.prompt)
         torch.cuda.synchronize(self.device)
+        self.parameter_count = sum(p.numel() for p in self.model.parameters())
 
     def benchmark_fn(self) -> Dict[str, List[float]]:
         if self.model is None or self.prompt is None:
@@ -102,9 +107,26 @@ class BaselinePrefillDecodeMonolithicBenchmark(BaseBenchmark):
                     token_output = self.model.decode(token_output[:, -1:, :], num_tokens=1)
                     torch.cuda.synchronize(self.device)
                     tpot_times_ms.append(self._record_stop(token_start))
+                self.output = token_output
 
                 self._history["ttft"].append(ttft_ms)
                 self._history["tpot"].extend(tpot_times_ms)
+                if self.output is None:
+                    raise RuntimeError("benchmark_fn() must produce output")
+                dtype = self.output.dtype
+                self._set_verification_payload(
+                    inputs={"prompt": self.prompt},
+                    output=self.output,
+                    batch_size=self.batch_size if hasattr(self, "batch_size") else self.output.shape[0],
+                    parameter_count=self.parameter_count,
+                    precision_flags={
+                        "fp16": dtype == torch.float16,
+                        "bf16": dtype == torch.bfloat16,
+                        "fp8": False,
+                        "tf32": torch.backends.cuda.matmul.allow_tf32,
+                    },
+                    output_tolerance=(0.1, 1.0),
+                )
                 return {
                     "ttft_times_ms": [ttft_ms],
                     "tpot_times_ms": tpot_times_ms,
@@ -137,18 +159,6 @@ class BaselinePrefillDecodeMonolithicBenchmark(BaseBenchmark):
         if not self._history["tpot"]:
             return "No TPOT samples recorded"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        raise RuntimeError("Multi-GPU required - verification not supported on single GPU")
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"batch_size": self.batch_size}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

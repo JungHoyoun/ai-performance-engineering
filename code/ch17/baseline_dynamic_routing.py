@@ -20,10 +20,11 @@ from core.harness.benchmark_harness import (  # noqa: E402
     BenchmarkConfig,
     WorkloadMetadata,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from ch17.dynamic_routing import DisaggregatedRouter, Priority, Request, WorkerMetrics  # noqa: E402
 
 
-class _DynamicRoutingBenchmark(BaseBenchmark):
+class _DynamicRoutingBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Shared logic for baseline/optimized routing harnesses."""
 
     def __init__(self, *, batch_size: int, vectorized: bool):
@@ -37,6 +38,7 @@ class _DynamicRoutingBenchmark(BaseBenchmark):
             tokens_per_iteration=float(batch_size * 128),
         )
         self.output = None
+        self._verification_payload = None
         self._iteration = 0
         self._queue_length_table: Optional[torch.Tensor] = None
         self.register_workload_metadata(
@@ -170,6 +172,17 @@ class _DynamicRoutingBenchmark(BaseBenchmark):
         served = len(requests) - rejects
 
         self.output = torch.tensor([float(served), float(rejects), float(offloaded)])
+        input_snapshot = (
+            self._queue_lengths if (self.vectorized and self._queue_lengths is not None) else torch.tensor([], device=self.output.device)
+        )
+        self._set_verification_payload(
+            inputs={"queue_lengths": input_snapshot},
+            output=self.output,
+            batch_size=self.batch_size,
+            parameter_count=0,
+            precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": False},
+            output_tolerance=(0.1, 10.0),
+        )
         return {
             "requests": float(len(requests)),
             "served": float(served),
@@ -189,20 +202,6 @@ class _DynamicRoutingBenchmark(BaseBenchmark):
         return {
             "routing.latency_ms": float(statistics.mean(self._history["lat_ms"])),
         }
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch_size": self.batch_size, "vectorized": self.vectorized}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison - routing is deterministic."""
-        return (0.1, 10.0)
 
     def validate_result(self) -> Optional[str]:
         return None

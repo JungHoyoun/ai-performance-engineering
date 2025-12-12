@@ -39,6 +39,7 @@ import triton
 import triton.language as tl
 from typing import Optional
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -452,7 +453,7 @@ def benchmark_kernels():
 # Benchmark Harness Integration
 #============================================================================
 
-class TritonPersistentDemoBenchmark(BaseBenchmark):
+class TritonPersistentDemoBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Benchmark harness wrapper for Triton persistent kernels demo."""
 
     def __init__(self):
@@ -467,6 +468,7 @@ class TritonPersistentDemoBenchmark(BaseBenchmark):
         self.N = 256
         self.K = 256
         self._last = 0.0
+        self._verification_payload = None
         
         # FLOP calculation: 2*M*N*K for matmul
         self._workload = WorkloadMetadata(
@@ -494,6 +496,21 @@ class TritonPersistentDemoBenchmark(BaseBenchmark):
         self.output = matmul_persistent(self.a, self.b, self.num_sms)
         self._last = float(self.output.sum())
         self._synchronize()
+        if self.output is None or self.a is None or self.b is None:
+            raise RuntimeError("benchmark_fn() must produce output")
+        self._set_verification_payload(
+            inputs={"a": self.a, "b": self.b},
+            output=self.output,
+            batch_size=1,
+            parameter_count=0,
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -522,20 +539,6 @@ class TritonPersistentDemoBenchmark(BaseBenchmark):
             return "Matrices not initialized"
         return None
 
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.detach().clone()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"M": self.M, "N": self.N, "K": self.K}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
-
 
 def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
@@ -544,4 +547,3 @@ def get_benchmark() -> BaseBenchmark:
 
 if __name__ == "__main__":
     benchmark_kernels()
-

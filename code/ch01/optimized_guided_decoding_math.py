@@ -27,9 +27,10 @@ from core.harness.benchmark_harness import (  # noqa: E402
     BenchmarkMode,
     WorkloadMetadata,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 
 
-class OptimizedGuidedDecodingMathBenchmark(BaseBenchmark):
+class OptimizedGuidedDecodingMathBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized guided decoding with schema constraints, forcing math SDP."""
 
     def __init__(self):
@@ -47,6 +48,10 @@ class OptimizedGuidedDecodingMathBenchmark(BaseBenchmark):
         self.parameter_count = 0
         tokens = self.batch_size * self.seq_len
         self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
+        self.register_workload_metadata(
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(tokens),
         )
