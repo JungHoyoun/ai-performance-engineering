@@ -28,11 +28,14 @@ class OptimizedFP4HardwareKernelBenchmark(VerificationPayloadMixin, BaseBenchmar
         self.bin_path = self.chapter_dir / "optimized_fp4_hardware_kernel"
         self.output = None
         self._verify_input = None
+        self._verify_gen = None
         self._verification_payload = None
+        self._ran = False
         self._workload = WorkloadMetadata(requests_per_iteration=1.0)
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def setup(self) -> None:
+        import torch
         if not self.bin_path.exists():
             subprocess.run(
                 ["make", "USE_ARCH_SUFFIX=0", "ARCH=sm_100", "optimized_fp4_hardware_kernel"],
@@ -40,21 +43,25 @@ class OptimizedFP4HardwareKernelBenchmark(VerificationPayloadMixin, BaseBenchmar
                 check=True,
             )
         # Dummy input tensor for aliasing checks (binary benchmarks have no inputs)
-        import torch
         self._verify_input = torch.tensor([0.0], dtype=torch.float32)
+        self._verify_gen = torch.Generator().manual_seed(42)
+        self.output = None
+        self._ran = False
 
     def benchmark_fn(self) -> None:
         with self._nvtx_range("optimized_fp4_hardware_kernel"):
             subprocess.run([str(self.bin_path)], cwd=self.chapter_dir, check=True)
-        # Use a deterministic reference tensor for verification (same across variants)
-        import torch
-        torch.manual_seed(42)
-        a = torch.randn(4, 4)
-        self.output = (a @ a).flatten()[:4].float().clone()
-        if self.output is None or self._verify_input is None:
-            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._ran = True
 
     def capture_verification_payload(self) -> None:
+        if not self._ran:
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
+        if self._verify_input is None or self._verify_gen is None:
+            raise RuntimeError("setup() must run before capture_verification_payload()")
+        # Deterministic (but local RNG) placeholder output for binary-only benchmark wrappers.
+        import torch
+        a = torch.randn(4, 4, generator=self._verify_gen)
+        self.output = (a @ a).flatten()[:4].float().clone()
         self._set_verification_payload(
             inputs={"input": self._verify_input},
             output=self.output,

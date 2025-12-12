@@ -171,8 +171,6 @@ class BaselineVLLMV1IntegrationBenchmark(VerificationPayloadMixin, BaseBenchmark
         if self._ran:
             self._synchronize()
             return
-        torch.manual_seed(42)
-        torch.cuda.manual_seed_all(42)
         self._metrics = self.runner.run()
         self.output = torch.tensor(
             [

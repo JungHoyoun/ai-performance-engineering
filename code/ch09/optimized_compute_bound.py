@@ -1,4 +1,9 @@
-"""optimized_compute_bound.py - Optimized compute-bound kernel (same math as baseline)."""
+"""optimized_compute_bound.py - Optimized compute-bound kernel.
+
+Optimization strategy: capture the repeated MLP chain with CUDA graphs to
+eliminate Python dispatch and per-op launch overhead while keeping the math,
+shapes, and dtypes identical to the baseline.
+"""
 
 from __future__ import annotations
 
@@ -22,13 +27,15 @@ from core.harness.benchmark_harness import (
 
 
 class OptimizedComputeBoundBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Compute-bound kernel - uses torch.compile to fuse the same math as baseline."""
+    """Compute-bound kernel - uses CUDA graphs to cut launch overhead."""
     
     def __init__(self):
         super().__init__()
         self.model: Optional[nn.Module] = None
         self.input: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
+        self._graph: Optional[torch.cuda.CUDAGraph] = None
+        self._static_output: Optional[torch.Tensor] = None
         self.repeats = 16
         self.N = 4096
         tokens = self.N * self.repeats
@@ -38,31 +45,50 @@ class OptimizedComputeBoundBenchmark(VerificationPayloadMixin, BaseBenchmark):
         )
     
     def setup(self) -> None:
-        """Setup: initialize compiled model and inputs."""
+        """Setup: initialize model, inputs, and capture a CUDA graph replay."""
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         self.model = nn.Sequential(
             nn.Linear(self.N, self.N * 2),
             nn.ReLU(),
             nn.Linear(self.N * 2, self.N),
         ).to(self.device, dtype=torch.float16).eval()
-        # Use torch.compile to fuse and cut Python overhead for repeated matmuls.
-        try:
-            self.model = torch.compile(self.model, mode="reduce-overhead", fullgraph=True, dynamic=False)
-        except Exception:
-            # Fail-fast: if compilation unsupported (e.g., env mismatch), keep eager to preserve correctness.
-            self.model = self.model
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float16)
+        self._synchronize()
+
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA required for compute-bound CUDA graph capture")
+
+        # Warm up to initialize cuBLAS handles and any lazy kernels.
+        with torch.inference_mode():
+            out = self.input
+            for _ in range(2):
+                out = self.model(out)
+        self._synchronize()
+
+        # Capture the full repeated chain into a CUDA graph.
+        graph = torch.cuda.CUDAGraph()
+        static_output: Optional[torch.Tensor] = None
         torch.cuda.synchronize(self.device)
-    
-    def benchmark_fn(self) -> None:
-        """Benchmark: repeated matmul chain identical to baseline."""
-        if self.model is None or self.input is None:
-            raise RuntimeError("Model/input not initialized")
-        out = self.input
-        with self._nvtx_range("optimized_compute_bound"):
+        with torch.cuda.graph(graph):
+            out = self.input
             for _ in range(self.repeats):
                 out = self.model(out)
-            self.output = out
+            static_output = out
+        torch.cuda.synchronize(self.device)
+
+        if static_output is None:
+            raise RuntimeError("CUDA graph capture failed to produce output")
+        self._graph = graph
+        self._static_output = static_output
+    
+    def benchmark_fn(self) -> None:
+        """Benchmark: replay captured CUDA graph."""
+        if self._graph is None or self._static_output is None:
+            raise RuntimeError("CUDA graph not initialized")
+        with self._nvtx_range("optimized_compute_bound"):
+            self._graph.replay()
+            self.output = self._static_output
         self._synchronize()
         if self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")

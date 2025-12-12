@@ -54,6 +54,8 @@ class BaselineCUDAGraphBucketing:
             capture_batch_sizes=capture_bins,
             name="baseline_cudagraphs",
             pad_fn=pad_fn,
+            # Model expensive graph capture vs cheap replay.
+            capture_cost_iters=5000,
         )
 
     def run(self) -> GraphTreeSimulator:

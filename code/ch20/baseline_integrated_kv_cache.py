@@ -132,10 +132,11 @@ class BaselineIntegratedKVCacheBenchmark(VerificationPayloadMixin, BaseBenchmark
         """Setup: Initialize baseline model with naive KV cache."""
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
+        dtype = torch.float16
         
         layers = []
         for _ in range(self.num_layers):
-            layers.append(AttentionLayer(self.hidden_dim, self.num_heads, self.head_dim, dtype=torch.float32))
+            layers.append(AttentionLayer(self.hidden_dim, self.num_heads, self.head_dim, dtype=dtype))
         self.model = nn.Sequential(*layers).to(self.device).eval()
         
         self.kv_cache = NaiveKVCache(
@@ -143,13 +144,13 @@ class BaselineIntegratedKVCacheBenchmark(VerificationPayloadMixin, BaseBenchmark
             num_layers=self.num_layers,
             num_heads=self.num_heads,
             head_dim=self.head_dim,
-            dtype=torch.float32,
+            dtype=dtype,
             device=self.device
         )
         
         self.inputs = []
         for seq_len in self.sequence_lengths:
-            x = torch.randn(self.batch_size, seq_len, self.hidden_dim, device=self.device, dtype=torch.float32)
+            x = torch.randn(self.batch_size, seq_len, self.hidden_dim, device=self.device, dtype=dtype)
             self.inputs.append(x)
         self._verify_input = self.inputs[-1] if self.inputs else None
         self.output = None
@@ -191,6 +192,7 @@ class BaselineIntegratedKVCacheBenchmark(VerificationPayloadMixin, BaseBenchmark
             output=self.output,
             batch_size=self.batch_size,
             parameter_count=sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0,
+            precision_flags={"fp16": True, "bf16": False, "fp8": False, "tf32": False},
             output_tolerance=(0.1, 1.0),
         )
 

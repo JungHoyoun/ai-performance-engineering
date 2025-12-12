@@ -112,9 +112,6 @@ class OptimizedRegionalCompilationBenchmark(VerificationPayloadMixin, BaseBenchm
         self._iteration = 0
         self.compiled_layers = 0
         self.output: Optional[torch.Tensor] = None
-        self.input_buffer: Optional[torch.Tensor] = None
-        self.host_buffer: Optional[torch.Tensor] = None
-        self.transfer_stream: Optional[torch.cuda.Stream] = None
         self.graph_cache: Dict[int, GraphCacheEntry] = {}
         self._verify_input: Optional[torch.Tensor] = None
         self.parameter_count: int = 0
@@ -133,15 +130,10 @@ class OptimizedRegionalCompilationBenchmark(VerificationPayloadMixin, BaseBenchm
         ).to(self.device, dtype=torch.bfloat16).eval()
         self.model = model
         self.parameter_count = sum(p.numel() for p in model.parameters())
-        self._configure_runtime()
-        self.transfer_stream = torch.cuda.Stream()
-        self.input_buffer = torch.empty(
-            1, self.max_seq_len, self.d_model, device=self.device, dtype=torch.bfloat16
-        )
-        self.host_buffer = torch.empty(
-            1, self.max_seq_len, self.d_model, device="cpu", dtype=torch.bfloat16, pin_memory=True
-        )
-        self._prepare_cuda_graphs()
+
+        # IMPORTANT: Keep inputs identical to the baseline and avoid any extra
+        # verification-only forward passes in benchmark_fn(). Verification uses
+        # the output from the timed run.
         self._verify_input = torch.randn(
             1,
             self.max_seq_len,
@@ -149,6 +141,7 @@ class OptimizedRegionalCompilationBenchmark(VerificationPayloadMixin, BaseBenchm
             device=self.device,
             dtype=torch.bfloat16,
         )
+        self._prepare_cuda_graphs()
         tokens = self.max_seq_len * self.d_model
         self.register_workload_metadata(
             requests_per_iteration=1.0,
@@ -178,18 +171,18 @@ class OptimizedRegionalCompilationBenchmark(VerificationPayloadMixin, BaseBenchm
     def _prepare_cuda_graphs(self) -> None:
         """Capture CUDA graphs per sequence length to eliminate Python overhead."""
         if self.model is None:
-            return
+            raise RuntimeError("Model must be initialized before CUDA graph capture")
+        if self._verify_input is None:
+            raise RuntimeError("Verification input must be initialized before CUDA graph capture")
         self.graph_cache.clear()
         torch.cuda.synchronize()
         unique_lengths = sorted(set(self.sequence_schedule))
 
         for seq_len in unique_lengths:
-            static_input = torch.randn(
-                1,
-                seq_len,
-                self.d_model,
-                device=self.device,
-                dtype=torch.bfloat16,
+            static_input = (
+                self._verify_input
+                if seq_len == self.max_seq_len
+                else self._verify_input[:, :seq_len]
             )
             static_output = torch.empty_like(static_input)
             # Warm-up and capture under inference mode to avoid autograd state.
@@ -210,89 +203,61 @@ class OptimizedRegionalCompilationBenchmark(VerificationPayloadMixin, BaseBenchm
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-        if self.model is None or self.input_buffer is None or self.host_buffer is None:
+        if self.model is None:
             raise RuntimeError("Optimized model not initialized")
+        if self._verify_input is None:
+            raise RuntimeError("Verification input not initialized")
 
         seq_len = self.sequence_schedule[self._iteration % len(self.sequence_schedule)]
         self._iteration += 1
-        cpu_tokens = torch.randn(
-            1, seq_len, self.d_model, device="cpu", dtype=torch.bfloat16
-        )
-        self.host_buffer[:, :seq_len].copy_(cpu_tokens)
-        if seq_len < self.max_seq_len:
-            self.host_buffer[:, seq_len:] = 0
-
         ran_graph = self._run_with_cuda_graph(seq_len, enable_nvtx)
-
         if not ran_graph:
-            if self.transfer_stream is not None:
-                with torch.cuda.stream(self.transfer_stream):
-                    self.input_buffer.copy_(self.host_buffer, non_blocking=True)
-                torch.cuda.current_stream().wait_stream(self.transfer_stream)
-            else:
-                self.input_buffer.copy_(self.host_buffer, non_blocking=False)
+            raise RuntimeError("CUDA graph replay missing for expected sequence length bucket")
 
-            with nvtx_range("regional_compilation", enable=enable_nvtx):
-                with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-                    self.output = self.model(self.input_buffer[:, :seq_len])
-            torch.cuda.synchronize()
-        if self._verify_input is None or self.model is None:
-            raise RuntimeError("Verification input or model missing")
-
-        verify_input = self._verify_input[:, :seq_len]
-        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-            self.output = self.model(verify_input).detach().float().clone()
-
-        self._payload_verify_input = verify_input
+        self._payload_verify_input = (
+            self._verify_input if seq_len == self.max_seq_len else self._verify_input[:, :seq_len]
+        )
 
     def capture_verification_payload(self) -> None:
         verify_input = self._payload_verify_input
         self._set_verification_payload(
-            inputs={"verify_input": verify_input},
+            inputs={"input": verify_input},
             output=self.output,
             batch_size=1,
             parameter_count=self.parameter_count,
-            precision_flags={"bf16": True, "tf32": torch.backends.cuda.matmul.allow_tf32},
+            precision_flags={
+                "fp16": False,
+                "bf16": True,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
             output_tolerance=(0.1, 1.0),
         )
 
     def run(self, compare_eager: bool = False) -> torch.Tensor:
         """Run a single forward pass for demo/validation."""
-        if self.model is None or self.input_buffer is None or self.host_buffer is None:
+        if self.model is None or self._verify_input is None:
             raise RuntimeError("Optimized model not initialized")
 
         seq_len = self.sequence_schedule[0]
-        cpu_tokens = torch.randint(
-            0, 50304, (1, seq_len), device="cpu", dtype=torch.long
-        )
-        self.host_buffer[:, :seq_len].copy_(cpu_tokens)
-        if seq_len < self.max_seq_len:
-            self.host_buffer[:, seq_len:] = 0
-
-        self.input_buffer.copy_(self.host_buffer, non_blocking=False)
-        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-            compiled_out = self.model(self.input_buffer[:, :seq_len])
-            if compare_eager:
-                _ = self.model(self.input_buffer[:, :seq_len])
+        ran_graph = self._run_with_cuda_graph(seq_len, enable_nvtx=False)
+        if not ran_graph:
+            with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                _ = self.model(self._verify_input[:, :seq_len])
+        if compare_eager:
+            with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                _ = self.model(self._verify_input[:, :seq_len])
         self._synchronize()
-        return compiled_out
+        if self.output is None:
+            raise RuntimeError("run() did not produce output")
+        return self.output
 
     def _run_with_cuda_graph(self, seq_len: int, enable_nvtx: bool) -> bool:
         """Replay a cached CUDA graph for the requested sequence length."""
-        if self.host_buffer is None:
-            return False
         entry = self.graph_cache.get(seq_len)
         if entry is None:
             return False
-        graph, static_input, static_output = entry
-        source = self.host_buffer[:, :seq_len]
-        if self.transfer_stream is not None:
-            with torch.cuda.stream(self.transfer_stream):
-                static_input.copy_(source, non_blocking=True)
-            torch.cuda.current_stream().wait_stream(self.transfer_stream)
-        else:
-            static_input.copy_(source, non_blocking=False)
-
+        graph, _static_input, static_output = entry
         with nvtx_range("regional_compilation[cuda_graph]", enable=enable_nvtx):
             graph.replay()
         torch.cuda.synchronize()
@@ -322,15 +287,13 @@ class OptimizedRegionalCompilationBenchmark(VerificationPayloadMixin, BaseBenchm
         )
 
     def validate_result(self) -> Optional[str]:
-        if self.model is None or self.input_buffer is None:
-            return "Model not initialized"
+        if self.model is None or self._verify_input is None:
+            return "Model/input not initialized"
         return None
 
     def teardown(self) -> None:
         self.model = None
-        self.input_buffer = None
-        self.host_buffer = None
-        self.transfer_stream = None
+        self._verify_input = None
         self.graph_cache.clear()
         if self.device.type == "cuda":
             torch.cuda.empty_cache()

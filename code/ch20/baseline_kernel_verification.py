@@ -318,13 +318,16 @@ class BaselineKernelVerificationBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        # Kernel verification benchmark - return test results as tensor
         import torch
-        if self._results is None:
+        if not self._verification_results:
             raise RuntimeError("benchmark_fn() must be called before verification")
+        random_pass = float(bool(self._verification_results.get("random_tests", {}).get("passed", False)))
+        edge_pass = float(bool(self._verification_results.get("edge_cases", {}).get("passed", False)))
+        boundary_pass = float(bool(self._verification_results.get("boundary_tests", {}).get("passed", False)))
         return torch.tensor([
-            float(self._results.get("random_pass", 0)),
-            float(self._results.get("edge_pass", 0)),
+            random_pass,
+            edge_pass,
+            boundary_pass,
         ], dtype=torch.float32)
 
     def get_input_signature(self) -> dict:

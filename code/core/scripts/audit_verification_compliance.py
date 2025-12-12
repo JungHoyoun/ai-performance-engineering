@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib.util
 import sys
 import traceback
@@ -25,6 +26,74 @@ from core.benchmark.verification import InputSignature
 repo_root = Path(__file__).parent.parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
+
+
+def _scan_source_compliance(filepath: Path) -> Dict[str, bool]:
+    """Static checks that keep benchmark_fn() hot path clean."""
+    flags = {
+        "no_seed_setting_in_benchmark_fn": True,
+        "no_payload_set_in_benchmark_fn": True,
+    }
+
+    try:
+        tree = ast.parse(filepath.read_text(encoding="utf-8"), filename=str(filepath))
+    except Exception:
+        # If the file cannot be parsed, treat as non-compliant for source checks.
+        flags["no_seed_setting_in_benchmark_fn"] = False
+        flags["no_payload_set_in_benchmark_fn"] = False
+        return flags
+
+    def _is_seed_call(call: ast.Call) -> bool:
+        func = call.func
+        if not isinstance(func, ast.Attribute):
+            return False
+        # torch.manual_seed(...)
+        if func.attr == "manual_seed" and isinstance(func.value, ast.Name) and func.value.id == "torch":
+            return True
+        # torch.cuda.manual_seed_all(...)
+        if func.attr == "manual_seed_all" and isinstance(func.value, ast.Attribute):
+            base = func.value
+            if base.attr == "cuda" and isinstance(base.value, ast.Name) and base.value.id == "torch":
+                return True
+        # random.seed(...)
+        if func.attr == "seed" and isinstance(func.value, ast.Name) and func.value.id == "random":
+            return True
+        # np.random.seed(...) / numpy.random.seed(...)
+        if func.attr == "seed" and isinstance(func.value, ast.Attribute):
+            base = func.value
+            if base.attr == "random" and isinstance(base.value, ast.Name) and base.value.id in {"np", "numpy"}:
+                return True
+        return False
+
+    def _is_payload_set_call(call: ast.Call) -> bool:
+        func = call.func
+        return isinstance(func, ast.Attribute) and func.attr == "_set_verification_payload"
+
+    class _Visitor(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self._stack: List[str] = []
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            self._stack.append(node.name)
+            self.generic_visit(node)
+            self._stack.pop()
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            self._stack.append(node.name)
+            self.generic_visit(node)
+            self._stack.pop()
+
+        def visit_Call(self, node: ast.Call) -> None:
+            fn = self._stack[-1] if self._stack else ""
+            if fn == "benchmark_fn":
+                if _is_seed_call(node):
+                    flags["no_seed_setting_in_benchmark_fn"] = False
+                if _is_payload_set_call(node):
+                    flags["no_payload_set_in_benchmark_fn"] = False
+            self.generic_visit(node)
+
+    _Visitor().visit(tree)
+    return flags
 
 
 def load_benchmark_class(filepath: Path) -> Optional[Tuple[Any, str]]:
@@ -71,6 +140,9 @@ def check_compliance(benchmark: Any) -> Dict[str, bool]:
         # Jitter exemptions are NOT allowed; any exemption is a failure.
         "jitter_exemption_reason": False,
         "register_workload_metadata_called": False,
+        # Hot-path hygiene (static analysis) populated by caller.
+        "no_seed_setting_in_benchmark_fn": False,
+        "no_payload_set_in_benchmark_fn": False,
     }
     
     # Check methods (including inherited)
@@ -159,12 +231,23 @@ def audit_directory(directory: Path) -> Dict[str, Dict[str, Any]]:
     """
     results = {}
     
-    skip_parts = {"__pycache__", "llm_patches", "llm_patches_test"}
+    skip_parts = {
+        "__pycache__",
+        "llm_patches",
+        "llm_patches_test",
+        ".venv",
+        "venv",
+        "site-packages",
+        "dist-packages",
+        "node_modules",
+    }
     for filepath in sorted(directory.rglob("*.py")):
         if any(part in skip_parts for part in filepath.parts):
             continue
         if not (filepath.name.startswith("baseline_") or filepath.name.startswith("optimized_")):
             continue
+
+        source_flags = _scan_source_compliance(filepath)
         
         result = load_benchmark_class(filepath)
         if result is None:
@@ -178,9 +261,16 @@ def audit_directory(directory: Path) -> Dict[str, Dict[str, Any]]:
         
         benchmark, class_name = result
         compliance = check_compliance(benchmark)
+        compliance.update(source_flags)
         
         # Determine overall status
-        critical_methods = ["get_verify_output", "get_input_signature", "jitter_exemption_reason"]
+        critical_methods = [
+            "get_verify_output",
+            "get_input_signature",
+            "jitter_exemption_reason",
+            "no_seed_setting_in_benchmark_fn",
+            "no_payload_set_in_benchmark_fn",
+        ]
         is_compliant = all(compliance.get(m, False) for m in critical_methods)
         
         results[str(filepath)] = {

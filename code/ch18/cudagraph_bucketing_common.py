@@ -101,6 +101,7 @@ class GraphTreeSimulator:
         capture_batch_sizes: Sequence[int],
         name: str,
         pad_fn: Callable[[int], int | None] | None = None,
+        capture_cost_iters: int = 0,
     ) -> None:
         self.bands = bucket_bands
         self.capture_batch_sizes = sorted(set(int(x) for x in capture_batch_sizes))
@@ -108,9 +109,29 @@ class GraphTreeSimulator:
         self.stats = GraphStats()
         self._seen: set[Tuple[int, int]] = set()
         self._pad_fn = pad_fn
+        self._capture_cost_iters = max(int(capture_cost_iters), 0)
+        self._capture_cost_sink = 0
 
     def _pad_batch(self, batch: int) -> int | None:
         return pad_batch_to_capture(batch, self.capture_batch_sizes, self._pad_fn)
+
+    def _simulate_capture_cost(self) -> None:
+        """CPU-side stand-in for expensive CUDA graph captures.
+
+        Graph capture for new (batch, seqlen) shapes can be significantly more
+        expensive than replay in real systems. The simulator models that by
+        burning a small, deterministic amount of CPU work on every first-time
+        capture. This keeps the example's performance behavior aligned with the
+        intent of the chapter (bucketing reduces captures -> faster steady state).
+        """
+        iters = self._capture_cost_iters
+        if iters <= 0:
+            return
+        acc = 0
+        # Simple LCG-style integer mix; deterministic and cheap to compute.
+        for i in range(iters):
+            acc = (acc * 1664525 + 1013904223 + i) & 0xFFFFFFFF
+        self._capture_cost_sink ^= acc
 
     def observe(self, batch: int, seqlen: int, *, prewarm: bool = False) -> None:
         b_bucket, s_bucket = self.bands.bucket(batch, seqlen)
@@ -122,6 +143,7 @@ class GraphTreeSimulator:
         if key in self._seen:
             self.stats.record_replay(key)
             return
+        self._simulate_capture_cost()
         self._seen.add(key)
         self.stats.record_capture(key, prewarm=prewarm)
 

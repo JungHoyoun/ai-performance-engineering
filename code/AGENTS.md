@@ -3,6 +3,12 @@
 ## BE EFFICIENT AND ASK QUESTIONS AT KEY DECISION POINTS
 - Instead of forging ahead and performing a lot of changes, ask me questions if you are unsure or just want re-assurance that your approach is valid.
 
+## Achieve MAXIMUM speedup when benchmarking baseline_ versus optimized_ variants when possible
+- For any speedups <1.05x, we must improve in a natural manner utilizing hardware, software, and algorithmic speedups.  
+= Both the baseline and the optimized variants need to equivalent workloads.  Perhaps we need to increase the workloads to demonstrate the speedup?  
+- Let's consider all options and find the best speedup 
+- Make sure we're staying with the intent of the example and within the context of the chapter (book/chXX.md).
+
 ## Verification Mixins REQUIRED
 - Benchmarks must surface verification metadata via `VerificationPayloadMixin` + `_set_verification_payload()` inside `benchmark_fn()` (or equivalent path).
 - Do NOT hand-roll `get_verify_output()/get_input_signature()/get_output_tolerance()` unless there is a truly special case; fail fast instead of adding fallbacks.

@@ -1,19 +1,19 @@
-"""optimized_training_single.py - Optimized training loop."""
+"""optimized_training_single.py - Optimized single-GPU training loop.
+
+Optimizations (Ch20):
+- Enable TF32 matmul where appropriate
+- Prefer fused AdamW when available
+- Use set_to_none=True for zero_grad
+"""
 
 from __future__ import annotations
 
-from contextlib import nullcontext
 from typing import Optional
 
 import torch
 import torch.nn as nn
 
-try:
-    from arch_config import prefer_sdpa_backends  # type: ignore
-    from core.utils.compile_utils import enable_tf32  # type: ignore
-except Exception:  # pragma: no cover - defensive import
-    prefer_sdpa_backends = None  # type: ignore
-    enable_tf32 = None  # type: ignore
+from core.utils.compile_utils import enable_tf32
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
@@ -35,7 +35,7 @@ class SimpleModel(nn.Module):
 
 
 class OptimizedTrainingDistributedBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Optimized training loop leveraging AMP, fused optimizers, and compilation."""
+    """Optimized training loop with TF32 + fused optimizer."""
     
     def __init__(self):
         super().__init__()
@@ -49,7 +49,6 @@ class OptimizedTrainingDistributedBenchmark(VerificationPayloadMixin, BaseBenchm
         self.batch_size = 32
         self.hidden_dim = 8192
         self.train_steps = 6
-        self._sdpa_ctx_factory = prefer_sdpa_backends if prefer_sdpa_backends is not None else nullcontext
         tokens = self.batch_size * self.hidden_dim
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.batch_size),
@@ -60,23 +59,11 @@ class OptimizedTrainingDistributedBenchmark(VerificationPayloadMixin, BaseBenchm
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
-            if enable_tf32 is not None:
-                enable_tf32(set_global_precision=True)
-            else:
-                try:
-                    torch.set_float32_matmul_precision("high")
-                except Exception as e:
-                    import warnings
-                    warnings.warn(
-                        f"Failed to set float32_matmul_precision='high': {e}",
-                        RuntimeWarning,
-                        stacklevel=2,
-                    )
+            enable_tf32(set_global_precision=True)
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
 
-        base_model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device).float().train()
-        self.model = torch.compile(base_model, mode="reduce-overhead")
+        self.model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device).float().train()
         
         self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
         self.targets = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
@@ -94,9 +81,8 @@ class OptimizedTrainingDistributedBenchmark(VerificationPayloadMixin, BaseBenchm
         with self._nvtx_range("training_optimized"):
             for _ in range(self.train_steps):
                 self.optimizer.zero_grad(set_to_none=True)
-                with self._sdpa_ctx_factory(), torch.autocast("cuda", dtype=torch.bfloat16):
-                    outputs = self.model(self.inputs)
-                    loss = self.criterion(outputs, self.targets)
+                outputs = self.model(self.inputs)
+                loss = self.criterion(outputs, self.targets)
                 loss.backward()
                 self.optimizer.step()
             self._synchronize()

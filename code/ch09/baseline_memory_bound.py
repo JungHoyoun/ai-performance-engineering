@@ -56,9 +56,15 @@ class BaselineMemoryBoundBenchmark(VerificationPayloadMixin, BaseBenchmark):
             raise RuntimeError("benchmark_fn() must produce output for verification")
 
     def capture_verification_payload(self) -> None:
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        # Keep verification lightweight: slice the large output tensor.
+        # This avoids serializing ~64MB outputs in subprocess mode while still
+        # validating correctness on representative data.
+        verify_output = self.output[:4096].detach().clone()
         self._set_verification_payload(
             inputs={"tensor": self.tensor},
-            output=self.output.detach().clone(),
+            output=verify_output,
             batch_size=self.tensor.shape[0],
             parameter_count=0,
             precision_flags={

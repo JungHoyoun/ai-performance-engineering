@@ -1,4 +1,10 @@
-"""optimized_memory_bound.py - Keep data on GPU and fuse updates."""
+"""optimized_memory_bound.py - Memory-bound kernel optimized via buffer reuse.
+
+Optimization strategy:
+- Keep math identical to the baseline (`t = t * 1.0001 + 0.0001`).
+- Use in-place ops on a per-iteration working buffer to avoid allocating
+  intermediate tensors on every repeat.
+"""
 
 from __future__ import annotations
 
@@ -21,18 +27,15 @@ from core.harness.benchmark_harness import (
     BenchmarkMode,
     WorkloadMetadata,
 )
-
-
 class OptimizedMemoryBoundBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Keeps data resident on the GPU and fuses updates via torch.compile."""
+    """Keeps data resident on the GPU and reduces allocation overhead."""
     
     def __init__(self):
         super().__init__()
         self.data = None
         self.N = 16_777_216  # Same size as baseline (~64 MB)
         self.repeats = 64
-        self.step_fn = None
-        self._compiled = False
+        self.output: Optional[torch.Tensor] = None
         # Memory-bound benchmark - fixed dimensions for roofline analysis
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.repeats),
@@ -40,20 +43,10 @@ class OptimizedMemoryBoundBenchmark(VerificationPayloadMixin, BaseBenchmark):
         )
     
     def setup(self) -> None:
-        """Setup: Initialize tensors and compile the fused update."""
-        torch.backends.cudnn.benchmark = True
-        torch.backends.cudnn.deterministic = False
+        """Setup: Initialize tensors."""
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         self.data = torch.randn(self.N, dtype=torch.float32, device=self.device)
-
-        def fused_step(x: torch.Tensor) -> torch.Tensor:
-            # Match baseline math: t = t * 1.0001 + 0.0001
-            return x * 1.0001 + 0.0001
-
-        # Avoid torch.compile here because Inductor cudagraph capture can clash
-        # with repeated in-place style updates across iterations.
-        self.step_fn = fused_step
-        self._compiled = False
         self._synchronize()
         self.register_workload_metadata(
             requests_per_iteration=self._workload.requests_per_iteration,
@@ -62,20 +55,26 @@ class OptimizedMemoryBoundBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Fused operations (high AI)."""
-        assert self.data is not None and self.step_fn is not None
+        if self.data is None:
+            raise RuntimeError("Data tensor not initialized")
         with self._nvtx_range("memory_bound"):
-            t = self.data
+            # Preserve baseline semantics: start from the same input each call.
+            t = self.data.detach().clone()
             for _ in range(self.repeats):
-                t = self.step_fn(t)
+                t.mul_(1.0001).add_(0.0001)
             self.output = t
         self._synchronize()
         if self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
 
     def capture_verification_payload(self) -> None:
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        # Keep verification lightweight: slice the large output tensor.
+        verify_output = self.output[:4096].detach().clone()
         self._set_verification_payload(
             inputs={"tensor": self.data},
-            output=self.output.detach().clone(),
+            output=verify_output,
             batch_size=self.data.shape[0],
             parameter_count=0,
             precision_flags={
@@ -114,7 +113,7 @@ class OptimizedMemoryBoundBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.data is None or self.step_fn is None:
+        if self.data is None:
             return "Data tensor not initialized"
         if self.data.shape[0] != self.N:
             return f"Data size mismatch: expected {self.N}, got {self.data.shape[0]}"
