@@ -1,18 +1,20 @@
-"""Optimized speculative decoding: Draft-verify parallel decoding.
+"""Optimized speculative decoding: draft proposals + batched target verification.
 
-Uses a small draft model to propose multiple tokens, then verifies them
-in parallel with the target model, achieving significant speedups.
+This benchmark models the core speculative decoding speedup:
+  1) Use a small draft model to propose K tokens.
+  2) Verify those K tokens in a single target-model forward pass (batch on K).
+  3) Accept matching draft tokens; on mismatch, fall back to the target token.
+
+The final generated token sequence must match the baseline greedy decode.
 """
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Dict, Optional
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -20,239 +22,179 @@ if str(REPO_ROOT) not in sys.path:
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
-from labs.speculative_decode.baseline_speculative_decode import (
-    SpeculativeConfig,
-    SimpleLM,
-    BaselineSpeculativeDecodeBenchmark,
+
+from labs.speculative_decode.speculative_decode_common import (
+    TokenMLP,
+    build_draft_from_target,
+    default_workload,
+    scale_tail_dims_,
 )
 
 
-class DraftModel(nn.Module):
-    """Small draft model for speculative decoding.
-    
-    Uses a subset of target layers for high acceptance rate.
-    This simulates a well-distilled draft model that closely approximates target.
-    """
-    
-    def __init__(self, vocab_size: int, hidden_size: int, target_embedding: nn.Embedding, 
-                 target_lm_head: nn.Linear, target_layers: nn.ModuleList):
-        super().__init__()
-        # Share ALL components with target - use only first layer for speed
-        self.embedding = target_embedding
-        # Use first 2 layers of target (vs target's 4) - simulates distillation
-        self.layers = nn.ModuleList([target_layers[0], target_layers[1]])
-        self.lm_head = target_lm_head
-    
-    def forward(self, input_ids: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass returning logits and probabilities."""
-        x = self.embedding(input_ids)
-        for layer in self.layers:
-            x = layer(x)
-        logits = self.lm_head(x[:, -1:, :])
-        probs = F.softmax(logits, dim=-1)
-        return logits, probs
-
-
 class OptimizedSpeculativeDecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Optimized: Speculative decoding with draft-verify parallelism.
-    
-    Key optimizations:
-    1. Draft model proposes k tokens in parallel (small model, fast)
-    2. Target model verifies all k tokens in single forward pass (batched)
-    3. Accept tokens using rejection sampling for exact distribution match
-    4. ~2-3x speedup when acceptance rate > 70%
-    """
-    
-    def __init__(self, config: Optional[SpeculativeConfig] = None):
+    """Spec decode loop: draft + batched target verification."""
+
+    def __init__(self) -> None:
         super().__init__()
-        self.config = config or SpeculativeConfig(use_speculation=True, draft_length=4)
-        self.config.use_speculation = True
-        
-        self.target_model: Optional[SimpleLM] = None
-        self.draft_model: Optional[DraftModel] = None
-        self.prompt_ids: Optional[torch.Tensor] = None
-        self.tokens_generated: int = 0
-        self.tokens_accepted: int = 0
-        self.draft_rounds: int = 0
+
+        self.workload = default_workload(dtype=torch.bfloat16)
+
+        self.target_model: Optional[TokenMLP] = None
+        self.draft_model: Optional[TokenMLP] = None
+        self.input_ids: Optional[torch.Tensor] = None
+        self._output_ids: Optional[torch.Tensor] = None
+        self._draft_ids: Optional[torch.Tensor] = None
+        self._verify_prev: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
-        self.parameter_count = 0
-        
+
+        self._metrics: Dict[str, float] = {}
+
+        tokens = float(self.workload.total_tokens)
         self._workload = WorkloadMetadata(
-            requests_per_iteration=float(self.config.batch_size),
-            tokens_per_iteration=float(self.config.batch_size * self.config.decode_length),
+            requests_per_iteration=1.0,
+            tokens_per_iteration=tokens,
         )
-    
+
     def setup(self) -> None:
-        """Initialize target and draft models."""
         torch.manual_seed(42)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(42)
-        
-        # Target model (larger)
-        self.target_model = SimpleLM(
-            vocab_size=self.config.vocab_size,
-            hidden_size=self.config.hidden_size,
-            num_layers=self.config.num_layers,
-        ).to(self.device, dtype=torch.bfloat16)
-        self.target_model.eval()
-        self.parameter_count = sum(p.numel() for p in self.target_model.parameters())
-        
-        # Draft model (smaller, faster) - shares embeddings/head/layers with target
-        self.draft_model = DraftModel(
-            vocab_size=self.config.vocab_size,
-            hidden_size=self.config.hidden_size,
-            target_embedding=self.target_model.embedding,
-            target_lm_head=self.target_model.lm_head,
-            target_layers=self.target_model.layers,
-        ).to(self.device, dtype=torch.bfloat16)
-        self.draft_model.eval()
-        
-        # Create prompt
-        self.prompt_ids = torch.randint(
-            0, self.config.vocab_size,
-            (self.config.batch_size, self.config.prompt_length),
+
+        wl = self.workload
+        self.target_model = TokenMLP(
+            vocab_size=wl.vocab_size,
+            hidden_size=wl.target_hidden,
+            num_layers=wl.target_layers,
             device=self.device,
-        )
-        
-        # Warmup
-        self._warmup()
-        torch.cuda.synchronize()
-    
-    def _warmup(self) -> None:
-        """Warmup models."""
-        with torch.no_grad():
-            for _ in range(3):
-                self._speculative_generate(max_tokens=8)
-    
-    @torch.no_grad()
-    def _speculative_generate(self, max_tokens: int) -> torch.Tensor:
-        """Speculative decoding with draft-verify loop.
-        
-        Key insight: Draft model proposes k tokens, target model verifies in
-        a single forward pass. Since draft shares embeddings/head with target,
-        acceptance rate is high (~80%+), giving ~2-3x speedup.
-        """
-        input_ids = self.prompt_ids.clone()
-        total_generated = 0
-        accepted_total = 0
-        rounds = 0
-        hidden = None
-        
-        while total_generated < max_tokens:
-            rounds += 1
-            
-            # === DRAFT PHASE ===
-            # Generate k draft tokens with small/fast draft model
-            draft_tokens = []
-            draft_input = input_ids[:, -1:]
-            
-            for _ in range(self.config.draft_length):
-                _, probs = self.draft_model(draft_input)
-                next_token = torch.argmax(probs[:, -1, :], dim=-1, keepdim=True)
-                draft_tokens.append(next_token)
-                draft_input = next_token
-            
-            draft_tokens = torch.cat(draft_tokens, dim=1)  # [B, k]
-            
-            # === VERIFY PHASE ===
-            # Target model verifies each draft token position
-            # Since draft shares embeddings with target, high agreement expected
-            target_tokens = []
-            verify_input = input_ids[:, -1:]
-            
-            for i in range(self.config.draft_length):
-                target_logits, hidden = self.target_model(verify_input, hidden)
-                target_token = torch.argmax(target_logits[:, -1, :], dim=-1, keepdim=True)
-                target_tokens.append(target_token)
-                verify_input = draft_tokens[:, i:i+1]  # Use draft token as next input
-            
-            target_tokens = torch.cat(target_tokens, dim=1)  # [B, k]
-            
-            # === ACCEPT/REJECT ===
-            # Accept contiguous prefix where draft matches target
-            matches = (draft_tokens == target_tokens)
-            accepted = 0
-            for i in range(self.config.draft_length):
-                if matches[:, i].all():
-                    accepted += 1
-                else:
-                    break
-            
-            # Append accepted tokens
-            if accepted > 0:
-                input_ids = torch.cat([input_ids, draft_tokens[:, :accepted]], dim=1)
-                total_generated += accepted
-                accepted_total += accepted
-            
-            # Always add one more token (either next accepted or correction)
-            if accepted < self.config.draft_length:
-                # Use target's token at rejection point
-                correction = target_tokens[:, accepted:accepted+1]
-            else:
-                # All accepted - sample one more from target
-                next_logits, hidden = self.target_model(input_ids[:, -1:], hidden)
-                correction = torch.argmax(next_logits[:, -1, :], dim=-1, keepdim=True)
-            
-            input_ids = torch.cat([input_ids, correction], dim=1)
-            total_generated += 1
-            
-            # Safety: prevent infinite loop
-            if rounds > max_tokens * 2:
-                break
-        
-        self.tokens_accepted = accepted_total
-        self.draft_rounds = rounds
-        return input_ids
-    
-    def benchmark_fn(self) -> None:
-        """Run speculative decoding."""
-        output_ids = self._speculative_generate(max_tokens=self.config.decode_length)
-        self.tokens_generated = output_ids.shape[1] - self.prompt_ids.shape[1]
-        self.output = output_ids.detach()
+            dtype=wl.dtype,
+        ).eval()
+        scale_tail_dims_(self.target_model, wl.draft_hidden, wl.tail_scale)
+
+        # Deterministic starting token. Must be created BEFORE draft init so it
+        # matches the baseline.
+        self.input_ids = torch.randint(0, wl.vocab_size, (1, 1), device=self.device, dtype=torch.int64)
+
+        self._output_ids = torch.empty((1, wl.total_tokens + 1), device=self.device, dtype=torch.int64)
+        self._draft_ids = torch.empty((1, wl.speculative_k), device=self.device, dtype=torch.int64)
+        self._verify_prev = torch.empty((1, wl.speculative_k), device=self.device, dtype=torch.int64)
+
+        self.draft_model = build_draft_from_target(self.target_model, wl.draft_hidden)
+        self.output = None
+        self._metrics = {}
         self._synchronize()
-        if self.prompt_ids is None or self.output is None:
-            raise RuntimeError("benchmark_fn() did not produce output")
+
+    def benchmark_fn(self) -> None:
+        if (
+            self.target_model is None
+            or self.draft_model is None
+            or self.input_ids is None
+            or self._output_ids is None
+            or self._draft_ids is None
+            or self._verify_prev is None
+        ):
+            raise RuntimeError("Benchmark not initialized")
+
+        wl = self.workload
+        out = self._output_ids
+        out[:, 0] = self.input_ids[:, 0]
+
+        draft_tokens = 0
+        accepted_draft = 0
+        rounds = 0
+
+        with torch.no_grad():
+            pos = 0
+            while pos < wl.total_tokens:
+                rounds += 1
+                remaining = wl.total_tokens - pos
+                k = wl.speculative_k if remaining >= wl.speculative_k else remaining
+
+                # Draft: propose k tokens sequentially.
+                prev = out[:, pos : pos + 1]
+                for j in range(k):
+                    logits_d = self.draft_model(prev)
+                    next_d = logits_d[:, 0, :].argmax(dim=-1)
+                    self._draft_ids[:, j] = next_d
+                    prev = next_d.view(1, 1)
+
+                draft_tokens += int(k)
+
+                # Verify: compute target predictions for the k steps in one call.
+                self._verify_prev[:, 0] = out[:, pos]
+                if k > 1:
+                    self._verify_prev[:, 1:k] = self._draft_ids[:, : k - 1]
+
+                logits_t = self.target_model(self._verify_prev[:, :k])
+                target_next = logits_t.argmax(dim=-1)  # [1, k]
+                matches = target_next.eq(self._draft_ids[:, :k])  # [1, k]
+
+                mismatch = (~matches[0]).nonzero(as_tuple=False)
+                if mismatch.numel() == 0:
+                    accept_k = k
+                else:
+                    accept_k = int(mismatch[0].item())
+
+                if accept_k == k:
+                    out[:, pos + 1 : pos + k + 1] = self._draft_ids[:, :k]
+                    accepted_draft += int(k)
+                    pos += k
+                else:
+                    if accept_k > 0:
+                        out[:, pos + 1 : pos + accept_k + 1] = self._draft_ids[:, :accept_k]
+                        accepted_draft += int(accept_k)
+                    out[:, pos + accept_k + 1] = target_next[:, accept_k]
+                    pos += accept_k + 1
+
+        self.output = out
+        self._metrics = {
+            "speculative.draft_tokens": float(draft_tokens),
+            "speculative.accepted_draft_tokens": float(accepted_draft),
+            "speculative.acceptance_rate_pct": (accepted_draft / max(draft_tokens, 1)) * 100.0,
+            "speculative.rounds": float(rounds),
+        }
+        self._synchronize()
 
     def capture_verification_payload(self) -> None:
+        if self.input_ids is None or self.output is None:
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
+        parameter_count = 0
+        if self.target_model is not None:
+            parameter_count = sum(p.numel() for p in self.target_model.parameters())
         self._set_verification_payload(
-            inputs={"prompt_ids": self.prompt_ids.detach()},
-            output=self.output,
-            batch_size=self.config.batch_size,
-            parameter_count=self.parameter_count,
+            inputs={"input_ids": self.input_ids},
+            output=self.output.float(),
+            batch_size=1,
+            parameter_count=int(parameter_count),
             precision_flags={"bf16": True, "fp16": False, "tf32": torch.backends.cuda.matmul.allow_tf32},
             output_tolerance=(0.0, 0.0),
         )
-    
+
     def teardown(self) -> None:
-        """Clean up."""
         self.target_model = None
         self.draft_model = None
-        self.prompt_ids = None
+        self.input_ids = None
+        self._output_ids = None
+        self._draft_ids = None
+        self._verify_prev = None
+        self.output = None
         torch.cuda.empty_cache()
-        super().teardown()
-    
+
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=10, warmup=5)
-    
+        return BenchmarkConfig(iterations=5, warmup=5)
+
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload
-    
-    def validate_result(self) -> Optional[str]:
-        if self.tokens_generated < self.config.decode_length:
-            return f"Expected at least {self.config.decode_length} tokens, got {self.tokens_generated}"
-        return None
-    
+
     def get_custom_metrics(self) -> Optional[dict]:
-        acceptance_rate = self.tokens_accepted / max(self.draft_rounds * self.config.draft_length, 1)
-        return {
-            "speculative_decode.mode": "speculative",
-            "speculative_decode.speculation_enabled": 1.0,
-            "speculative_decode.tokens_generated": float(self.tokens_generated),
-            "speculative_decode.tokens_accepted": float(self.tokens_accepted),
-            "speculative_decode.draft_rounds": float(self.draft_rounds),
-            "speculative_decode.acceptance_rate": acceptance_rate,
-            "speculative_decode.draft_length": float(self.config.draft_length),
-        }
+        return dict(self._metrics)
+
+    def validate_result(self) -> Optional[str]:
+        if self.output is None:
+            return "Output not produced"
+        if self.output.shape[-1] != self.workload.total_tokens + 1:
+            return "Unexpected output shape"
+        return None
+
 
 def get_benchmark() -> BaseBenchmark:
     return OptimizedSpeculativeDecodeBenchmark()
@@ -260,4 +202,6 @@ def get_benchmark() -> BaseBenchmark:
 
 if __name__ == "__main__":
     from core.harness.benchmark_harness import benchmark_main
+
     benchmark_main(get_benchmark)
+

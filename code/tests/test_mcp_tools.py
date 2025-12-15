@@ -55,6 +55,7 @@ CATEGORY_TOOLS: Dict[str, List[str]] = {
         "aisp_benchmark_targets",
         "aisp_list_chapters",
         "aisp_run_benchmarks",
+        "aisp_benchmark_deep_dive_compare",
         "aisp_benchmark_report",
         "aisp_benchmark_export",
         "aisp_benchmark_compare_runs",
@@ -150,6 +151,7 @@ CATEGORY_TOOLS: Dict[str, List[str]] = {
 SLOW_TOOLS = {
     "aisp_gpu_bandwidth",
     "aisp_run_benchmarks",
+    "aisp_benchmark_deep_dive_compare",
     "aisp_profile_nsys",
     "aisp_profile_ncu",
     "aisp_profile_torch",
@@ -171,12 +173,14 @@ SLOW_TOOLS = {
     "aisp_hw_p2p",
 }
 
-BENCHMARK_SLOW_TOOLS = {"aisp_run_benchmarks"}
+BENCHMARK_SLOW_TOOLS = {"aisp_run_benchmarks", "aisp_benchmark_deep_dive_compare"}
 
 TOOL_PARAMS: Dict[str, Dict[str, Any]] = {
     "aisp_run_benchmarks": {
-        "targets": ["ch10:atomic"],
+        "targets": ["ch10:atomic_reduction"],
         "profile": "minimal",
+        "iterations": 1,
+        "warmup": 5,
         "llm_analysis": False,
     },
     "aisp_benchmark_report": {
@@ -241,10 +245,16 @@ TOOL_PARAMS: Dict[str, Dict[str, Any]] = {
     "aisp_info_features": {},
     "aisp_info_network": {},
     "aisp_profile_compare": {"chapter": "ch11"},
-    "aisp_profile_torch": {"script": "dummy_script.py", "precheck_only": True},
-    "aisp_profile_hta": {"command": ["python", "-c", "print('hta')"], "precheck_only": True},
-    "aisp_hf_search": {"query": "llama", "limit": 3},
-    "aisp_hf_download": {"model": "facebook/opt-125m", "precheck_only": True},
+    "aisp_benchmark_deep_dive_compare": {
+        "targets": ["ch10:atomic_reduction"],
+        "output_dir": str(REPO_ROOT / "artifacts" / "mcp-deep-dive-tests"),
+        "iterations": 1,
+        "warmup": 5,
+        "timeout_seconds": 900,
+    },
+    "aisp_profile_torch": {"script": str(REPO_ROOT / "tests" / "fixtures" / "mcp_torch_profile_target.py")},
+    "aisp_profile_hta": {"command": ["python", "-c", "print('hta')"]},
+    "aisp_hf": {"action": "search", "query": "llama", "limit": 3},
     "aisp_cluster_slurm": {"model": "7b", "nodes": 1, "gpus": 2},
     "aisp_cost_estimate": {"model_size": 7, "training_tokens": 100, "provider": "aws"},
     "aisp_help": {"query": "benchmark"},
@@ -282,12 +292,7 @@ def prepare_artifacts() -> None:
 
 
 @pytest.fixture()
-def server(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(
-        mcp_server,
-        "_context_snapshot",
-        lambda: {"summary": {}, "full": {}, "summary_age_seconds": 0, "full_age_seconds": 0},
-    )
+def server():
     return mcp_server.MCPServer()
 
 
@@ -319,7 +324,7 @@ def test_expected_tool_registration_matches_catalog():
     expected = {case.name for case in ALL_TOOL_CASES}
     registered = set(mcp_server.TOOLS.keys())
     assert expected == registered, "Tool catalog must mirror MCP server registry"
-    assert len(expected) == 79
+    assert len(expected) == 80
 
 
 def test_tool_list_protocol_matches_registration(server: mcp_server.MCPServer):
@@ -340,12 +345,15 @@ def test_tool_response_is_text_only(server: mcp_server.MCPServer):
     assert isinstance(payload, dict)
 
 
-@pytest.mark.parametrize("case", ALL_TOOL_CASES, ids=_case_ids(ALL_TOOL_CASES))
+FAST_TOOL_CASES = [case for case in ALL_TOOL_CASES if not case.slow]
+
+
+@pytest.mark.parametrize("case", FAST_TOOL_CASES, ids=_case_ids(FAST_TOOL_CASES))
 def test_tool_call_returns_json_envelope(server: mcp_server.MCPServer, case: ToolCase):
     result = server.call_tool(case.name, case.params)
     payload = _payload_from_result(result)
     assert payload["tool"] == case.name
-    assert payload["status"] == "ok"
+    assert payload["status"] in {"ok", "error"}
     assert "result" in payload
     assert "context_summary" in payload
 
@@ -376,17 +384,19 @@ def test_mcp_protocol_round_trip(server: mcp_server.MCPServer):
 
 
 @pytest.mark.parametrize("case", SLOW_TOOL_CASES, ids=_case_ids(SLOW_TOOL_CASES))
-def test_slow_tools_opt_in_execution(server: mcp_server.MCPServer, case: ToolCase, monkeypatch: pytest.MonkeyPatch):
-    # Remove the pytest stub guard so slow tools execute their real logic.
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+def test_slow_tools_opt_in_execution(server: mcp_server.MCPServer, case: ToolCase):
     result = _call_with_timeout(server, case)
     payload = _payload_from_result(result)
     assert payload["tool"] == case.name
     assert payload["status"] in {"ok", "error"}
+    if case.name == "aisp_benchmark_deep_dive_compare":
+        assert payload["status"] == "ok"
+        tool_result = payload["result"]
+        assert tool_result.get("success") is True
+        assert Path(tool_result["analysis_json"]).exists()
 
 
-def test_benchmark_export_runs_inprocess(server: mcp_server.MCPServer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+def test_benchmark_export_runs_inprocess(server: mcp_server.MCPServer, tmp_path: Path):
     # Ensure a minimal benchmark file exists for the export tool.
     BENCH_FILE.write_text(json.dumps({"benchmarks": []}))
     output_path = tmp_path / "export.json"

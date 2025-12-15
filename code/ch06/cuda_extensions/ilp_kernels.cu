@@ -14,9 +14,15 @@ __global__ void sequential_ops_kernel(float* output, const float* input, int N) 
         // trivially collapse it into a single fused op).
         float val = input[idx];
         val = val * val + 0.10f;
-        val = val * val + 0.20f;
-        val = val * val + 0.30f;
-        val = val * val + 0.40f;
+        val = val * val + 0.11f;
+        val = val * val + 0.12f;
+        val = val * val + 0.13f;
+        val = val * val + 0.14f;
+        val = val * val + 0.15f;
+        val = val * val + 0.16f;
+        val = val * val + 0.17f;
+        val = val * val + 0.18f;
+        val = val * val + 0.19f;
         output[idx] = val;
     }
 }
@@ -34,9 +40,15 @@ __global__ void independent_ops_kernel(float* output, const float* input, int N)
 
     // Interleave dependent chains across 4 independent values.
     v0 = v0 * v0 + 0.10f; v1 = v1 * v1 + 0.10f; v2 = v2 * v2 + 0.10f; v3 = v3 * v3 + 0.10f;
-    v0 = v0 * v0 + 0.20f; v1 = v1 * v1 + 0.20f; v2 = v2 * v2 + 0.20f; v3 = v3 * v3 + 0.20f;
-    v0 = v0 * v0 + 0.30f; v1 = v1 * v1 + 0.30f; v2 = v2 * v2 + 0.30f; v3 = v3 * v3 + 0.30f;
-    v0 = v0 * v0 + 0.40f; v1 = v1 * v1 + 0.40f; v2 = v2 * v2 + 0.40f; v3 = v3 * v3 + 0.40f;
+    v0 = v0 * v0 + 0.11f; v1 = v1 * v1 + 0.11f; v2 = v2 * v2 + 0.11f; v3 = v3 * v3 + 0.11f;
+    v0 = v0 * v0 + 0.12f; v1 = v1 * v1 + 0.12f; v2 = v2 * v2 + 0.12f; v3 = v3 * v3 + 0.12f;
+    v0 = v0 * v0 + 0.13f; v1 = v1 * v1 + 0.13f; v2 = v2 * v2 + 0.13f; v3 = v3 * v3 + 0.13f;
+    v0 = v0 * v0 + 0.14f; v1 = v1 * v1 + 0.14f; v2 = v2 * v2 + 0.14f; v3 = v3 * v3 + 0.14f;
+    v0 = v0 * v0 + 0.15f; v1 = v1 * v1 + 0.15f; v2 = v2 * v2 + 0.15f; v3 = v3 * v3 + 0.15f;
+    v0 = v0 * v0 + 0.16f; v1 = v1 * v1 + 0.16f; v2 = v2 * v2 + 0.16f; v3 = v3 * v3 + 0.16f;
+    v0 = v0 * v0 + 0.17f; v1 = v1 * v1 + 0.17f; v2 = v2 * v2 + 0.17f; v3 = v3 * v3 + 0.17f;
+    v0 = v0 * v0 + 0.18f; v1 = v1 * v1 + 0.18f; v2 = v2 * v2 + 0.18f; v3 = v3 * v3 + 0.18f;
+    v0 = v0 * v0 + 0.19f; v1 = v1 * v1 + 0.19f; v2 = v2 * v2 + 0.19f; v3 = v3 * v3 + 0.19f;
 
     output[base_idx] = v0;
     if (base_idx + 1 < N) output[base_idx + 1] = v1;
@@ -56,9 +68,15 @@ __global__ void unrolled_ilp_kernel(float* output, const float* input, int N) {
         float val3 = input[base_idx + 3];
         
         val0 = val0 * val0 + 0.10f; val1 = val1 * val1 + 0.10f; val2 = val2 * val2 + 0.10f; val3 = val3 * val3 + 0.10f;
-        val0 = val0 * val0 + 0.20f; val1 = val1 * val1 + 0.20f; val2 = val2 * val2 + 0.20f; val3 = val3 * val3 + 0.20f;
-        val0 = val0 * val0 + 0.30f; val1 = val1 * val1 + 0.30f; val2 = val2 * val2 + 0.30f; val3 = val3 * val3 + 0.30f;
-        val0 = val0 * val0 + 0.40f; val1 = val1 * val1 + 0.40f; val2 = val2 * val2 + 0.40f; val3 = val3 * val3 + 0.40f;
+        val0 = val0 * val0 + 0.11f; val1 = val1 * val1 + 0.11f; val2 = val2 * val2 + 0.11f; val3 = val3 * val3 + 0.11f;
+        val0 = val0 * val0 + 0.12f; val1 = val1 * val1 + 0.12f; val2 = val2 * val2 + 0.12f; val3 = val3 * val3 + 0.12f;
+        val0 = val0 * val0 + 0.13f; val1 = val1 * val1 + 0.13f; val2 = val2 * val2 + 0.13f; val3 = val3 * val3 + 0.13f;
+        val0 = val0 * val0 + 0.14f; val1 = val1 * val1 + 0.14f; val2 = val2 * val2 + 0.14f; val3 = val3 * val3 + 0.14f;
+        val0 = val0 * val0 + 0.15f; val1 = val1 * val1 + 0.15f; val2 = val2 * val2 + 0.15f; val3 = val3 * val3 + 0.15f;
+        val0 = val0 * val0 + 0.16f; val1 = val1 * val1 + 0.16f; val2 = val2 * val2 + 0.16f; val3 = val3 * val3 + 0.16f;
+        val0 = val0 * val0 + 0.17f; val1 = val1 * val1 + 0.17f; val2 = val2 * val2 + 0.17f; val3 = val3 * val3 + 0.17f;
+        val0 = val0 * val0 + 0.18f; val1 = val1 * val1 + 0.18f; val2 = val2 * val2 + 0.18f; val3 = val3 * val3 + 0.18f;
+        val0 = val0 * val0 + 0.19f; val1 = val1 * val1 + 0.19f; val2 = val2 * val2 + 0.19f; val3 = val3 * val3 + 0.19f;
 
         output[base_idx] = val0;
         output[base_idx + 1] = val1;
@@ -69,9 +87,15 @@ __global__ void unrolled_ilp_kernel(float* output, const float* input, int N) {
         for (int i = 0; i < 4 && base_idx + i < N; ++i) {
             float val = input[base_idx + i];
             val = val * val + 0.10f;
-            val = val * val + 0.20f;
-            val = val * val + 0.30f;
-            val = val * val + 0.40f;
+            val = val * val + 0.11f;
+            val = val * val + 0.12f;
+            val = val * val + 0.13f;
+            val = val * val + 0.14f;
+            val = val * val + 0.15f;
+            val = val * val + 0.16f;
+            val = val * val + 0.17f;
+            val = val * val + 0.18f;
+            val = val * val + 0.19f;
             output[base_idx + i] = val;
         }
     }

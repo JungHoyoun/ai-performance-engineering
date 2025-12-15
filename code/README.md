@@ -37,6 +37,8 @@ python -m cli.aisp bench run --targets ch01 --profile minimal
 ## Validation Checklist
 - `pytest tests/integration` succeeds to confirm harness discovery and CLI plumbing.
 - `python core/benchmark/benchmark_peak.py` reports TFLOP/s, bandwidth, and NVLink numbers close to the published ceilings.
+- `python -m cli.aisp bench verify -t ch12:graph_bandwidth --skip-jitter --skip-fresh-input` validates baseline/optimized correctness (use `--skip-workload` only when explicitly needed).
+- `python -m cli.aisp bench audit --all` checks verification compliance (signatures, outputs, workload metadata).
 
 ## Notes
 - `core/scripts/profile_all_workloads.sh` and `ncu_template.ini` capture Nsight traces with consistent metric sets.

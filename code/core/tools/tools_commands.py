@@ -99,10 +99,25 @@ TOOLS: Dict[str, ToolSpec] = {
         script_path=REPO_ROOT / "ch18" / "speculative_decode" / "spec_config_sweep.py",
         description="Sweep speculative-decoding config files and write summary JSON.",
     ),
+    "cudagraph-bucketing": ToolSpec(
+        name="cudagraph-bucketing",
+        script_path=REPO_ROOT / "ch18" / "cudagraph_bucketing_simulator.py",
+        description="Run the Chapter 18 CUDA graph bucketing simulator (tool; not a benchmark pair).",
+    ),
     "v1-engine-loop": ToolSpec(
         name="v1-engine-loop",
         script_path=REPO_ROOT / "ch18" / "v1_engine_loop.py",
         description="Run the V1 EngineCore polling-loop demo (tool; correctness, not speed).",
+    ),
+    "uma-memory": ToolSpec(
+        name="uma-memory",
+        script_path=REPO_ROOT / "labs" / "uma_memory" / "uma_memory_reporting.py",
+        description="Report UMA allocatable memory snapshot (tool; not a benchmark pair).",
+    ),
+    "moe-parallelism": ToolSpec(
+        name="moe-parallelism",
+        script_path=REPO_ROOT / "labs" / "moe_parallelism" / "run_lab.py",
+        description="Run the MoE parallelism planner (tool; not a benchmark pair).",
     ),
     "moe-validation": ToolSpec(
         name="moe-validation",

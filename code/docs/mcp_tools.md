@@ -12,6 +12,22 @@ python -m mcp.mcp_server --serve
 python -m mcp.mcp_server --list
 ```
 
+## Common Workflow: Deep-Dive Baseline vs Optimized Compare
+
+One-shot (recommended): `aisp_benchmark_deep_dive_compare`
+
+```json
+{
+  "targets": ["ch10:atomic_reduction"],
+  "output_dir": "artifacts/mcp-deep-dive",
+  "async": true
+}
+```
+
+This runs `bench run` with `profile=\"deep_dive\"`, writes outputs under a timestamped run dir, and returns:
+- `run_dir`, `results_json`, `analysis_json`
+- per-benchmark `profiles_dir` + `followup_tool_calls` for `aisp_profile_compare` / `aisp_compare_nsys` / `aisp_compare_ncu`
+
 ## Tool Names
 
 Tool names are the exact names returned by `tools/list` / `--list` (for example: `aisp_gpu_info`, not `gpu_info`).
@@ -47,4 +63,3 @@ Example call shape:
   "args": ["--layers", "32", "--hidden", "4096", "--tokens", "4096", "--dtype", "fp16"]
 }
 ```
-

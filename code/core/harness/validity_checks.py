@@ -326,7 +326,8 @@ def check_setup_precomputation(get_outputs_fn, setup_fn) -> Tuple[bool, Optional
         return False, (
             "SETUP PRE-COMPUTATION DETECTED: Output tensors changed during setup(). "
             f"Hash before: {hash_before}, after: {hash_after}. "
-            "setup() should only initialize inputs, not compute outputs."
+            "setup() should only initialize inputs (and may prepare steady-state state like CUDA graph capture), "
+            "but must not compute and stash the final outputs used for timing/verification."
         )
     
     return True, None

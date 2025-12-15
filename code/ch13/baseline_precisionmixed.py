@@ -67,8 +67,6 @@ class BaselinePrecisionMixedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(42)
             self._tf32_state = configure_tf32(enable_matmul=False, enable_cudnn=False)
-            torch.backends.cudnn.benchmark = False
-            torch.backends.cudnn.deterministic = True
         
         self.model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device).train()
         self.parameter_count = sum(p.numel() for p in self.model.parameters())

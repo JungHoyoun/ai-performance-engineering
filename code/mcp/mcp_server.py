@@ -3,7 +3,7 @@
 🚀 MCP Server for AI Systems Performance
 
 Exposes the unified PerformanceEngine as MCP tools for AI chat integration.
-Consolidated to ~79 tools (reduced from 86, preserving all unique functionality).
+Consolidated to ~80 tools (reduced from 86, preserving all unique functionality).
 
 Usage:
     # Start the MCP server
@@ -16,7 +16,7 @@ ARCHITECTURE:
     ┌─────────────────────────────────────────────────────────────────────────┐
     │  AI Chat Client                                                         │
     │  ↓                                                                      │
-    │  MCP Server (this file) - 79 tools (no functionality lost)              │
+    │  MCP Server (this file) - 80 tools (no functionality lost)              │
     │  ↓                                                                      │
     │  PerformanceEngine (core/engine.py) - 10 unified domains                │
     │  ├── gpu         : aisp_gpu_info, aisp_gpu_topology, aisp_gpu_power     │
@@ -235,7 +235,8 @@ _OUTPUT_ENVELOPE_SUMMARY = (
 
 # Explicit overrides for tools that have notable runtime/side effects.
 _EXPECTATION_OVERRIDES: Dict[str, str] = {
-    "aisp_run_benchmarks": "Runs the bench CLI; can take minutes and writes artifacts/logs to the repo. Slow/interactive; run aisp_status or aisp_triage first and consider precheck_only/dry_run/timeout_seconds.",
+    "aisp_run_benchmarks": "Runs the bench CLI; can take minutes and writes artifacts/logs. Use artifacts_dir to control output location. For full baseline-vs-optimized profiling + diffs, use profile='deep_dive' or aisp_benchmark_deep_dive_compare.",
+    "aisp_benchmark_deep_dive_compare": "Runs bench with profile='deep_dive' (slow) and then compares baseline vs optimized profiles (nsys+ncu). Writes a timestamped run directory under output_dir.",
     "aisp_benchmark_report": "Generates a report from existing benchmark JSON; writes PDF/HTML to the chosen output.",
     "aisp_benchmark_export": "Exports existing benchmark JSON to csv/markdown/json; writes to the chosen output file.",
     "aisp_benchmark_compare_runs": "Diffs two benchmark JSON files; CPU-bound and quick, writes only if an output is specified.",
@@ -375,10 +376,6 @@ def register_tool(name: str, description: str, schema: Dict[str, Any] = None):
             else:
                 # Treat any expanded kwargs as params dict for convenience.
                 call_params = kwargs or {}
-
-            # For test environments, avoid expensive side effects and simply echo the call.
-            if os.environ.get("PYTEST_CURRENT_TEST"):
-                return {"tool": name, "params": call_params}
 
             try:
                 return func(call_params)
@@ -613,6 +610,73 @@ def _run_bench_cli(args: List[str], timeout: Optional[int] = _BENCH_CLI_TIMEOUT)
             "timeout_hit": True,
             "duration_seconds": round(time.time() - started_at, 2),
         }
+
+
+_BENCH_RESULTS_MARKER = "JSON results saved to:"
+
+
+def _extract_bench_results_json(result: Dict[str, Any]) -> Optional[Path]:
+    """Best-effort extract the benchmark_test_results.json path from bench CLI output."""
+    if not isinstance(result, dict):
+        return None
+    for stream_key in ("stdout", "stderr"):
+        text = result.get(stream_key) or ""
+        if not isinstance(text, str):
+            continue
+        if _BENCH_RESULTS_MARKER not in text:
+            continue
+
+        # Rich logging can wrap long paths across lines; capture the marker tail and
+        # stitch the following non-empty lines until we reconstruct the .json path.
+        tail = text.rsplit(_BENCH_RESULTS_MARKER, 1)[1]
+        fragments: List[str] = []
+        candidate: Optional[str] = None
+        for line in tail.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            fragments.append(stripped)
+            stitched = "".join(fragments).strip().strip("\"'")
+            if "benchmark_test_results" not in stitched:
+                # Keep collecting until we reach the filename portion.
+                continue
+            if stitched.endswith(".json"):
+                candidate = stitched
+                break
+            if ".json" in stitched:
+                candidate = stitched.split(".json", 1)[0] + ".json"
+                break
+            if len(stitched) > 4096:
+                break
+
+        if not candidate:
+            continue
+
+        path = Path(candidate)
+        if not path.is_absolute():
+            path = (CODE_ROOT / path).resolve()
+        return path
+    return None
+
+
+def _attach_bench_artifact_paths(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach {results_json, run_dir} to a bench CLI result when discoverable."""
+    results_json = _extract_bench_results_json(result)
+    if not results_json:
+        return result
+
+    run_dir: Optional[Path] = None
+    try:
+        # Standard artifact layout: <artifacts_dir>/<run_id>/results/benchmark_test_results.json
+        run_dir = results_json.parent.parent
+    except Exception:
+        run_dir = None
+
+    enriched = dict(result)
+    enriched["results_json"] = str(results_json)
+    if run_dir:
+        enriched["run_dir"] = str(run_dir)
+    return enriched
 
 
 def _trim_value(value: Any, max_length: int = _PREVIEW_MAX_LENGTH, max_items: int = _PREVIEW_MAX_ITEMS) -> Any:
@@ -977,7 +1041,7 @@ def tool_system_dependencies(params: Dict[str, Any]) -> Dict[str, Any]:
     "aisp_run_benchmarks",
     "Tags: benchmarks, run, profiling, performance-test, chapters, labs, validation. "
     "Run benchmarks via the bench CLI with optional profiling and LLM analysis. "
-    "Returns: {stdout, stderr, returncode, duration_seconds, artifacts_path, suggested_next_steps}. "
+    "Returns: {stdout, stderr, returncode, duration_seconds, results_json (best-effort), run_dir (best-effort), suggested_next_steps}. "
     "⚠️ SLOW: 2-30+ minutes depending on targets. ALWAYS run aisp_status first! "
     "USE when: Validating optimizations, generating benchmark data for comparison. "
     "Example: \"Run ch07 benchmarks\" or \"Benchmark attention examples\". "
@@ -988,6 +1052,12 @@ def tool_system_dependencies(params: Dict[str, Any]) -> Dict[str, Any]:
     "4. aisp_run_benchmarks(targets=['ch07'], async=true) → run in background "
     "5. aisp_job_status(job_id=...) → poll until complete "
     "6. aisp_benchmark_triage → analyze results and get recommendations. "
+    "DEEP DIVE WORKFLOW (manual): "
+    "1) aisp_benchmark_targets → pick target like 'ch10:atomic_reduction' "
+    "2) aisp_run_benchmarks(targets=['ch10:atomic_reduction'], profile='deep_dive', artifacts_dir='artifacts/mcp-deep-dive') "
+    "3) aisp_benchmark_triage(data_file=results_json from step 2) "
+    "4) aisp_profile_compare / aisp_compare_nsys / aisp_compare_ncu (point at a profiles_dir that contains baseline+optimized .nsys-rep/.ncu-rep). "
+    "DEEP DIVE WORKFLOW (one-shot): use aisp_benchmark_deep_dive_compare for run+profile+diff in one call. "
     "WORKFLOW: aisp_status → aisp_list_chapters → aisp_run_benchmarks → aisp_benchmark_triage. "
     "NOT FOR: Quick GPU health (use aisp_hw_speed first).",
     {
@@ -999,6 +1069,18 @@ def tool_system_dependencies(params: Dict[str, Any]) -> Dict[str, Any]:
                 "description": "Profiling preset: none (no profiling), minimal (basic), deep_dive (full nsys/ncu profiling), or roofline",
                 "enum": ["none", "minimal", "deep_dive", "roofline"],
                 "default": "minimal"
+            },
+            "artifacts_dir": {
+                "type": "string",
+                "description": "Base directory for artifacts (bench creates a timestamped run dir underneath).",
+            },
+            "iterations": {
+                "type": "integer",
+                "description": "Override benchmark iterations (all targets).",
+            },
+            "warmup": {
+                "type": "integer",
+                "description": "Override warmup iterations (all targets).",
             },
             "llm_analysis": {
                 "type": "boolean",
@@ -1036,6 +1118,9 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
     # Normalize profile - uses _COMMON_ALIASES for most common mistakes
     raw_profile = params.get("profile") or "minimal"
     profile = normalize_param("profile", raw_profile, "minimal")
+    artifacts_dir = params.get("artifacts_dir")
+    iterations_param = params.get("iterations")
+    warmup_param = params.get("warmup")
 
     # Validate profile value
     valid_profiles = ["none", "minimal", "deep_dive", "roofline"]
@@ -1058,6 +1143,12 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
     cuda_check = _cuda_precheck()
 
     args: List[str] = ["run", "--profile", profile]
+    if artifacts_dir:
+        args.extend(["--artifacts-dir", str(artifacts_dir)])
+    if iterations_param is not None:
+        args.extend(["--iterations", str(int(iterations_param))])
+    if warmup_param is not None:
+        args.extend(["--warmup", str(int(warmup_param))])
     for t in targets:
         args.extend(["-t", t])
     # Add --llm-analysis only if explicitly enabled (costs API credits)
@@ -1091,7 +1182,9 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     def _execute_benchmarks():
-        return _run_bench_cli(args, timeout=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None)
+        return _attach_bench_artifact_paths(
+            _run_bench_cli(args, timeout=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None)
+        )
 
     if run_async:
         queued = _queue_job("aisp_run_benchmarks", _execute_benchmarks, params)
@@ -1148,6 +1241,244 @@ def _benchmark_next_steps(result: Dict[str, Any]) -> List[Dict[str, Any]]:
         })
 
     return steps
+
+
+@register_tool(
+    "aisp_benchmark_deep_dive_compare",
+    "Tags: benchmark, deep_dive, compare, baseline, optimized, nsys, ncu, torch, one-shot, workflow. "
+    "ONE-SHOT deep-dive workflow: run benchmarks with profile='deep_dive' AND return structured diffs from Nsight Systems + Nsight Compute (+ any available profiler artifacts). "
+    "Writes outputs under a timestamped run dir (output_dir/<timestamp>/...) and returns {run_dir, results_json, analysis_json} plus per-benchmark profiles_dir + followup_tool_calls for chaining. "
+    "Selection rule: for each example, compares baseline vs the best succeeded optimization by speedup (ties break arbitrarily); surfaces the chosen optimized file in the output. "
+    "Defaults: iterations=1, warmup=5 to keep deep profiling fast; override if you need more stable timing stats. "
+    "USE when: You want the common chain 'bench run → deep_dive profile → compare nsys+ncu' in one tool call. "
+    "Example: targets=['ch10:atomic_reduction'], output_dir='artifacts/mcp-deep-dive'. "
+    "Follow-ups: you can re-run the comparisons later by calling aisp_profile_compare / aisp_compare_nsys / aisp_compare_ncu with the returned profiles_dir.",
+    {
+        "type": "object",
+        "properties": with_context_params(
+            {
+                "targets": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Benchmark targets to run (chapter or chapter:example). Prefer a single example pair for clean diffs.",
+                },
+                "output_dir": {
+                    "type": "string",
+                    "description": "Base directory for artifacts; a timestamped run dir is created inside.",
+                    "default": "artifacts/mcp-deep-dive",
+                },
+                "iterations": {
+                    "type": "integer",
+                    "description": "Override benchmark iterations (default 1 for profiling).",
+                    "default": 1,
+                },
+                "warmup": {
+                    "type": "integer",
+                    "description": "Override warmup iterations (default 5).",
+                    "default": 5,
+                },
+                "async": {
+                    "type": "boolean",
+                    "description": "Run in background and return job_id; poll with aisp_job_status",
+                    "default": False,
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "description": "Max runtime for the full run+analysis; set 0/null for no timeout.",
+                    "default": 0,
+                },
+            }
+        ),
+        "required": ["targets"],
+    },
+)
+def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Run deep_dive benchmarks and produce LLM-friendly baseline-vs-optimized profiler diffs."""
+    import shutil
+
+    from core import profile_insights
+
+    include_context, context_level = extract_context_opts(params)
+    targets = params.get("targets") or []
+    output_dir = params.get("output_dir") or "artifacts/mcp-deep-dive"
+    iterations = params.get("iterations", 1)
+    warmup = params.get("warmup", 5)
+    run_async = bool(params.get("async", False))
+    timeout_param = params.get("timeout_seconds")
+    timeout_seconds = None if timeout_param is None else int(timeout_param)
+
+    if not targets:
+        return make_error("targets is required", include_context, context_level)
+
+    def _run_and_analyze() -> Dict[str, Any]:
+        # Run bench with deep_dive profiling into output_dir/<timestamp>/...
+        bench_params = {
+            "targets": targets,
+            "profile": "deep_dive",
+            "artifacts_dir": output_dir,
+            "iterations": iterations,
+            "warmup": warmup,
+            # Explicitly disable LLM analysis; caller can run it separately if desired.
+            "llm_analysis": False,
+            "apply_patches": False,
+            "timeout_seconds": timeout_seconds,
+        }
+
+        bench_result = tool_run_benchmarks(bench_params)
+        bench_result = _attach_bench_artifact_paths(bench_result)
+
+        results_json = bench_result.get("results_json")
+        run_dir = bench_result.get("run_dir")
+
+        if bench_result.get("returncode", 0) != 0:
+            return {
+                "error": "bench run failed",
+                "bench_result": {k: v for k, v in bench_result.items() if k not in {"stdout", "stderr"}},
+                "results_json": results_json,
+                "run_dir": run_dir,
+                "success": False,
+            }
+
+        if not results_json or not run_dir:
+            return {
+                "error": "bench run succeeded but results_json/run_dir could not be discovered from output",
+                "bench_result": {k: v for k, v in bench_result.items() if k not in {"stdout", "stderr"}},
+                "success": False,
+            }
+
+        results_path = Path(str(results_json))
+        run_dir_path = Path(str(run_dir))
+        analysis_path = run_dir_path / "reports" / "deep_dive_compare.json"
+        analysis_path.parent.mkdir(parents=True, exist_ok=True)
+
+        raw = json.loads(results_path.read_text())
+        chapters = raw.get("results", []) if isinstance(raw, dict) else []
+
+        benchmark_analyses: List[Dict[str, Any]] = []
+        for chapter_entry in chapters:
+            if not isinstance(chapter_entry, dict):
+                continue
+            chapter = chapter_entry.get("chapter", "")
+            for bench in chapter_entry.get("benchmarks", []) or []:
+                if not isinstance(bench, dict):
+                    continue
+                example = bench.get("example", "")
+                optimizations = bench.get("optimizations", []) or []
+
+                # Select best succeeded optimization by speedup.
+                succeeded = [o for o in optimizations if isinstance(o, dict) and o.get("status") == "succeeded"]
+                if not succeeded:
+                    benchmark_analyses.append(
+                        {
+                            "chapter": chapter,
+                            "example": example,
+                            "status": "no_succeeded_optimized_variant",
+                            "note": "No succeeded optimizations; no baseline-vs-optimized profile diff available.",
+                        }
+                    )
+                    continue
+
+                def _speedup(o: Dict[str, Any]) -> float:
+                    try:
+                        return float(o.get("speedup", 0) or 0)
+                    except Exception:
+                        return 0.0
+
+                best_opt = max(succeeded, key=_speedup)
+
+                baseline_paths = {
+                    "nsys": bench.get("baseline_nsys_rep"),
+                    "ncu": bench.get("baseline_ncu_rep"),
+                    "torch": bench.get("baseline_torch_trace"),
+                }
+                optimized_paths = {
+                    "nsys": best_opt.get("optimized_nsys_rep"),
+                    "ncu": best_opt.get("optimized_ncu_rep"),
+                    "torch": best_opt.get("optimized_torch_trace"),
+                }
+
+                def _copy_profile(rel_path: Optional[str], dst_dir: Path) -> Optional[str]:
+                    if not rel_path:
+                        return None
+                    src = Path(rel_path)
+                    if not src.is_absolute():
+                        src = CODE_ROOT / src
+                    if not src.exists():
+                        return None
+                    dst_dir.mkdir(parents=True, exist_ok=True)
+                    dst = dst_dir / src.name
+                    shutil.copy2(src, dst)
+                    return str(dst)
+
+                safe_chapter = str(chapter).replace("/", "_") if chapter else "unknown_chapter"
+                safe_example = str(example).replace("/", "_") if example else "unknown_example"
+                profiles_dir = run_dir_path / "profiles" / f"{safe_chapter}__{safe_example}"
+
+                copied = {
+                    "baseline_nsys_rep": _copy_profile(baseline_paths["nsys"], profiles_dir),
+                    "optimized_nsys_rep": _copy_profile(optimized_paths["nsys"], profiles_dir),
+                    "baseline_ncu_rep": _copy_profile(baseline_paths["ncu"], profiles_dir),
+                    "optimized_ncu_rep": _copy_profile(optimized_paths["ncu"], profiles_dir),
+                    "baseline_torch_trace": _copy_profile(baseline_paths["torch"], profiles_dir),
+                    "optimized_torch_trace": _copy_profile(optimized_paths["torch"], profiles_dir),
+                }
+
+                # Run comparisons on the per-benchmark profiles_dir (contains only this pair).
+                nsys_comparison = profile_insights.compare_nsys_files(profiles_dir) if profiles_dir.exists() else None
+                ncu_comparison = profile_insights.compare_ncu_files(profiles_dir) if profiles_dir.exists() else None
+                profile_compare = profile_insights.generate_flamegraph_comparison(profiles_dir) if profiles_dir.exists() else None
+
+                followup_tool_calls = [
+                    {"tool": "aisp_profile_compare", "params": {"profiles_dir": str(profiles_dir)}},
+                    {"tool": "aisp_compare_nsys", "params": {"profiles_dir": str(profiles_dir)}},
+                    {"tool": "aisp_compare_ncu", "params": {"profiles_dir": str(profiles_dir)}},
+                ]
+
+                benchmark_analyses.append(
+                    {
+                        "chapter": chapter,
+                        "example": example,
+                        "baseline_time_ms": bench.get("baseline_time_ms"),
+                        "optimized_time_ms": best_opt.get("time_ms"),
+                        "speedup": best_opt.get("speedup"),
+                        "selected_optimized": {
+                            "file": best_opt.get("file"),
+                            "technique": best_opt.get("technique"),
+                        },
+                        "profiles_dir": str(profiles_dir),
+                        "copied_profiles": copied,
+                        "nsys_comparison": nsys_comparison,
+                        "ncu_comparison": ncu_comparison,
+                        "profile_compare": profile_compare,
+                        "followup_tool_calls": followup_tool_calls,
+                    }
+                )
+
+        analysis = {
+            "run_dir": str(run_dir_path),
+            "results_json": str(results_path),
+            "targets": targets,
+            "benchmarks": benchmark_analyses,
+        }
+        analysis_path.write_text(json.dumps(analysis, indent=2, default=str))
+
+        return {
+            "run_dir": str(run_dir_path),
+            "results_json": str(results_path),
+            "analysis_json": str(analysis_path),
+            "benchmarks": benchmark_analyses,
+            "success": True,
+        }
+
+    if run_async:
+        queued = _queue_job("aisp_benchmark_deep_dive_compare", _run_and_analyze, params)
+        queued["output_dir"] = output_dir
+        queued["targets"] = targets
+        queued["note"] = "Background deep-dive started; poll with aisp_job_status using job_id."
+        return queued
+
+    result = _run_and_analyze()
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
@@ -2117,7 +2448,7 @@ def tool_profile_roofline(params: Dict[str, Any]) -> Dict[str, Any]:
     "Returns: {speedup, cuda_api_comparison, kernel_breakdown, flame_diff, html_output (if requested)}. "
     "USE when: Understanding optimization impact visually, presenting before/after comparison. "
     "Example: \"Compare baseline vs optimized streams profiles\" or \"Why is the optimized code faster?\". "
-    "Provide chapter (e.g., 'ch11') OR profiles_dir path. Outputs interactive HTML if output_html set. 🕐 MEDIUM (~5s). WORKFLOW: profile baseline → optimize → aisp_profile_compare. NOT FOR: Raw comparison (use aisp_compare_nsys/ncu).",
+    "Provide chapter (e.g., 'ch11') OR profiles_dir path (for example, benchmarks[].profiles_dir from aisp_benchmark_deep_dive_compare). Outputs interactive HTML if output_html set. 🕐 MEDIUM (~5s). WORKFLOW: profile baseline → optimize → aisp_profile_compare. NOT FOR: Raw comparison (use aisp_compare_nsys/ncu).",
     {"type": "object", "properties": with_context_params({
         "chapter": {
             "type": "string",
@@ -3589,7 +3920,7 @@ def tool_gpu_topology_matrix(params: Dict[str, Any]) -> Dict[str, Any]:
     "Tags: compare, nsys, nsight-systems, baseline, optimized, diff. "
     "Compare baseline vs optimized Nsight Systems reports. "
     "Returns: {speedup, baseline_metrics, optimized_metrics, kernel_comparison}. "
-    "🕐 MEDIUM (~5s). USE when: Comparing before/after nsys profiles. WORKFLOW: aisp_profile_nsys → optimize → aisp_compare_nsys. NOT FOR: Kernel metrics (use aisp_compare_ncu).",
+    "🕐 MEDIUM (~5s). USE when: Comparing before/after nsys profiles. Tip: if you used aisp_benchmark_deep_dive_compare, pass benchmarks[].profiles_dir here. WORKFLOW: aisp_profile_nsys → optimize → aisp_compare_nsys. NOT FOR: Kernel metrics (use aisp_compare_ncu).",
     {"type": "object", "properties": with_context_params({
         "profiles_dir": {"type": "string", "description": "Directory with baseline/optimized .nsys-rep files"},
     }), "required": ["profiles_dir"]}
@@ -3616,7 +3947,7 @@ def tool_compare_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
     "Tags: compare, ncu, nsight-compute, baseline, optimized, kernel-metrics. "
     "Compare baseline vs optimized Nsight Compute kernel metrics. "
     "Returns: {kernel_comparison: [{kernel, baseline_metrics, optimized_metrics}]}. "
-    "🕐 MEDIUM (~5s). USE when: Deep-diving into kernel-level improvements. WORKFLOW: aisp_profile_ncu → optimize → aisp_compare_ncu. NOT FOR: Timeline comparison (use aisp_compare_nsys).",
+    "🕐 MEDIUM (~5s). USE when: Deep-diving into kernel-level improvements. Tip: if you used aisp_benchmark_deep_dive_compare, pass benchmarks[].profiles_dir here. WORKFLOW: aisp_profile_ncu → optimize → aisp_compare_ncu. NOT FOR: Timeline comparison (use aisp_compare_nsys).",
     {"type": "object", "properties": with_context_params({
         "profiles_dir": {"type": "string", "description": "Directory with baseline/optimized .ncu-rep files"},
     }), "required": ["profiles_dir"]}
@@ -4211,6 +4542,7 @@ def tool_tools_probe_hw(params: Dict[str, Any]) -> Dict[str, Any]:
     "• 'slow training' → aisp_analyze_bottlenecks, aisp_profile_nsys, aisp_recommend "
     "• 'multi-GPU setup' → aisp_distributed_plan, aisp_gpu_topology, aisp_launch_plan "
     "• 'vLLM latency' → aisp_inference_vllm, aisp_inference_quantization "
+    "• 'deep dive baseline vs optimized (nsys+ncu)' → aisp_benchmark_deep_dive_compare "
     "• 'compare profiles' → aisp_compare_nsys, aisp_profile_compare. "
     "WORKFLOW: aisp_suggest_tools → use suggested tools. "
     "NOT FOR: Direct answers (use aisp_ask), getting started (use aisp_triage).",
@@ -4227,6 +4559,20 @@ def tool_suggest_tools(params: Dict[str, Any]) -> Dict[str, Any]:
     include_context, context_level = extract_context_opts(params)
 
     rules = [
+        {
+            "tool": "aisp_benchmark_deep_dive_compare",
+            "keywords": [
+                "deep_dive",
+                "deep dive",
+                "deep-dive",
+                "baseline vs optimized",
+                "nsys+ncu",
+                "nsys and ncu",
+                "nsight systems and compute",
+                "profile diff",
+            ],
+            "reason": "One-shot: run benchmark with deep_dive profiling and return baseline-vs-optimized diffs (nsys+ncu+torch)",
+        },
         {
             "tool": "aisp_analyze_bottlenecks",
             "keywords": ["slow", "latency", "bottleneck", "utilization", "stall", "idle", "regression", "throughput drop"],

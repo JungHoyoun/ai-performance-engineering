@@ -523,57 +523,112 @@ if TYPER_AVAILABLE:
         from core.benchmark.verify_runner import VerifyRunner, VerifyConfig
         from core.benchmark.verification import EnforcementPhase, QuarantineReason, get_enforcement_phase
         from core.benchmark.quarantine import QuarantineManager
-        from core.discovery import discover_benchmarks
+        from core.discovery import chapter_slug, discover_benchmarks
         import importlib.util
-        
+        import hashlib
+
         active_bench_root = Path(bench_root).resolve() if bench_root else repo_root
-        
+
         # Set enforcement phase
         os.environ["VERIFY_ENFORCEMENT_PHASE"] = verify_phase.lower()
         phase = get_enforcement_phase()
-        
+
         # Initialize verification components
         cache_dir = active_bench_root / "artifacts" / "verify_cache"
         quarantine_mgr = QuarantineManager(cache_dir=cache_dir)
-        
+
         if clear_cache:
             import shutil
+
             golden_cache = cache_dir / "golden_outputs"
             if golden_cache.exists():
                 shutil.rmtree(golden_cache)
                 typer.echo(f"🗑️  Cleared golden output cache: {golden_cache}")
-        
+
         verify_config = VerifyConfig(
             skip_jitter_check=skip_jitter,
             skip_fresh_input_check=skip_fresh_input,
+            skip_workload_check=skip_workload,
             seed=42,
         )
         verify_runner = VerifyRunner(
             cache_dir=cache_dir / "golden_outputs",
             quarantine_manager=quarantine_mgr,
         )
-        
-        # Resolve targets
+
+        # Resolve targets (chapters + per-chapter example filters)
         effective_targets = targets if targets else ["all"]
-        chapters_dict = discover_all_chapters(active_bench_root)
-        resolved = resolve_target_chapters(effective_targets, chapters_dict)
-        
+        chapter_dirs, chapter_filters = resolve_target_chapters(
+            effective_targets,
+            bench_root=active_bench_root,
+            repo_root=active_bench_root,
+        )
+
         results = []
         passed_count = 0
         failed_count = 0
         skipped_count = 0
-        
-        for chapter_slug_name, chapter_data in resolved.items():
-            chapter_dir = chapter_data.get("chapter_dir")
-            if not chapter_dir:
-                continue
-            
+
+        def _load_benchmark_module(path: Path):
+            """Load a Python benchmark module by path."""
+            mod_id = hashlib.md5(str(path).encode()).hexdigest()[:12]
+            spec = importlib.util.spec_from_file_location(f"aisp_verify_{mod_id}", path)
+            if spec is None or spec.loader is None:
+                raise ImportError(f"Could not load spec for {path}")
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+
+        def _load_benchmark(path: Path):
+            mod = _load_benchmark_module(path)
+            get_benchmark = getattr(mod, "get_benchmark", None)
+            if not callable(get_benchmark):
+                raise AttributeError(f"{path.name} is missing get_benchmark()")
+            return get_benchmark()
+
+        def _format_reason(reason: object) -> str:
+            if reason is None:
+                return "unknown"
+            value = getattr(reason, "value", None)
+            if value is not None:
+                return str(value)
+            return str(reason)
+
+        def _to_quarantine_reason(reason: object) -> Optional[QuarantineReason]:
+            if isinstance(reason, QuarantineReason):
+                return reason
+            value = getattr(reason, "value", None)
+            if isinstance(value, str):
+                try:
+                    return QuarantineReason(value)
+                except Exception:
+                    return None
+            if isinstance(reason, str):
+                try:
+                    return QuarantineReason(reason)
+                except Exception:
+                    return None
+            return None
+
+        def _dedup_paths(paths: List[Path]) -> List[Path]:
+            seen = set()
+            out: List[Path] = []
+            for p in paths:
+                if p not in seen:
+                    out.append(p)
+                    seen.add(p)
+            return out
+
+        for chapter_dir in chapter_dirs:
+            chapter_slug_name = chapter_slug(chapter_dir, active_bench_root, bench_root=active_bench_root)
+            allowed_examples = chapter_filters.get(chapter_slug_name, set())
+
             typer.echo(f"\n{'='*60}")
             typer.echo(f"📋 Verifying {chapter_slug_name}")
             typer.echo(f"{'='*60}")
-            
+
             try:
-                pairs = discover_benchmarks(Path(chapter_dir))
+                pairs = discover_benchmarks(chapter_dir)
             except Exception as e:
                 typer.echo(f"  ⚠️  Could not find benchmark pairs: {e}")
                 skipped_count += 1
@@ -583,7 +638,7 @@ if TYPER_AVAILABLE:
                     "reason": str(e),
                 })
                 continue
-            
+
             if not pairs:
                 typer.echo(f"  ⏭️  No benchmark pairs found")
                 skipped_count += 1
@@ -593,92 +648,68 @@ if TYPER_AVAILABLE:
                     "reason": "No benchmark pairs found",
                 })
                 continue
-            
-            def _load_benchmark_module(path: Path):
-                """Load a Python benchmark module by path."""
-                spec = importlib.util.spec_from_file_location(path.stem, path)
-                if spec is None or spec.loader is None:
-                    raise ImportError(f"Could not load spec for {path}")
-                mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mod)
-                return mod
 
-            def _format_reason(reason: object) -> str:
-                if reason is None:
-                    return "unknown"
-                value = getattr(reason, "value", None)
-                if value is not None:
-                    return str(value)
-                return str(reason)
-
-            def _to_quarantine_reason(reason: object) -> Optional[QuarantineReason]:
-                if isinstance(reason, QuarantineReason):
-                    return reason
-                value = getattr(reason, "value", None)
-                if isinstance(value, str):
-                    try:
-                        return QuarantineReason(value)
-                    except Exception:
-                        return None
-                if isinstance(reason, str):
-                    try:
-                        return QuarantineReason(reason)
-                    except Exception:
-                        return None
-                return None
-            
+            # De-dupe alias pairs: discover_benchmarks() yields both canonical entries (one baseline to N optimized)
+            # and per-variant alias entries. For verification we run the baseline once per file and validate only
+            # the selected optimized variants.
+            grouped: Dict[Path, Dict[str, object]] = {}
             for baseline_path, optimized_paths, example_name in pairs:
-                # Verify baseline once, then verify all optimized variants against cached golden output.
+                base_example = baseline_path.stem.replace("baseline_", "", 1)
+                group = grouped.setdefault(
+                    baseline_path,
+                    {
+                        "base_example": base_example,
+                        "optimized_paths": [],
+                        "alias_map": {},
+                    },
+                )
+                if example_name == base_example:
+                    group["optimized_paths"] = optimized_paths
+                else:
+                    alias_map = group.get("alias_map", {})
+                    if isinstance(alias_map, dict) and optimized_paths:
+                        alias_map[example_name] = optimized_paths[0]
+
+            for baseline_path in sorted(grouped.keys(), key=lambda p: p.as_posix()):
+                group = grouped[baseline_path]
+                base_example = str(group.get("base_example", baseline_path.stem.replace("baseline_", "", 1)))
+                canonical_opts = list(group.get("optimized_paths", []))  # type: ignore[list-item]
+                if not canonical_opts:
+                    continue
+
+                selected_opts: List[Path]
+                if not allowed_examples:
+                    selected_opts = canonical_opts
+                elif base_example in allowed_examples:
+                    selected_opts = canonical_opts
+                else:
+                    alias_map = group.get("alias_map", {})
+                    selected_opts = []
+                    if isinstance(alias_map, dict):
+                        for example in sorted(allowed_examples):
+                            opt_path = alias_map.get(example)
+                            if isinstance(opt_path, Path):
+                                selected_opts.append(opt_path)
+
+                selected_opts = _dedup_paths(selected_opts)
+                if not selected_opts:
+                    continue
+
                 try:
-                    baseline_mod = _load_benchmark_module(baseline_path)
+                    baseline = _load_benchmark(baseline_path)
                 except Exception as e:
-                    for optimized_path in optimized_paths:
-                        pair_name = f"{example_name}/{optimized_path.stem.replace('optimized_', '')}"
+                    for optimized_path in selected_opts:
+                        pair_name = f"{base_example}/{optimized_path.stem.replace('optimized_', '')}"
                         typer.echo(f"\n  🔍 {pair_name}:")
                         typer.echo(f"      Baseline:  {baseline_path.name}")
                         typer.echo(f"      Optimized: {optimized_path.name}")
-                        typer.echo(f"      ❌ ERROR: Failed to load baseline module: {e}")
+                        typer.echo(f"      ❌ ERROR: Failed to load baseline benchmark: {e}")
                         failed_count += 1
                         results.append({
                             "chapter": chapter_slug_name,
                             "pair": pair_name,
                             "status": "error",
-                            "reason": f"Failed to load baseline module: {e}",
-                        })
-                    continue
-
-                baseline_cls = getattr(baseline_mod, "Benchmark", None)
-                if not baseline_cls:
-                    for optimized_path in optimized_paths:
-                        pair_name = f"{example_name}/{optimized_path.stem.replace('optimized_', '')}"
-                        typer.echo(f"\n  🔍 {pair_name}:")
-                        typer.echo(f"      Baseline:  {baseline_path.name}")
-                        typer.echo(f"      Optimized: {optimized_path.name}")
-                        typer.echo("      ❌ Missing Benchmark class (baseline)")
-                        failed_count += 1
-                        results.append({
-                            "chapter": chapter_slug_name,
-                            "pair": pair_name,
-                            "status": "failed",
-                            "reason": "Missing Benchmark class (baseline)",
-                        })
-                    continue
-
-                try:
-                    baseline = baseline_cls()
-                except Exception as e:
-                    for optimized_path in optimized_paths:
-                        pair_name = f"{example_name}/{optimized_path.stem.replace('optimized_', '')}"
-                        typer.echo(f"\n  🔍 {pair_name}:")
-                        typer.echo(f"      Baseline:  {baseline_path.name}")
-                        typer.echo(f"      Optimized: {optimized_path.name}")
-                        typer.echo(f"      ❌ ERROR: Failed to instantiate baseline: {e}")
-                        failed_count += 1
-                        results.append({
-                            "chapter": chapter_slug_name,
-                            "pair": pair_name,
-                            "status": "error",
-                            "reason": f"Failed to instantiate baseline: {e}",
+                            "reason": f"Failed to load baseline benchmark: {e}",
                         })
                     continue
 
@@ -692,12 +723,12 @@ if TYPER_AVAILABLE:
                         if qr is not None:
                             quarantine_mgr.quarantine(str(baseline_path), qr)
 
-                for optimized_path in optimized_paths:
-                    pair_name = f"{example_name}/{optimized_path.stem.replace('optimized_', '')}"
+                for optimized_path in selected_opts:
+                    pair_name = f"{base_example}/{optimized_path.stem.replace('optimized_', '')}"
                     typer.echo(f"\n  🔍 {pair_name}:")
                     typer.echo(f"      Baseline:  {baseline_path.name}")
                     typer.echo(f"      Optimized: {optimized_path.name}")
-                    
+
                     try:
                         if not baseline_result.passed:
                             status = "skipped" if baseline_skipped else "failed"
@@ -715,23 +746,18 @@ if TYPER_AVAILABLE:
                             })
                             continue
 
-                        # Load optimized benchmark
-                        optimized_mod = _load_benchmark_module(optimized_path)
-                        
-                        optimized_cls = getattr(optimized_mod, "Benchmark", None)
-                        
-                        if not optimized_cls:
-                            typer.echo(f"      ❌ Missing Benchmark class")
+                        try:
+                            optimized = _load_benchmark(optimized_path)
+                        except Exception as e:
+                            typer.echo(f"      ❌ ERROR: Failed to load optimized benchmark: {e}")
                             failed_count += 1
                             results.append({
                                 "chapter": chapter_slug_name,
                                 "pair": pair_name,
-                                "status": "failed",
-                                "reason": "Missing Benchmark class",
+                                "status": "error",
+                                "reason": f"Failed to load optimized benchmark: {e}",
                             })
                             continue
-                        
-                        optimized = optimized_cls()
 
                         # Validate timing config matches (anti-gaming)
                         if not verify_config.skip_timing_validation:
@@ -754,7 +780,7 @@ if TYPER_AVAILABLE:
 
                         # Run verification (baseline golden output already cached)
                         result = verify_runner.verify_optimized(optimized, config=verify_config)
-                        
+
                         if result.passed:
                             typer.echo(f"      ✅ PASSED")
                             passed_count += 1
@@ -781,13 +807,13 @@ if TYPER_AVAILABLE:
                                 "reason": reason_str,
                                 "details": result.details,
                             })
-                            
+
                             # Quarantine if in quarantine or gate phase
                             if (not is_skipped) and phase in (EnforcementPhase.QUARANTINE, EnforcementPhase.GATE):
                                 qr = _to_quarantine_reason(result.reason)
                                 if qr is not None:
                                     quarantine_mgr.quarantine(str(optimized_path), qr)
-                    
+
                     except Exception as e:
                         typer.echo(f"      ❌ ERROR: {e}")
                         if verbose:

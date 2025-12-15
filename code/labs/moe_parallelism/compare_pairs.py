@@ -1,23 +1,13 @@
-"""Compare baseline/optimized plan metrics for key pairs."""
+"""Compare baseline/optimized plan metrics for key pairs (tool helper)."""
 
 from __future__ import annotations
 
-import importlib
-from typing import List, Tuple
+from typing import List
 
-import sys
-from pathlib import Path
+from labs.moe_parallelism.plan import PlanEvaluator, format_report  # noqa: E402
+from labs.moe_parallelism.scenarios import get_scenario_pairs  # noqa: E402
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from labs.moe_parallelism.plan import PlanEvaluator, format_report
-
-PAIRS: List[Tuple[str, str]] = [
-    ("labs.moe_parallelism.baseline_gpt_gb200", "labs.moe_parallelism.optimized_gpt_gb200"),
-    ("labs.moe_parallelism.baseline_deepseek_gb200", "labs.moe_parallelism.optimized_deepseek_gb200"),
-]
+SCENARIOS: List[str] = ["gpt_gb200", "deepseek_gb200"]
 
 METRIC_FIELDS = [
     ("step_ms", "estimated_step_ms"),
@@ -31,12 +21,11 @@ METRIC_FIELDS = [
 ]
 
 
-def _load(plan_module: str):
-    mod = importlib.import_module(plan_module)
-    plan = mod.build_plan()  # type: ignore[attr-defined]
-    cluster = mod.CLUSTER  # type: ignore[attr-defined]
-    model = mod.MODEL  # type: ignore[attr-defined]
-    evaluator = PlanEvaluator(cluster, model)
+def _load(scenario_name: str, variant: str):
+    scenarios = get_scenario_pairs()
+    scenario = scenarios[scenario_name]
+    evaluator = PlanEvaluator(scenario.cluster, scenario.model)
+    plan = scenario.baseline if variant == "baseline" else scenario.optimized
     return evaluator.analyze(plan)
 
 
@@ -50,11 +39,10 @@ def _fmt(val: float, key: str) -> str:
     return f"{val:.3f}"
 
 
-def compare_pair(baseline: str, optimized: str) -> None:
-    base_report = _load(baseline)
-    opt_report = _load(optimized)
-    name = optimized.split(".")[-1].replace("optimized_", "")
-    print(f"\n=== {name} ===")
+def compare_pair(scenario_name: str) -> None:
+    base_report = _load(scenario_name, "baseline")
+    opt_report = _load(scenario_name, "optimized")
+    print(f"\n=== {scenario_name} ===")
     print(format_report(base_report))
     print("---")
     print(format_report(opt_report))
@@ -72,8 +60,8 @@ def compare_pair(baseline: str, optimized: str) -> None:
 
 
 def main() -> None:
-    for baseline, optimized in PAIRS:
-        compare_pair(baseline, optimized)
+    for scenario in SCENARIOS:
+        compare_pair(scenario)
 
 
 if __name__ == "__main__":

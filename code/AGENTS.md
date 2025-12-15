@@ -3,6 +3,15 @@
 ## BE EFFICIENT AND ASK QUESTIONS AT KEY DECISION POINTS
 - Instead of forging ahead and performing a lot of changes, ask me questions if you are unsure or just want re-assurance that your approach is valid.
 
+## Safety (CRITICAL)
+- DO NOT run destructive git commands in this repo (including `git restore`, `git checkout`, `git reset --hard`, `git revert`, or mass file deletions) unless I explicitly ask.
+- If you need to recover a tracked file, reconstruct it from `git show HEAD:<path>` and write it back to disk instead of using destructive git operations.
+
+## Test Realism (CRITICAL)
+- Tests MUST NOT use `precheck_only`, `dry_run`, `estimate_only`, or any other short-circuit/preview mode.
+- Tests MUST NOT use mocks, stubs, `monkeypatch`, or similar; tests must execute real code paths end-to-end.
+- Assume CI has real network access, GPUs, and Nsight tools (`nsys`, `ncu`) available; tests should validate real behavior accordingly.
+
 ## Achieve MAXIMUM speedup when benchmarking baseline_ versus optimized_ variants when possible
 - For any speedups <1.05x, we must improve in a natural manner utilizing hardware, software, and algorithmic speedups.  
 - Both the baseline and the optimized variants need to equivalent workloads.  Perhaps we need to increase the workloads to demonstrate the speedup?  
@@ -51,6 +60,8 @@
 The table below documents known issues that can cause benchmark results to be misleading, along with their protections. Use this as a checklist when creating or reviewing benchmarks. DO NOT ALLOW THESE IN OUR BENCHMARKS.
 
 **✅ All 94 validity issues are now protected by our harness**
+
+**CUDA Graph Note:** Capturing CUDA graphs in `setup()` is allowed for steady-state replay benchmarks (we intentionally measure replay, not capture). It is NOT allowed to precompute and reuse the final output from `setup()`; the output used for verification must come from the timed `benchmark_fn()` run and be surfaced via `capture_verification_payload()`.
 
 | Category | Issue | What Happens | Protection | Status | Real-World Incident |
 |----------|-------|--------------|------------|--------|---------------------|

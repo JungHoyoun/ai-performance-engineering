@@ -31,12 +31,10 @@ Speedup ≈ 1 / (1 - acceptance_rate + acceptance_rate/draft_length)
 
 ## Files
 
-Currently a placeholder lab. Implementation coming soon.
-
-Planned files:
-- `baseline_autoregressive.py` - Standard token-by-token generation
-- `optimized_speculative.py` - Draft-verify speculative decoding
-- `draft_models.py` - Small draft model implementations
+Implemented:
+- `baseline_speculative_decode.py`: target-only greedy decode
+- `optimized_speculative_decode.py`: draft proposals + batched target verification
+- `speculative_decode_common.py`: toy model + workload helpers
 
 ## Algorithm
 
@@ -68,6 +66,14 @@ def speculative_decode(draft_model, target_model, prompt, max_tokens):
     return tokens
 ```
 
+## Notes on Model Choice
+
+This lab uses a simple token-local `TokenMLP` to keep the benchmark deterministic
+and focused on speculative decoding mechanics. The draft model is constructed by
+slicing the target weights; scaling the target's tail hidden dimensions makes
+the draft approximation accurate (high acceptance rate) without requiring any
+training work during `setup()`.
+
 ## When to Use
 
 ✅ **Good for**:
@@ -90,6 +96,5 @@ def speculative_decode(draft_model, target_model, prompt, max_tokens):
 
 - [Fast Inference from Transformers via Speculative Decoding](https://arxiv.org/abs/2211.17192) (Leviathan et al., 2022)
 - [SpecInfer: Accelerating LLM Serving](https://arxiv.org/abs/2305.09781) (Miao et al., 2023)
-
 
 

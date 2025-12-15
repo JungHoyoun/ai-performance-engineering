@@ -4,7 +4,7 @@ This directory contains both the MCP server implementation and a robust client l
 
 ## Files
 
-- `mcp_server.py` - MCP server with 79+ tools for AI performance engineering
+- `mcp_server.py` - MCP server with 80+ tools for AI performance engineering
 - `mcp_client.py` - Robust client implementation with proper message ID tracking
 - `tool_generator.py` - Tool generation utilities
 
@@ -19,6 +19,34 @@ python -m mcp.mcp_server --serve
 # List available tools
 python -m mcp.mcp_server --list
 ```
+
+## Common Workflow: Baseline vs Optimized Deep-Dive Compare
+
+This is the standard "run → deep_dive profile → compare baseline vs optimized (nsys+ncu)" chain.
+
+### One-shot (recommended)
+
+Call the single MCP tool `aisp_benchmark_deep_dive_compare`:
+
+```json
+{
+  "targets": ["ch10:atomic_reduction"],
+  "output_dir": "artifacts/mcp-deep-dive",
+  "async": true
+}
+```
+
+Then poll `aisp_job_status` until complete and read:
+- `run_dir`, `results_json`, `analysis_json`
+- `benchmarks[]` entries, each with `profiles_dir` and `followup_tool_calls` (ready-to-run chaining inputs)
+
+### Manual chaining (explicit steps)
+
+1. Discover targets: `aisp_benchmark_targets`
+2. Run: `aisp_run_benchmarks` with `profile=\"deep_dive\"` and an `artifacts_dir`
+3. If async: poll with `aisp_job_status`
+4. Analyze benchmark results: `aisp_benchmark_triage` using the returned `results_json`
+5. Compare profiles: `aisp_profile_compare`, `aisp_compare_nsys`, `aisp_compare_ncu`
 
 ### Client
 
@@ -106,7 +134,7 @@ client = RobustMCPClient(
          ↓
 ┌─────────────────┐
 │ PerformanceEngine│  ← Core functionality
-│  (79+ tools)    │
+│  (80+ tools)    │
 └─────────────────┘
 ```
 
@@ -121,4 +149,3 @@ The robust client handles this automatically. If using a custom client:
 4. Reset on reconnection
 
 See `docs/mcp_client_guide.md` for details.
-

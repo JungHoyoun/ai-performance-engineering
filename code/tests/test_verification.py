@@ -560,6 +560,27 @@ class TestGoldenOutputCache:
         retrieved = cache.get("abc123")
         assert retrieved is not None
         assert torch.allclose(retrieved.outputs["output"], golden.outputs["output"])
+
+    def test_cache_put_and_get_bfloat16(self, temp_cache_dir):
+        """Test bf16-safe golden output caching."""
+        cache = GoldenOutputCache(temp_cache_dir)
+
+        output = torch.randn(8, dtype=torch.bfloat16)
+        golden = GoldenOutput(
+            signature_hash="bf16",
+            outputs={"output": output},
+            workload_metrics={"tokens_per_iteration": 8.0},
+            checksum="",
+            created_at=datetime.now(),
+            seed=42,
+        )
+        golden.checksum = golden.compute_checksum()
+
+        cache.put(golden)
+        retrieved = cache.get("bf16")
+        assert retrieved is not None
+        assert retrieved.outputs["output"].dtype == torch.bfloat16
+        assert torch.equal(retrieved.outputs["output"], output)
     
     def test_cache_has(self, temp_cache_dir):
         """Test checking cache existence."""
@@ -609,9 +630,13 @@ class MockWorkloadMetadata:
     """Mock workload metadata for testing."""
     
     def __init__(self):
-        self.bytes_per_iter = 1024
-        self.tokens_per_iter = None
-        self.flops_per_iter = 2048
+        self.requests_per_iteration = 1.0
+        self.tokens_per_iteration = None
+        self.samples_per_iteration = None
+        self.bytes_per_iteration = 1024
+        self.custom_units_per_iteration = None
+        self.custom_unit_name = None
+        self.goodput = None
 
 
 class MockBenchmark:
@@ -698,6 +723,53 @@ class TestVerifyRunner:
         
         assert result.passed is True
         assert result.signature_hash is not None
+
+    def test_signature_validation_ignores_payload_output(self, temp_dirs):
+        """Benchmarks using VerificationPayloadMixin include 'output' in signature; input validation must ignore it."""
+        from core.benchmark.verification_mixin import VerificationPayloadMixin
+        from core.harness.benchmark_harness import WorkloadMetadata
+
+        class PayloadBenchmark(VerificationPayloadMixin):
+            def __init__(self):
+                self._workload = WorkloadMetadata(requests_per_iteration=1.0, tokens_per_iteration=8.0)
+                self._x: Optional[torch.Tensor] = None
+                self._y: Optional[torch.Tensor] = None
+
+            def setup(self) -> None:
+                torch.manual_seed(42)
+                self._x = torch.randn(8)
+
+            def benchmark_fn(self) -> None:
+                if self._x is None:
+                    raise RuntimeError("setup() must run first")
+                self._y = self._x * 2
+
+            def capture_verification_payload(self) -> None:
+                if self._x is None or self._y is None:
+                    raise RuntimeError("benchmark_fn() must run first")
+                self._set_verification_payload(
+                    inputs={"x": self._x},
+                    output=self._y,
+                    batch_size=self._x.shape[0],
+                    parameter_count=0,
+                )
+
+            def get_workload_metadata(self) -> Optional[Any]:
+                return self._workload
+
+            def validate_result(self) -> Optional[str]:
+                return None
+
+            def teardown(self) -> None:
+                self._x = None
+                self._y = None
+
+        runner = VerifyRunner(
+            cache_dir=temp_dirs["cache"],
+            quarantine_manager=QuarantineManager(temp_dirs["quarantine"]),
+        )
+        result = runner.verify_baseline(PayloadBenchmark())
+        assert result.passed is True
     
     def test_verify_pair_matching_outputs(self, temp_dirs):
         """Test verifying pair with matching outputs."""

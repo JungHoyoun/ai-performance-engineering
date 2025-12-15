@@ -1,8 +1,8 @@
 """baseline_kv_cache_management.py - Baseline KV cache decode without reuse.
 
 This baseline models a naive decode loop that recomputes K/V projections for the
-entire prefix on every step (no KV cache reuse). The optimized variant reuses
-cached projected K/V and only projects the newly appended token each step.
+entire prefix on every step (no KV cache reuse). The optimized variant computes
+projected K/V once and reuses the cached projections across steps.
 """
 
 from __future__ import annotations
@@ -30,8 +30,8 @@ class BaselineKVCacheManagementBenchmark(VerificationPayloadMixin, BaseBenchmark
         self.hidden_dim = 256
         self.num_heads = 8
         self.head_dim = self.hidden_dim // self.num_heads
-        self.batch_size = 8
-        self.steps = 32
+        self.batch_size = 128
+        self.steps = 256
         tokens = self.batch_size * self.steps
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.batch_size),
@@ -90,6 +90,9 @@ class BaselineKVCacheManagementBenchmark(VerificationPayloadMixin, BaseBenchmark
                     k = k.reshape(self.batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
                     v = v.reshape(self.batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
 
+                    # q_len=1 and k/v contain only the prefix (no future tokens),
+                    # so a causal mask is unnecessary here; is_causal=True would
+                    # incorrectly mask all but the first key.
                     attn = F.scaled_dot_product_attention(q, k, v, is_causal=False)
                     attn = attn.transpose(1, 2).contiguous().reshape(self.batch_size, 1, self.hidden_dim)
                     out = self.out_proj(attn)

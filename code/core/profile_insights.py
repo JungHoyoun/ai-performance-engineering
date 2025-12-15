@@ -513,6 +513,11 @@ def compare_ncu_files(profiles_dir: Path) -> Optional[Dict[str, Any]]:
                 "optimized_file": optimized_csv[0].name,
                 "metrics": [],
             }
+            if baseline_ncu and optimized_ncu:
+                comparison["baseline_sources"] = _extract_ncu_sources(baseline_ncu[0])
+                comparison["optimized_sources"] = _extract_ncu_sources(optimized_ncu[0])
+                comparison["baseline_disassembly"] = _extract_ncu_disassembly(baseline_ncu[0])
+                comparison["optimized_disassembly"] = _extract_ncu_disassembly(optimized_ncu[0])
 
             all_keys = set(baseline_metrics.keys()) | set(optimized_metrics.keys())
             for key in sorted(all_keys):
@@ -556,7 +561,7 @@ def compare_ncu_files(profiles_dir: Path) -> Optional[Dict[str, Any]]:
                     parts = line.split(",")
                     if len(parts) >= 2:
                         metrics[parts[0]] = parts[1] if len(parts) > 1 else ""
-                return metrics
+            return metrics
 
         baseline_metrics = extract_ncu_metrics(baseline_ncu[0])
         optimized_metrics = extract_ncu_metrics(optimized_ncu[0])

@@ -25,11 +25,11 @@ class OptimizedKVCacheManagementBenchmark(VerificationPayloadMixin, BaseBenchmar
         self.k_cache: Optional[torch.Tensor] = None
         self.v_cache: Optional[torch.Tensor] = None
         # Match baseline batch_size for fair comparison
-        self.batch_size = 8
+        self.batch_size = 128
         self.hidden_dim = 256
         self.num_heads = 8
         self.head_dim = self.hidden_dim // self.num_heads
-        self.steps = 32
+        self.steps = 256
         tokens = self.batch_size * self.steps
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.batch_size),
@@ -82,6 +82,13 @@ class OptimizedKVCacheManagementBenchmark(VerificationPayloadMixin, BaseBenchmar
         assert self.tokens is not None and self.k_cache is not None and self.v_cache is not None
         with self._nvtx_range("optimized_kv_cache_management"):
             with torch.no_grad():
+                # Model "prefill-produced" KV cache: project the full token buffer once,
+                # then reuse those projected tensors across the decode loop.
+                k_all = self.k_proj(self.tokens)
+                v_all = self.v_proj(self.tokens)
+                self.k_cache.copy_(k_all)
+                self.v_cache.copy_(v_all)
+
                 outputs = torch.empty(
                     self.batch_size,
                     self.steps,
@@ -93,11 +100,6 @@ class OptimizedKVCacheManagementBenchmark(VerificationPayloadMixin, BaseBenchmar
                     query = self.tokens[:, t : t + 1, :]
                     q = self.q_proj(query)
 
-                    new_k = self.k_proj(query)
-                    new_v = self.v_proj(query)
-                    self.k_cache[:, t : t + 1, :] = new_k
-                    self.v_cache[:, t : t + 1, :] = new_v
-
                     k = self.k_cache[:, : t + 1, :]
                     v = self.v_cache[:, : t + 1, :]
 
@@ -105,6 +107,9 @@ class OptimizedKVCacheManagementBenchmark(VerificationPayloadMixin, BaseBenchmar
                     k = k.reshape(self.batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
                     v = v.reshape(self.batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
 
+                    # q_len=1 and k/v contain only the prefix (no future tokens),
+                    # so a causal mask is unnecessary here; is_causal=True would
+                    # incorrectly mask all but the first key.
                     attn = F.scaled_dot_product_attention(q, k, v, is_causal=False)
                     attn = attn.transpose(1, 2).contiguous().reshape(self.batch_size, 1, self.hidden_dim)
                     out = self.out_proj(attn)

@@ -74,16 +74,21 @@ class OptimizedAutogradCompiledBenchmark(VerificationPayloadMixin, BaseBenchmark
         self.targets = torch.randn_like(self.inputs)
         self.output_buffer = torch.empty_like(self.inputs)
 
+        saved_model_state = copy.deepcopy(self.model.state_dict())
+        saved_opt_state = copy.deepcopy(self.optimizer.state_dict())
+
+        # Warm up a full training step to allocate grads/optimizer buffers needed for capture,
+        # then restore state so the first timed iteration matches the baseline.
         for _ in range(3):
             self._train_step(self.inputs, self.targets)
         self._synchronize()
+        self.model.load_state_dict(saved_model_state)
+        self.optimizer.load_state_dict(saved_opt_state)
 
         self.static_input = self.inputs.clone()
         self.static_target = self.targets.clone()
         self.graph = torch.cuda.CUDAGraph()
         self.capture_stream = torch.cuda.Stream()
-        saved_model_state = copy.deepcopy(self.model.state_dict())
-        saved_opt_state = copy.deepcopy(self.optimizer.state_dict())
         with torch.cuda.stream(self.capture_stream):
             with torch.cuda.graph(self.graph, stream=self.capture_stream):
                 self._train_step(self.static_input, self.static_target, capture_output=True)
@@ -125,7 +130,9 @@ class OptimizedAutogradCompiledBenchmark(VerificationPayloadMixin, BaseBenchmark
 
     def _train_step(self, batch: torch.Tensor, target: torch.Tensor, capture_output: bool = False) -> None:
         assert self.model is not None and self.optimizer is not None and self.criterion is not None
-        self.optimizer.zero_grad(set_to_none=True)
+        # CUDA graphs do not replay Python-side `set_to_none=True` state changes; use
+        # explicit zeroing so gradient reset is captured and replayed.
+        self.optimizer.zero_grad(set_to_none=False)
         outputs = self.model(batch)
         if capture_output and self.output_buffer is not None:
             self.output_buffer.copy_(outputs)

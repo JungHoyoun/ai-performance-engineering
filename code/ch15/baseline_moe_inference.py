@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import statistics
 import sys
-import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -135,26 +134,34 @@ class BaselineMoeInferenceBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
         with torch.no_grad():
             with self._nvtx_range("baseline_prefill"):
-                request_start = time.perf_counter()
+                start_prefill = torch.cuda.Event(enable_timing=True)
+                end_prefill = torch.cuda.Event(enable_timing=True)
+                start_prefill.record()
                 hidden, logits = self.model.prefill(self.prompts, kv_cache=self.kv_cache, cache_start=0)
-                torch.cuda.synchronize(self.device)
-                ttft_ms = (time.perf_counter() - request_start) * 1000.0
+                end_prefill.record()
+                end_prefill.synchronize()
+                ttft_ms = float(start_prefill.elapsed_time(end_prefill))
                 ttft_times.append(ttft_ms)
 
             seed_tokens = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
 
             with self._nvtx_range("baseline_decode"):
+                start_decode = torch.cuda.Event(enable_timing=True)
+                end_decode = torch.cuda.Event(enable_timing=True)
+                start_decode.record()
                 for step in range(cfg.decode_tokens):
-                    decode_start = time.perf_counter()
                     _hidden, decode_logits = self.model.decode(
                         seed_tokens,
                         kv_cache=self.kv_cache,
                         position=cfg.context_window + step,
                     )
-                    torch.cuda.synchronize(self.device)
-                    step_ms = (time.perf_counter() - decode_start) * 1000.0
-                    tpot_times.append(step_ms)
                     seed_tokens = torch.argmax(decode_logits[:, -1, :], dim=-1, keepdim=True)
+                end_decode.record()
+                end_decode.synchronize()
+
+                total_decode_ms = float(start_decode.elapsed_time(end_decode))
+                avg_tpot_ms = total_decode_ms / max(float(cfg.decode_tokens), 1.0)
+                tpot_times.extend([avg_tpot_ms] * cfg.decode_tokens)
             # Capture the final token ids for verification (payload is set post-timing)
             self.output = seed_tokens.detach()
 

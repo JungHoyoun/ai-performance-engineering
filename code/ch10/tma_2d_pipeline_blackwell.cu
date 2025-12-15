@@ -476,6 +476,17 @@ int main(int argc, char** argv) {
     std::printf("Sample output element: %.2f -> %.2f\n", h_in[0], h_out[0]);
 
 #ifdef VERIFY
+    // Verification must validate the SAME path whose TIME_MS is reported above.
+    // The binary times BOTH paths for speedup reporting, so re-run the selected
+    // path once (outside timing) and checksum its output.
+    check_cuda(cudaMemset(d_out, 0, bytes), "reset output before verify");
+    if (enable_tma && tma_ms > 0.0f) {
+        launch_tma();
+    } else {
+        launch_baseline(baseline_option);
+    }
+    check_cuda(cudaDeviceSynchronize(), "sync verify output");
+
     std::vector<float> h_verify(static_cast<std::size_t>(M) * N);
     check_cuda(cudaMemcpy(h_verify.data(), d_out, bytes, cudaMemcpyDeviceToHost), "copy output verify");
     double checksum = 0.0;

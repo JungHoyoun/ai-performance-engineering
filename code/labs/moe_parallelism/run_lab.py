@@ -1,8 +1,9 @@
-"""Convenience runner for the MoE parallelism lab."""
+"""MoE parallelism planner (tool; not a benchmark pair)."""
 
 from __future__ import annotations
 
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -10,53 +11,52 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from typing import Callable, List, Tuple
-
-from labs.moe_parallelism.benchmarking import PlanBenchmark, run_benchmark
-
-from labs.moe_parallelism.baseline_parallelism_breakdown import get_benchmark as baseline_parallelism
-from labs.moe_parallelism.optimized_parallelism_breakdown import get_benchmark as optimized_parallelism
-from labs.moe_parallelism.baseline_pipeline_schedule import get_benchmark as baseline_pipeline
-from labs.moe_parallelism.optimized_pipeline_schedule import get_benchmark as optimized_pipeline
-from labs.moe_parallelism.baseline_moe_grouping import get_benchmark as baseline_moe
-from labs.moe_parallelism.optimized_moe_grouping import get_benchmark as optimized_moe
-from labs.moe_parallelism.baseline_memory_budget import get_benchmark as baseline_memory
-from labs.moe_parallelism.optimized_memory_budget import get_benchmark as optimized_memory
-from labs.moe_parallelism.baseline_network_affinity import get_benchmark as baseline_network
-from labs.moe_parallelism.optimized_network_affinity import get_benchmark as optimized_network
-from labs.moe_parallelism.baseline_gpt_gb200 import get_benchmark as baseline_gpt_gb200
-from labs.moe_parallelism.optimized_gpt_gb200 import get_benchmark as optimized_gpt_gb200
-from labs.moe_parallelism.baseline_deepseek_gb200 import get_benchmark as baseline_deepseek_gb200
-from labs.moe_parallelism.optimized_deepseek_gb200 import get_benchmark as optimized_deepseek_gb200
-from labs.moe_parallelism.baseline_moe_vllm_env import get_benchmark as baseline_moe_env
-from labs.moe_parallelism.optimized_moe_vllm_env import get_benchmark as optimized_moe_env
+from labs.moe_parallelism.plan import PlanEvaluator, format_report  # noqa: E402
+from labs.moe_parallelism.scenarios import get_scenario_pairs  # noqa: E402
 
 
-SCENARIOS: List[Tuple[str, Callable[[], PlanBenchmark]]] = [
-    ("baseline_parallelism_breakdown", baseline_parallelism),
-    ("optimized_parallelism_breakdown", optimized_parallelism),
-    ("baseline_pipeline_schedule", baseline_pipeline),
-    ("optimized_pipeline_schedule", optimized_pipeline),
-    ("baseline_moe_grouping", baseline_moe),
-    ("optimized_moe_grouping", optimized_moe),
-    ("baseline_memory_budget", baseline_memory),
-    ("optimized_memory_budget", optimized_memory),
-    ("baseline_network_affinity", baseline_network),
-    ("optimized_network_affinity", optimized_network),
-    ("baseline_gpt_gb200", baseline_gpt_gb200),
-    ("optimized_gpt_gb200", optimized_gpt_gb200),
-    ("baseline_deepseek_gb200", baseline_deepseek_gb200),
-    ("optimized_deepseek_gb200", optimized_deepseek_gb200),
-    ("baseline_moe_vllm_env", baseline_moe_env),
-    ("optimized_moe_vllm_env", optimized_moe_env),
-]
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="MoE parallelism planner (tool).")
+    parser.add_argument(
+        "--scenario",
+        action="append",
+        default=None,
+        help="Scenario name to run (repeatable). Default: run all scenarios.",
+    )
+    return parser
 
 
 def main() -> None:
-    for name, factory in SCENARIOS:
-        print(f"\n=== Running {name} ===")
-        benchmark = factory()
-        run_benchmark(benchmark)
+    args = _build_parser().parse_args()
+    scenarios = dict(get_scenario_pairs())
+    selected = args.scenario or list(scenarios.keys())
+
+    for name in selected:
+        if name not in scenarios:
+            choices = ", ".join(sorted(scenarios.keys()))
+            raise ValueError(f"Unknown scenario '{name}'. Choices: {choices}")
+
+        scenario = scenarios[name]
+        evaluator = PlanEvaluator(scenario.cluster, scenario.model)
+        baseline = evaluator.analyze(scenario.baseline)
+        optimized = evaluator.analyze(scenario.optimized)
+
+        step_speedup = (
+            baseline.estimated_step_ms / optimized.estimated_step_ms
+            if optimized.estimated_step_ms
+            else float("inf")
+        )
+        throughput_ratio = (
+            optimized.throughput_tokens_per_s / baseline.throughput_tokens_per_s
+            if baseline.throughput_tokens_per_s
+            else float("inf")
+        )
+
+        print(f"\n=== {name} ===")
+        print(format_report(baseline))
+        print("---")
+        print(format_report(optimized))
+        print(f"\nComparison: speedup={step_speedup:.2f}x  throughput={throughput_ratio:.2f}x")
 
 
 if __name__ == "__main__":

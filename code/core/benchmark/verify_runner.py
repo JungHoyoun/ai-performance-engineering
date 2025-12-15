@@ -105,9 +105,11 @@ class GoldenOutput:
         parts = []
         for name in sorted(self.outputs.keys()):
             tensor = self.outputs[name]
-            # Use numpy for consistent hash across sessions
-            arr = tensor.cpu().numpy()
-            parts.append(hashlib.sha256(arr.tobytes()).hexdigest()[:16])
+            # Use raw bytes for dtype-agnostic hashing (numpy can't represent bf16).
+            cpu_tensor = tensor.detach().cpu().contiguous()
+            parts.append(
+                hashlib.sha256(cpu_tensor.view(torch.uint8).numpy().tobytes()).hexdigest()[:16]
+            )
         return "-".join(parts)
 
 
@@ -157,9 +159,19 @@ class GoldenOutputCache:
         try:
             with open(path, "rb") as f:
                 data = pickle.load(f)
+            outputs: Dict[str, torch.Tensor] = {}
+            raw_outputs = data["outputs"]
+            if not isinstance(raw_outputs, dict):
+                raise TypeError("Golden output cache 'outputs' must be a dict")
+            for name, value in raw_outputs.items():
+                if not isinstance(value, torch.Tensor):
+                    raise TypeError(
+                        f"Golden output cache entry '{name}' must be a torch.Tensor, got {type(value)}"
+                    )
+                outputs[name] = value
             return GoldenOutput(
                 signature_hash=data["signature_hash"],
-                outputs={k: torch.tensor(v) for k, v in data["outputs"].items()},
+                outputs=outputs,
                 workload_metrics=data["workload_metrics"],
                 checksum=data["checksum"],
                 created_at=datetime.fromisoformat(data["created_at"]),
@@ -178,7 +190,8 @@ class GoldenOutputCache:
         path = self._get_cache_path(golden.signature_hash)
         data = {
             "signature_hash": golden.signature_hash,
-            "outputs": {k: v.cpu().numpy() for k, v in golden.outputs.items()},
+            # Store CPU tensors directly (bf16-safe; avoids numpy conversion failures).
+            "outputs": {k: v.detach().cpu().contiguous() for k, v in golden.outputs.items()},
             "workload_metrics": golden.workload_metrics,
             "checksum": golden.checksum,
             "created_at": golden.created_at.isoformat(),
@@ -254,6 +267,7 @@ class VerifyConfig:
     skip_fresh_input_check: bool = False
     skip_timing_validation: bool = False  # Skip warmup/iteration count validation
     skip_output_validation: bool = False  # Skip output tensor comparison
+    skip_workload_check: bool = False  # Skip workload invariant enforcement
     workload_tolerance: float = 0.01  # 1% tolerance for workload metrics
     verbose: bool = False
     force_recache: bool = False  # Ignore existing cache
@@ -578,20 +592,35 @@ class VerifyRunner:
             Dict of workload metrics (bytes/tokens/ops per iteration)
         """
         metrics: Dict[str, float] = {}
-        
-        if hasattr(benchmark, "get_workload_metadata"):
-            try:
-                metadata = benchmark.get_workload_metadata()
-                if metadata:
-                    if hasattr(metadata, "bytes_per_iter") and metadata.bytes_per_iter:
-                        metrics["bytes_per_iter"] = float(metadata.bytes_per_iter)
-                    if hasattr(metadata, "tokens_per_iter") and metadata.tokens_per_iter:
-                        metrics["tokens_per_iter"] = float(metadata.tokens_per_iter)
-                    if hasattr(metadata, "flops_per_iter") and metadata.flops_per_iter:
-                        metrics["flops_per_iter"] = float(metadata.flops_per_iter)
-            except Exception:
-                pass
-        
+
+        get_workload = getattr(benchmark, "get_workload_metadata", None)
+        if not callable(get_workload):
+            return metrics
+
+        metadata = get_workload()
+        if metadata is None:
+            return metrics
+
+        requests_per_iteration = getattr(metadata, "requests_per_iteration", None)
+        if requests_per_iteration is not None:
+            metrics["requests_per_iteration"] = float(requests_per_iteration)
+
+        tokens_per_iteration = getattr(metadata, "tokens_per_iteration", None)
+        if tokens_per_iteration is not None:
+            metrics["tokens_per_iteration"] = float(tokens_per_iteration)
+
+        samples_per_iteration = getattr(metadata, "samples_per_iteration", None)
+        if samples_per_iteration is not None:
+            metrics["samples_per_iteration"] = float(samples_per_iteration)
+
+        bytes_per_iteration = getattr(metadata, "bytes_per_iteration", None)
+        if bytes_per_iteration is not None:
+            metrics["bytes_per_iteration"] = float(bytes_per_iteration)
+
+        custom_units_per_iteration = getattr(metadata, "custom_units_per_iteration", None)
+        if custom_units_per_iteration is not None:
+            metrics["custom_units_per_iteration"] = float(custom_units_per_iteration)
+
         return metrics
     
     def _compare_outputs(
@@ -773,7 +802,9 @@ class VerifyRunner:
         pre_streams: List[int] = []
         audit_ctx = nullcontext()
         declared_streams: List[Any] = []
-        if torch.cuda.is_available():
+        device = getattr(benchmark, "device", None)
+        use_cuda = bool(torch.cuda.is_available() and isinstance(device, torch.device) and device.type == "cuda")
+        if use_cuda:
             from core.harness.validity_checks import audit_streams, get_active_streams
             if hasattr(benchmark, "get_custom_streams"):
                 try:
@@ -822,8 +853,8 @@ class VerifyRunner:
                 signature = self._extract_signature(benchmark)
             
             # Sync CUDA
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
+            if use_cuda:
+                torch.cuda.synchronize(getattr(benchmark, "device", None))
             
             # Extract outputs
             outputs = self._extract_output(benchmark)
@@ -891,6 +922,8 @@ class VerifyRunner:
 
         # All signature-listed tensors must be present and shape-matching
         for name, expected_shape in signature.shapes.items():
+            if name == "output":
+                continue
             if name not in inputs:
                 raise ValueError(f"Input '{name}' declared in signature missing from get_verify_inputs().")
             tensor = inputs[name]
@@ -901,6 +934,8 @@ class VerifyRunner:
 
         # Dtype checks for overlapping names
         for name, tensor in inputs.items():
+            if name == "output":
+                continue
             if name in signature.dtypes:
                 expected_dtype = _norm_dtype(signature.dtypes[name])
                 actual_dtype = _norm_dtype(tensor.dtype)
@@ -1180,6 +1215,14 @@ class VerifyRunner:
                     details={"error": "Baseline produced no extractable outputs"},
                     timestamp=datetime.now(),
                 )
+
+            if not config.skip_workload_check and not metrics:
+                return VerifyResult(
+                    passed=False,
+                    reason=QuarantineReason.MISSING_WORKLOAD_METADATA.value,
+                    details={"error": "Baseline did not provide workload metadata for invariant checking"},
+                    timestamp=datetime.now(),
+                )
             
             # Create and cache golden output
             golden = GoldenOutput(
@@ -1323,7 +1366,18 @@ class VerifyRunner:
                 )
             
             # Compare workload metrics
-            if golden.workload_metrics and metrics:
+            if not config.skip_workload_check:
+                if not golden.workload_metrics or not metrics:
+                    return VerifyResult(
+                        passed=False,
+                        reason=QuarantineReason.MISSING_WORKLOAD_METADATA.value,
+                        signature_hash=sig_hash,
+                        details={
+                            "baseline_has_workload_metadata": bool(golden.workload_metrics),
+                            "optimized_has_workload_metadata": bool(metrics),
+                        },
+                        timestamp=datetime.now(),
+                    )
                 metrics_match, deltas = compare_workload_metrics(
                     golden.workload_metrics,
                     metrics,
@@ -1363,10 +1417,11 @@ class VerifyRunner:
                 )
             
             # Compute checksum for optimized
-            optimized_checksum = "-".join(
-                hashlib.sha256(v.cpu().numpy().tobytes()).hexdigest()[:16]
-                for v in [outputs[k] for k in sorted(outputs.keys())]
-            )
+            parts: List[str] = []
+            for name in sorted(outputs.keys()):
+                cpu_tensor = outputs[name].detach().cpu().contiguous()
+                parts.append(hashlib.sha256(cpu_tensor.view(torch.uint8).numpy().tobytes()).hexdigest()[:16])
+            optimized_checksum = "-".join(parts)
             
             return VerifyResult.success(
                 signature_hash=sig_hash,
