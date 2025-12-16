@@ -29,6 +29,19 @@ python -m cli.aisp bench run --targets ch15 --profile minimal
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
 - Expectation baselines live next to each chapter in `expectations_b200.json`; refresh with `--update-expectations` after validating new hardware.
 
+## Demos (Non-Benchmark)
+These are runnable parallelism/speculative-decoding companions (not baseline/optimized benchmark pairs). Run them via `aisp demos`:
+```bash
+python -m cli.aisp demos ch15-tensor-parallel
+python -m cli.aisp demos ch15-pipeline-parallel
+python -m cli.aisp demos ch15-expert-parallel
+python -m cli.aisp demos ch15-context-parallel
+python -m cli.aisp demos ch15-speculative-decode
+```
+- Some demos require `torchrun`/multi-GPU; see per-demo `--help`.
+- List all demos: `python -m cli.aisp demos list`
+- Pass args to a demo with `--` (e.g., `python -m cli.aisp demos ch15-tensor-parallel -- --help`)
+
 ## Validation Checklist
 - `python optimized_disaggregated_inference.py --profile minimal` shows reduced fabric stalls compared to the baseline while maintaining accuracy parity.
 - `python optimized_kv_cache_management.py --validate` confirms eviction + promotion policies keep decode latency within the budget.

@@ -5,7 +5,8 @@ Wraps the CUDA 13 Blackwell TMA 2D pipeline sample. This is intentionally NOT a
 comparative benchmark pair for `aisp bench run`.
 
 Run via:
-  python -m cli.aisp tools tmem-triple-overlap -- --help
+  python ch10/tmem_triple_overlap_tool.py --help
+  python -m cli.aisp demos ch10-tmem-triple-overlap -- --help
 """
 
 from __future__ import annotations
@@ -61,4 +62,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

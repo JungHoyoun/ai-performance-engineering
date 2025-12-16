@@ -94,7 +94,8 @@ class OptimizedSlidingWindowBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.embed_dim = 1024
         self.num_heads = 16
         self.window_size = 512  # Kept for API compatibility
-        self.dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        # Match baseline dtype for strict signature/workload comparability.
+        self.dtype = torch.float16
         self._last = 0.0
         
         tokens = self.batch_size * self.seq_len

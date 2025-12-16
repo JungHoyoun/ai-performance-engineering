@@ -32,4 +32,4 @@ python -m cli.aisp tools moe-parallelism -- --scenario deepseek_gb200
 
 ## Notes
 - `plan.py` centralizes the sizing model so scenario edits stay small and readable.
-- Legacy compatibility shims live in `shim_*` modules; prefer `scenario_*` modules + `python -m cli.aisp tools moe-parallelism`.
+- Scenario definitions live in `scenarios.py`; use `run_lab.py` (via `aisp tools moe-parallelism`) to print baseline vs optimized plan comparisons.

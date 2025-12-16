@@ -59,6 +59,7 @@ void separate_kernel_launches(torch::Tensor dst, torch::Tensor src, int iteratio
 struct GraphCache {
     bool initialized = false;
     int n = 0;
+    int iterations = 0;
     int device_id = -1;
     float* dst_ptr = nullptr;
     const float* src_ptr = nullptr;
@@ -85,6 +86,7 @@ void graph_kernel(torch::Tensor dst, torch::Tensor src, int iterations) {
     TORCH_CHECK(src.is_cuda(), "src must be CUDA tensor");
     TORCH_CHECK(dst.dtype() == torch::kFloat32, "dst must be float32");
     TORCH_CHECK(src.dtype() == torch::kFloat32, "src must be float32");
+    TORCH_CHECK(iterations > 0, "iterations must be > 0");
     
     int n = src.size(0);
     int threads_per_block = 256;
@@ -98,6 +100,7 @@ void graph_kernel(torch::Tensor dst, torch::Tensor src, int iterations) {
     
     bool rebuild = !g_graph_cache.initialized ||
                    g_graph_cache.n != n ||
+                   g_graph_cache.iterations != iterations ||
                    g_graph_cache.device_id != device_id ||
                    g_graph_cache.dst_ptr != dst_ptr ||
                    g_graph_cache.src_ptr != src_ptr;
@@ -112,11 +115,13 @@ void graph_kernel(torch::Tensor dst, torch::Tensor src, int iterations) {
         try {
             CHECK_CUDA(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
             CHECK_CUDA(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
-            copy_kernel<<<num_blocks, threads_per_block, 0, stream>>>(
-                dst_ptr,
-                src_ptr,
-                n
-            );
+            for (int i = 0; i < iterations; ++i) {
+                copy_kernel<<<num_blocks, threads_per_block, 0, stream>>>(
+                    dst_ptr,
+                    src_ptr,
+                    n
+                );
+            }
             CHECK_CUDA(cudaGetLastError());
             CHECK_CUDA(cudaStreamEndCapture(stream, &graph));
             CHECK_CUDA(cudaGraphInstantiate(&exec, graph, nullptr, nullptr, 0));
@@ -140,6 +145,7 @@ void graph_kernel(torch::Tensor dst, torch::Tensor src, int iterations) {
         cudaGraphDestroy(graph);
         g_graph_cache.initialized = true;
         g_graph_cache.n = n;
+        g_graph_cache.iterations = iterations;
         g_graph_cache.device_id = device_id;
         g_graph_cache.dst_ptr = dst_ptr;
         g_graph_cache.src_ptr = src_ptr;
@@ -150,9 +156,7 @@ void graph_kernel(torch::Tensor dst, torch::Tensor src, int iterations) {
     
     {
         PROFILE_KERNEL_LAUNCH("graph_kernel");
-        for (int i = 0; i < iterations; ++i) {
-            CHECK_CUDA(cudaGraphLaunch(g_graph_cache.exec, g_graph_cache.stream));
-        }
+        CHECK_CUDA(cudaGraphLaunch(g_graph_cache.exec, g_graph_cache.stream));
     }
 
     cudaStream_t default_stream = at::cuda::getDefaultCUDAStream(device_id).stream();

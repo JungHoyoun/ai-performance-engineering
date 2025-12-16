@@ -85,6 +85,11 @@ class CudaBinaryBenchmark(VerificationPayloadMixin, BaseBenchmark):
         _verify_checksum: Last parsed verify checksum (None if not in verify mode)
         _verify_exec_path: Path to verify-mode binary (separate from perf binary)
     """
+
+    # The signature for CUDA binaries encodes workload parameters (e.g., bytes, M/N/K).
+    # There are no meaningful Python tensor inputs to validate against those parameters.
+    parameter_signature_only: bool = True
+    _is_deterministic: bool = True
     
     def __init__(
         self,
@@ -316,6 +321,14 @@ class CudaBinaryBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def teardown(self) -> None:
         """No runtime resources to release."""
         pass
+
+    def get_verify_inputs(self) -> dict[str, torch.Tensor]:
+        """Return a placeholder tensor for aliasing checks.
+
+        CUDA binaries do not expose runtime input tensors to the Python harness.
+        Verification uses checksum outputs emitted by the verify-mode binary.
+        """
+        return {"placeholder": torch.zeros(1, dtype=torch.float32)}
     
     def get_config(self) -> BenchmarkConfig:
         """Configure harness to use CPU timers (subprocess measures wall time)."""
@@ -388,6 +401,11 @@ class CudaBinaryBenchmark(VerificationPayloadMixin, BaseBenchmark):
         Returns:
             Tensor containing the checksum value
         """
+        if self._last_result is None:
+            raise RuntimeError(
+                "get_verify_output() requires benchmark_fn() to run before verification; "
+                "CUDA binaries emit checksums only when executed."
+            )
         if self._verify_checksum is None:
             try:
                 self.run_verify()

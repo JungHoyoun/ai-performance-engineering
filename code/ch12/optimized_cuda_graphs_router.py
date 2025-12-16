@@ -33,7 +33,7 @@ class CUDAGraphRouterBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.N = 1 << 20  # 1M elements to match baseline
         self.iterations = 500
         self._extension = None
-        self._workload = WorkloadMetadata(tokens_per_iteration=float(self.N))
+        self._workload = WorkloadMetadata(tokens_per_iteration=float(self.N * self.iterations))
 
     def setup(self) -> None:
         if not torch.cuda.is_available():

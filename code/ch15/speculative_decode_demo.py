@@ -7,7 +7,6 @@ prints a small summary (timing + speedup).
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -45,7 +44,6 @@ def main() -> int:
     args = parser.parse_args()
 
     _require_cuda()
-    os.environ.setdefault("AISP_ALLOW_VIRTUALIZATION", "1")
 
     config = BenchmarkConfig(
         iterations=int(args.iterations),

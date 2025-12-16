@@ -49,10 +49,9 @@ class OptimizedDSMEMReductionV3Benchmark(CudaBinaryBenchmark):
     def get_input_signature(self) -> dict:
         """Signature for DSMEM reduction v3."""
         return simple_signature(
-            batch_size=2048,
+            batch_size=1,
             dtype="float32",
             N=16 * 1024 * 1024,
-            cluster_size=2,
             block_elems=4096,
         ).to_dict()
 

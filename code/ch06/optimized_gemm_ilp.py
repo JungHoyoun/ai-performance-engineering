@@ -14,7 +14,7 @@ from ch06.cuda_extensions import load_ilp_extension
 class OptimizedILPBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Independent operations and unrolling - high ILP (uses CUDA extension).
     
-    Does the same amount of work as baseline (4 iterations) for fair comparison.
+    Does the same amount of work as baseline (repeat count) for fair comparison.
     The ILP benefit is measured per-operation - both baseline and optimized do
     the same number of kernel launches, but the optimized kernel has better ILP.
     """
@@ -27,7 +27,7 @@ class OptimizedILPBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.output: Optional[torch.Tensor] = None
         self.N = 50_000_000
         self._extension = None
-        self.repeats = 4  # Same as baseline for fair comparison
+        self.repeats = 10  # Same as baseline for fair comparison
         # ILP benchmark - fixed input size to measure instruction-level parallelism
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.repeats),

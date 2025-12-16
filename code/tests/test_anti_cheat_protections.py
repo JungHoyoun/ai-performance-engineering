@@ -1027,6 +1027,48 @@ class TestStreamAuditorProtections:
             y = x * 2
         
         # Should complete without error
+
+    def test_stream_auditor_detects_unsynced_custom_stream(self):
+        """Test that custom stream work without sync triggers a warning."""
+        from core.harness.validity_checks import audit_streams
+
+        stream = torch.cuda.Stream()
+        with audit_streams() as auditor:
+            x = torch.randn(1024, device="cuda")
+            with torch.cuda.stream(stream):
+                _ = x * 2
+
+        ok, warnings_list = auditor.check_issues()
+        assert not ok, "Unsynced custom stream should be flagged"
+        assert any("STREAM SYNC WARNING" in warning for warning in warnings_list)
+
+    def test_stream_auditor_accepts_stream_synchronize(self):
+        """Test that stream.synchronize() counts as synchronization."""
+        from core.harness.validity_checks import audit_streams
+
+        stream = torch.cuda.Stream()
+        with audit_streams() as auditor:
+            x = torch.randn(1024, device="cuda")
+            with torch.cuda.stream(stream):
+                _ = x * 2
+            stream.synchronize()
+
+        ok, warnings_list = auditor.check_issues()
+        assert ok, f"stream.synchronize() should satisfy auditor: {warnings_list}"
+
+    def test_stream_auditor_accepts_wait_stream(self):
+        """Test that wait_stream() dependency counts as synchronization."""
+        from core.harness.validity_checks import audit_streams
+
+        stream = torch.cuda.Stream()
+        with audit_streams() as auditor:
+            x = torch.randn(1024, device="cuda")
+            with torch.cuda.stream(stream):
+                _ = x * 2
+            torch.cuda.current_stream().wait_stream(stream)
+
+        ok, warnings_list = auditor.check_issues()
+        assert ok, f"wait_stream() should satisfy auditor: {warnings_list}"
     
     def test_stream_sync_completeness_check(self):
         """Test that stream sync completeness is checked.
@@ -1543,6 +1585,10 @@ class TestDistributedProtectionsExtended:
                 use_subprocess=False,
                 timing_method="cuda_event",
                 adaptive_iterations=False,
+                # CI runs on bare metal, but local/dev environments may be virtualized.
+                # This test exercises timing cross-validation; it is not intended to
+                # validate environment enforcement behavior.
+                enforce_environment_validation=False,
             )
             result = harness._benchmark_with_threading(bench, config)
             assert any("TIMING CROSS-VALIDATION FAILURE" in err for err in result.errors), result.errors

@@ -35,11 +35,11 @@ class BaselineBatchBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.ffn_dim = self.workload.ffn_dim
         tokens = self.total_batch_size * self.hidden_dim
         self._workload = WorkloadMetadata(
-            requests_per_iteration=float(self.micro_batches),
+            requests_per_iteration=1.0,
             tokens_per_iteration=float(tokens),
         )
         self.register_workload_metadata(
-            requests_per_iteration=float(self.micro_batches),
+            requests_per_iteration=1.0,
             tokens_per_iteration=float(tokens),
         )
     

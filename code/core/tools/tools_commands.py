@@ -1,7 +1,9 @@
 """Tools commands mounted by aisp (`aisp tools ...`).
 
 Tools are non-comparable utilities and analysis scripts. They are intentionally
-separated from `aisp bench run` (comparative baseline vs optimized benchmarks).
+separated from:
+  - `aisp bench run` (comparative baseline vs optimized benchmarks), and
+  - `aisp demos` (runnable chapter demos / examples).
 """
 
 from __future__ import annotations
@@ -74,16 +76,6 @@ TOOLS: Dict[str, ToolSpec] = {
         script_path=REPO_ROOT / "ch08" / "occupancy_tuning_tool.py",
         description="Run the occupancy tuning sweep tool (chapter utility, not a benchmark pair).",
     ),
-    "tma-multicast": ToolSpec(
-        name="tma-multicast",
-        script_path=REPO_ROOT / "ch10" / "tma_multicast_tool.py",
-        description="Run the Chapter 10 TMA multicast demo (tool, not a benchmark pair).",
-    ),
-    "tmem-triple-overlap": ToolSpec(
-        name="tmem-triple-overlap",
-        script_path=REPO_ROOT / "ch10" / "tmem_triple_overlap_tool.py",
-        description="Run the Blackwell TMEM triple-overlap demo (CUDA 13 TMA 2D pipeline).",
-    ),
     "dynamic-router-eval": ToolSpec(
         name="dynamic-router-eval",
         script_path=REPO_ROOT / "labs" / "dynamic_router" / "cheap_eval.py",
@@ -103,11 +95,6 @@ TOOLS: Dict[str, ToolSpec] = {
         name="cudagraph-bucketing",
         script_path=REPO_ROOT / "ch18" / "cudagraph_bucketing_simulator.py",
         description="Run the Chapter 18 CUDA graph bucketing simulator (tool; not a benchmark pair).",
-    ),
-    "v1-engine-loop": ToolSpec(
-        name="v1-engine-loop",
-        script_path=REPO_ROOT / "ch18" / "v1_engine_loop.py",
-        description="Run the V1 EngineCore polling-loop demo (tool; correctness, not speed).",
     ),
     "uma-memory": ToolSpec(
         name="uma-memory",
@@ -129,21 +116,6 @@ TOOLS: Dict[str, ToolSpec] = {
         script_path=REPO_ROOT / "ch15" / "kv_cache_management_math.py",
         description="Run the math-only KV-cache attention tool (chapter utility).",
     ),
-    "context-parallelism": ToolSpec(
-        name="context-parallelism",
-        script_path=REPO_ROOT / "ch13" / "context_parallelism.py",
-        description="Run the multi-GPU context-parallel ring-attention demo (torchrun required).",
-    ),
-    "expert-parallelism": ToolSpec(
-        name="expert-parallelism",
-        script_path=REPO_ROOT / "ch15" / "expert_parallelism.py",
-        description="Run the MoE expert-parallelism demo (local overlap or distributed all-to-all).",
-    ),
-    "fp8-perchannel-demo": ToolSpec(
-        name="fp8-perchannel-demo",
-        script_path=REPO_ROOT / "ch13" / "fp8_perchannel_demo.py",
-        description="Run the FP8 per-channel scaling demo (chapter utility).",
-    ),
     "fp8-perchannel-bench": ToolSpec(
         name="fp8-perchannel-bench",
         script_path=REPO_ROOT / "ch13" / "fp8_perchannel_bench.py",
@@ -153,66 +125,6 @@ TOOLS: Dict[str, ToolSpec] = {
         name="flex-attention-cute",
         script_path=REPO_ROOT / "labs" / "flexattention" / "flex_attention_cute.py",
         description="Run the FlashAttention CuTe backend tool (FlexAttention fallback utility).",
-    ),
-    "ch11-stream-overlap-demo": ToolSpec(
-        name="ch11-stream-overlap-demo",
-        script_path=REPO_ROOT / "ch11" / "stream_overlap_demo.py",
-        description="Chapter 11 CUDA stream overlap demo (tool; not a benchmark pair).",
-    ),
-    "ch11-stream-priority-demo": ToolSpec(
-        name="ch11-stream-priority-demo",
-        script_path=REPO_ROOT / "ch11" / "stream_priority_demo.py",
-        description="Chapter 11 CUDA stream priority demo (tool; not a benchmark pair).",
-    ),
-    "ch11-memory-async-demo": ToolSpec(
-        name="ch11-memory-async-demo",
-        script_path=REPO_ROOT / "ch11" / "memory_async_demo.py",
-        description="Chapter 11 async copy/compute overlap demo (tool; not a benchmark pair).",
-    ),
-    "ch11-event-timing-demo": ToolSpec(
-        name="ch11-event-timing-demo",
-        script_path=REPO_ROOT / "ch11" / "event_timing_demo.py",
-        description="Chapter 11 CUDA event timing demo (tool; not a benchmark pair).",
-    ),
-    "ch12-graph-capture-demo": ToolSpec(
-        name="ch12-graph-capture-demo",
-        script_path=REPO_ROOT / "ch12" / "graph_capture_demo.py",
-        description="Chapter 12 CUDA graph capture demo (tool; not a benchmark pair).",
-    ),
-    "ch12-graph-replay-bench": ToolSpec(
-        name="ch12-graph-replay-bench",
-        script_path=REPO_ROOT / "ch12" / "graph_replay_benchmark.py",
-        description="Chapter 12 CUDA graph replay microbenchmark (tool; not a benchmark pair).",
-    ),
-    "ch12-instantiation-overhead-demo": ToolSpec(
-        name="ch12-instantiation-overhead-demo",
-        script_path=REPO_ROOT / "ch12" / "instantiation_overhead_demo.py",
-        description="Chapter 12 CUDA graph instantiation overhead demo (tool; not a benchmark pair).",
-    ),
-    "ch15-tensor-parallel-demo": ToolSpec(
-        name="ch15-tensor-parallel-demo",
-        script_path=REPO_ROOT / "ch15" / "tensor_parallel_demo.py",
-        description="Chapter 15 tensor-parallel demo (torchrun required).",
-    ),
-    "ch15-pipeline-parallel-demo": ToolSpec(
-        name="ch15-pipeline-parallel-demo",
-        script_path=REPO_ROOT / "ch15" / "pipeline_parallel_demo.py",
-        description="Chapter 15 pipeline-parallel demo (torchrun required).",
-    ),
-    "ch15-expert-parallel-demo": ToolSpec(
-        name="ch15-expert-parallel-demo",
-        script_path=REPO_ROOT / "ch15" / "expert_parallel_demo.py",
-        description="Chapter 15 expert-parallel demo (torchrun optional; local mode supported).",
-    ),
-    "ch15-context-parallel-demo": ToolSpec(
-        name="ch15-context-parallel-demo",
-        script_path=REPO_ROOT / "ch15" / "context_parallel_demo.py",
-        description="Chapter 15 context-parallel demo (torchrun required).",
-    ),
-    "ch15-speculative-decode-demo": ToolSpec(
-        name="ch15-speculative-decode-demo",
-        script_path=REPO_ROOT / "ch15" / "speculative_decode_demo.py",
-        description="Chapter 15 speculative decoding demo runner (tool; runs baseline+optimized).",
     ),
 }
 

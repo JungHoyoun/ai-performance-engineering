@@ -226,13 +226,13 @@ class BaselineMoeInferenceBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     # ------------------------------------------------------------------- configs
     def get_config(self) -> BenchmarkConfig:
-        # This benchmark optimizes end-to-end inference latency (host sync + decode loop),
+        # This benchmark optimizes end-to-end inference latency (host scheduling + GPU work),
         # so we intentionally time with a CPU wall-clock timer. Both baseline and
         # optimized variants synchronize GPU work before returning.
         return BenchmarkConfig(
             iterations=8,
             warmup=5,
-            device=torch.device("cpu"),
+            timing_method="wall_clock",
         )
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:

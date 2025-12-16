@@ -34,8 +34,9 @@ class OptimizedGraphBandwidthBenchmark(VerificationPayloadMixin, BaseBenchmark):
         super().__init__()
         self.src = None
         self.dst = None
-        self.N = 50_000_000
-        self.iterations = 10
+        # Match baseline configuration for a fair comparison.
+        self.N = 4_000_000
+        self.iterations = 100
         self._extension = None
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,
@@ -63,8 +64,8 @@ class OptimizedGraphBandwidthBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.src = torch.randn(self.N, dtype=torch.float32, device=self.device)
         self.dst = torch.empty_like(self.src)
         torch.cuda.synchronize(self.device)
-        # Dry run so CUDA graph capture / kernel launch overhead happens before timing.
-        self._extension.graph_kernel(self.dst, self.src, 1)
+        # Dry run so CUDA graph capture happens before timing.
+        self._extension.graph_kernel(self.dst, self.src, self.iterations)
         torch.cuda.synchronize()
         self._verify_input = self.src.detach().clone()
     

@@ -22,7 +22,7 @@ class BaselineAddBenchmark(VerificationPayloadMixin, BaseBenchmark):
         # Kernel launch overhead benchmark - fixed input size
         tokens = self.N
         self._workload = WorkloadMetadata(
-            requests_per_iteration=float(self.N),
+            requests_per_iteration=1.0,
             tokens_per_iteration=float(tokens),
         )
     

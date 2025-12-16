@@ -56,8 +56,24 @@ class OptimizedAttentionILPBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def setup(self) -> None:
         """Setup: Initialize optimized attention model."""
         torch.manual_seed(42)
-        self.qkv = nn.Linear(self.embed_dim, self.embed_dim * 3, bias=False).to(self.device).half()
-        self.out_proj = nn.Linear(self.embed_dim, self.embed_dim, bias=False).to(self.device).half()
+        # Match baseline nn.MultiheadAttention weights so verification compares
+        # equivalent models (baseline uses nn.MultiheadAttention directly).
+        reference = nn.MultiheadAttention(
+            self.embed_dim,
+            self.num_heads,
+            batch_first=True,
+        ).eval()
+
+        self.qkv = nn.Linear(self.embed_dim, self.embed_dim * 3, bias=True)
+        self.out_proj = nn.Linear(self.embed_dim, self.embed_dim, bias=True)
+        with torch.no_grad():
+            self.qkv.weight.copy_(reference.in_proj_weight)
+            self.qkv.bias.copy_(reference.in_proj_bias)
+            self.out_proj.weight.copy_(reference.out_proj.weight)
+            self.out_proj.bias.copy_(reference.out_proj.bias)
+
+        self.qkv = self.qkv.to(self.device).eval().half()
+        self.out_proj = self.out_proj.to(self.device).eval().half()
         self.input = torch.randn(
             self.batch,
             self.tokens,

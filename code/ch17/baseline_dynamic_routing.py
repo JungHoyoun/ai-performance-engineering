@@ -172,10 +172,9 @@ class _DynamicRoutingBenchmark(VerificationPayloadMixin, BaseBenchmark):
         served = len(requests) - rejects
 
         self.output = torch.tensor([float(served), float(rejects), float(offloaded)])
-        input_snapshot = (
-            self._queue_lengths if (self.vectorized and self._queue_lengths is not None) else torch.tensor([], device=self.output.device)
-        )
-        self._payload_input_snapshot = input_snapshot
+        if queue_lengths is None:
+            raise RuntimeError("Queue length inputs not initialized")
+        self._payload_input_snapshot = queue_lengths
         return {
             "requests": float(len(requests)),
             "served": float(served),

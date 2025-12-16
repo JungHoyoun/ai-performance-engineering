@@ -276,7 +276,7 @@ class OptimizedMXFP8MoEBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"inputs": self.inputs},
-            output=self.output,
+            output=self.output.to(torch.float16) if self.output is not None else self.output,
             batch_size=self.num_tokens,
             parameter_count=self.weights.numel() if self.weights is not None else 0,
             output_tolerance=(0.5, 20.0),

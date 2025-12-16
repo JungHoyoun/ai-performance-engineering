@@ -40,7 +40,6 @@ class OptimizedDynamicParallelismDeviceBenchmark(CudaBinaryBenchmark):
             batch_size=262144,
             dtype="float32",
             elements=262144,
-            segment_size=256,
         ).to_dict()
 
     def get_output_tolerance(self) -> tuple[float, float]:

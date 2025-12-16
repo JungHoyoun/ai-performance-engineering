@@ -1115,6 +1115,14 @@ def tool_system_dependencies(params: Dict[str, Any]) -> Dict[str, Any]:
                 "description": "Max runtime before returning with partial output; set 0/null for no timeout",
                 "default": 900
             },
+            "allow_invalid_environment": {
+                "type": "boolean",
+                "description": (
+                    "Allow running benchmarks even if validate_environment() reports errors. "
+                    "Still emits warnings; results may be invalid. Intended for unit tests and diagnostics."
+                ),
+                "default": False,
+            },
         }),
         "required": ["targets"],
     },
@@ -1128,6 +1136,7 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
     artifacts_dir = params.get("artifacts_dir")
     iterations_param = params.get("iterations")
     warmup_param = params.get("warmup")
+    allow_invalid_environment = bool(params.get("allow_invalid_environment", False))
 
     # Validate profile value
     valid_profiles = ["none", "minimal", "deep_dive", "roofline"]
@@ -1156,6 +1165,8 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
         args.extend(["--iterations", str(int(iterations_param))])
     if warmup_param is not None:
         args.extend(["--warmup", str(int(warmup_param))])
+    if allow_invalid_environment:
+        args.append("--allow-invalid-environment")
     for t in targets:
         args.extend(["-t", t])
     # Add --llm-analysis only if explicitly enabled (costs API credits)
@@ -1294,6 +1305,14 @@ def _benchmark_next_steps(result: Dict[str, Any]) -> List[Dict[str, Any]]:
                     "description": "Max runtime for the full run+analysis; set 0/null for no timeout.",
                     "default": 0,
                 },
+                "allow_invalid_environment": {
+                    "type": "boolean",
+                    "description": (
+                        "Allow running benchmarks even if validate_environment() reports errors. "
+                        "Still emits warnings; results may be invalid. Intended for unit tests and diagnostics."
+                    ),
+                    "default": False,
+                },
             }
         ),
         "required": ["targets"],
@@ -1310,6 +1329,7 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
     output_dir = params.get("output_dir") or "artifacts/mcp-deep-dive"
     iterations = params.get("iterations", 1)
     warmup = params.get("warmup", 5)
+    allow_invalid_environment = bool(params.get("allow_invalid_environment", False))
     run_async = bool(params.get("async", False))
     timeout_param = params.get("timeout_seconds")
     timeout_seconds = None if timeout_param is None else int(timeout_param)
@@ -1325,6 +1345,7 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
             "artifacts_dir": output_dir,
             "iterations": iterations,
             "warmup": warmup,
+            "allow_invalid_environment": allow_invalid_environment,
             # Explicitly disable LLM analysis; caller can run it separately if desired.
             "llm_analysis": False,
             "apply_patches": False,

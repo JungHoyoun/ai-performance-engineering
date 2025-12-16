@@ -117,7 +117,7 @@ Reward-hacking cases identified in the CUDA-L1 paper are covered by the harness:
 | Compile cache clearing | `core/harness/validity_checks.py` (`clear_compile_cache()`) |
 | Distributed topology verification | `core/benchmark/verify_runner.py` + `core/harness/validity_checks.py` (`verify_distributed()`, `gather_rank_outputs()`, `verify_distributed_outputs()`) |
 
-Note: `validate_environment()` treats virtualization as invalid by default for publishable results. For development/CI in a VM, set `AISP_ALLOW_VIRTUALIZATION=1`.
+Note: `validate_environment()` treats virtualization (hypervisor present) as invalid; benchmarks are supported only on bare metal.
 
 ### CLI / CI Entry Points
 

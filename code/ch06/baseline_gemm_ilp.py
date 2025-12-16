@@ -22,7 +22,9 @@ class BaselineGEMMILPBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.output: Optional[torch.Tensor] = None
         self.N = 50_000_000
         self._extension = None
-        self.repeats = 4
+        # Increase repeats so the dependency chain is long enough to make ILP
+        # differences obvious and to reduce measurement noise.
+        self.repeats = 10
         # ILP benchmark - fixed input size to measure instruction-level parallelism
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.repeats),

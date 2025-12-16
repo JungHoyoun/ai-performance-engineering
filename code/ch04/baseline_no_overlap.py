@@ -2,7 +2,7 @@
 
 This module exists to match the chapter text and expectations file.  It
 simply re-exports the BaselineNoOverlapBenchmark defined in
-`baseline_ddp_no_overlap.py`, which performs a single-process DDP-like step
+`ddp_no_overlap.py`, which performs a single-process DDP-like step
 without communication/compute overlap.
 """
 
@@ -15,7 +15,7 @@ CHAPTER_DIR = Path(__file__).parent
 if str(CHAPTER_DIR) not in sys.path:
     sys.path.insert(0, str(CHAPTER_DIR))
 
-from baseline_ddp_no_overlap import BaselineNoOverlapBenchmark
+from ddp_no_overlap import BaselineNoOverlapBenchmark
 
 
 def get_benchmark() -> BaselineNoOverlapBenchmark:

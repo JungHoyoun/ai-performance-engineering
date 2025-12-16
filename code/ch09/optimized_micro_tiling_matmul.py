@@ -37,7 +37,7 @@ class OptimizedMicroTilingMatmulBenchmark(CudaBinaryBenchmark):
             total_flops=self._total_flops,
             total_bytes=self._total_bytes,
             elapsed_ms=getattr(self, '_last_elapsed_ms', 1.0),
-            precision="fp16",
+            precision="fp32",
         )
     # get_verify_output inherited from CudaBinaryBenchmark - uses checksum from -DVERIFY=1 build
 

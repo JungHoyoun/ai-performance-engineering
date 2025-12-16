@@ -199,6 +199,7 @@ def _execute_benchmarks(
     profile_type: str = "none",
     suite_timeout: Optional[int] = 14400,
     timeout_multiplier: float = 1.0,
+    allow_invalid_environment: bool = False,
     reproducible: bool = False,
     cold_start: bool = False,
     iterations: Optional[int] = None,
@@ -311,6 +312,7 @@ def _execute_benchmarks(
             cold_start=cold_start,
             iterations=iterations,
             warmup=warmup,
+            enforce_environment_validation=not allow_invalid_environment,
             only_examples=only_examples,
             accept_regressions=accept_regressions,
             update_expectations=update_expectations,
@@ -369,6 +371,15 @@ if TYPER_AVAILABLE:
         suite_timeout: Optional[int] = Option(14400, "--suite-timeout", help="Suite timeout in seconds (default: 14400 = 4 hours, 0 = disabled)"),
         timeout_seconds: Optional[int] = Option(None, "--timeout-seconds", help="Override suite timeout in seconds (0 disables timeout)"),
         timeout_multiplier: float = Option(1.0, "--timeout-multiplier", help="Multiply all benchmark timeouts by this factor (e.g., 2.0 = double all timeouts)"),
+        allow_invalid_environment: bool = Option(
+            False,
+            "--allow-invalid-environment",
+            help=(
+                "Allow running benchmarks even if validate_environment() reports errors. "
+                "Still emits warnings; results may be invalid. Intended for unit tests and diagnostics."
+            ),
+            is_flag=True,
+        ),
         reproducible: bool = Option(False, "--reproducible", help="Enable reproducible mode: set all seeds to 42 and force deterministic algorithms (uses slower fallbacks; ops without deterministic support may error)."),
         cold_start: bool = Option(False, "--cold-start", help="Reset GPU state between benchmarks for cold start measurements"),
         iterations: Optional[int] = Option(None, "--iterations", help="Number of benchmark iterations (default: chapter-specific)"),
@@ -448,6 +459,7 @@ if TYPER_AVAILABLE:
                 "output_format": output_format,
                 "suite_timeout": effective_timeout,
                 "verify_phase": verify_phase,
+                "allow_invalid_environment": allow_invalid_environment,
             }
             typer.echo(json.dumps(plan, indent=2))
             raise typer.Exit(code=0)
@@ -458,6 +470,7 @@ if TYPER_AVAILABLE:
             profile_type=profile_type,
             suite_timeout=effective_timeout,
             timeout_multiplier=timeout_multiplier,
+            allow_invalid_environment=allow_invalid_environment,
             reproducible=reproducible,
             cold_start=cold_start,
             iterations=iterations,
@@ -698,18 +711,24 @@ if TYPER_AVAILABLE:
                 try:
                     baseline = _load_benchmark(baseline_path)
                 except Exception as e:
+                    load_reason = str(e)
+                    load_skipped = load_reason.startswith("SKIPPED:")
                     for optimized_path in selected_opts:
                         pair_name = f"{base_example}/{optimized_path.stem.replace('optimized_', '')}"
                         typer.echo(f"\n  🔍 {pair_name}:")
                         typer.echo(f"      Baseline:  {baseline_path.name}")
                         typer.echo(f"      Optimized: {optimized_path.name}")
-                        typer.echo(f"      ❌ ERROR: Failed to load baseline benchmark: {e}")
-                        failed_count += 1
+                        if load_skipped:
+                            typer.echo(f"      ⏭️  SKIPPED: {load_reason}")
+                            skipped_count += 1
+                        else:
+                            typer.echo(f"      ❌ ERROR: Failed to load baseline benchmark: {e}")
+                            failed_count += 1
                         results.append({
                             "chapter": chapter_slug_name,
                             "pair": pair_name,
-                            "status": "error",
-                            "reason": f"Failed to load baseline benchmark: {e}",
+                            "status": "skipped" if load_skipped else "error",
+                            "reason": load_reason if load_skipped else f"Failed to load baseline benchmark: {e}",
                         })
                     continue
 
@@ -717,7 +736,7 @@ if TYPER_AVAILABLE:
                 baseline_reason = _format_reason(baseline_result.reason)
                 baseline_skipped = (not baseline_result.passed) and baseline_reason.startswith("SKIPPED:")
 
-                if not baseline_result.passed:
+                if not baseline_result.passed and not baseline_skipped:
                     if phase in (EnforcementPhase.QUARANTINE, EnforcementPhase.GATE):
                         qr = _to_quarantine_reason(baseline_result.reason)
                         if qr is not None:
@@ -749,13 +768,19 @@ if TYPER_AVAILABLE:
                         try:
                             optimized = _load_benchmark(optimized_path)
                         except Exception as e:
-                            typer.echo(f"      ❌ ERROR: Failed to load optimized benchmark: {e}")
-                            failed_count += 1
+                            load_reason = str(e)
+                            load_skipped = load_reason.startswith("SKIPPED:")
+                            if load_skipped:
+                                typer.echo(f"      ⏭️  SKIPPED: {load_reason}")
+                                skipped_count += 1
+                            else:
+                                typer.echo(f"      ❌ ERROR: Failed to load optimized benchmark: {e}")
+                                failed_count += 1
                             results.append({
                                 "chapter": chapter_slug_name,
                                 "pair": pair_name,
-                                "status": "error",
-                                "reason": f"Failed to load optimized benchmark: {e}",
+                                "status": "skipped" if load_skipped else "error",
+                                "reason": load_reason if load_skipped else f"Failed to load optimized benchmark: {e}",
                             })
                             continue
 

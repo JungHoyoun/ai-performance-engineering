@@ -43,6 +43,7 @@ class OccupancyBinaryBenchmark(CudaBinaryBenchmark):
             "60",
         ]
         params = self._parse_run_args(args)
+        signature_params = {k: params[k] for k in ("inner_iters", "reps") if k in params}
         super().__init__(
             chapter_dir=chapter_dir,
             binary_name="occupancy_tuning",
@@ -52,7 +53,7 @@ class OccupancyBinaryBenchmark(CudaBinaryBenchmark):
             timeout_seconds=90,
             # Baseline: small block, heavy shared memory to depress occupancy.
             run_args=args,
-            workload_params={"batch_size": 1, **params},
+            workload_params={"batch_size": 1, **signature_params},
             time_regex=r"avg_kernel_ms=([0-9]+\.?[0-9]*)",  # Parse kernel time from binary output.
         )
         self.build_env = build_env or {}

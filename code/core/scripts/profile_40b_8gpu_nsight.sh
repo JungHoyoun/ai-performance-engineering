@@ -90,7 +90,7 @@ repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, repo_root)
 
 # Import test script
-from ch16.test_gpt_large_optimized import main
+from ch16.gpt_large_benchmark import main
 
 # Add NVTX markers for profiling
 try:

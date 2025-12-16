@@ -22,7 +22,7 @@ import torch
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from ch16.test_gpt_large_optimized import (
+from ch16.gpt_large_benchmark import (
     GPTConfig,
     GPTModel,
     validate_multi_gpu_equivalence,

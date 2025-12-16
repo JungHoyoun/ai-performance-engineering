@@ -13,7 +13,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 # Default parameters
-WORKLOAD="${1:-ch16/test_gpt_large_optimized.py}"
+WORKLOAD="${1:-ch16/gpt_large_benchmark.py}"
 WORKLOAD_ARGS="${2:---batch-size 1 --seq-len 2048}"
 OUTPUT_DIR="${3:-power_benchmark_$(date +%Y%m%d_%H%M%S)}"
 
@@ -138,5 +138,4 @@ fi
 echo ""
 echo -e "${GREEN}Analysis complete!${NC}"
 echo ""
-
 

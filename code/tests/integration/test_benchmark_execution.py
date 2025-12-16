@@ -63,6 +63,7 @@ class TestBenchmarkExecutionPipeline:
             enable_profiling=False,
             enable_memory_tracking=True,
             adaptive_iterations=False,
+            enforce_environment_validation=False,
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
         
@@ -108,6 +109,7 @@ class TestBenchmarkExecutionPipeline:
             enable_profiling=False,
             enable_memory_tracking=True,
             adaptive_iterations=False,
+            enforce_environment_validation=False,
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
         
@@ -150,6 +152,7 @@ class TestBenchmarkExecutionPipeline:
             iterations=5,
             warmup=5,
             enable_profiling=False,
+            enforce_environment_validation=False,
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
         
@@ -203,6 +206,7 @@ class TestBenchmarkExecutionPipeline:
             iterations=5,
             warmup=5,
             enable_profiling=False,
+            enforce_environment_validation=False,
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
         

@@ -29,6 +29,17 @@ python -m cli.aisp bench run --targets ch11 --profile minimal
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
 - Expectation baselines live next to each chapter in `expectations_b200.json`; refresh with `--update-expectations` after validating new hardware.
 
+## Demos (Non-Benchmark)
+These are runnable chapter companions (not baseline/optimized benchmark pairs). Run them via `aisp demos`:
+```bash
+python -m cli.aisp demos ch11-stream-overlap
+python -m cli.aisp demos ch11-stream-priority
+python -m cli.aisp demos ch11-memory-async
+python -m cli.aisp demos ch11-event-timing
+```
+- List all demos: `python -m cli.aisp demos list`
+- Pass args to a demo with `--` (e.g., `python -m cli.aisp demos ch11-stream-overlap -- --help`)
+
 ## Validation Checklist
 - `python optimized_streams.py --trace` captures overlapping NVTX ranges in Nsight Systems, proving concurrency is active.
 - `python optimized_stream_ordered_kv_cache.py --validate` matches the baseline's outputs while reducing idle gaps between cache updates.

@@ -875,7 +875,7 @@ ENTRIES["labs/cutlass_profiler_kernel_selector"] = lab_entry(
     ],
     contents=[
         ("`run_cutlass_profiler_sweep.py`", "Invokes `cutlass_profiler` for every shape in `shapes.py` and stores JSON summaries."),
-        ("`run_triton_matmul_baseline.py`", "Optional Triton matmul baseline for parity checks."),
+        ("`run_triton_matmul.py`", "Optional Triton matmul runner for parity checks."),
         ("`compare_against_baselines.py`", "Reads CUTLASS + competitor JSON files and emits TFLOP/s + speedup tables."),
         ("`shapes.py`", "Central list of GEMM shapes (prefill, decode, KV proj, etc.)."),
     ],
@@ -883,7 +883,7 @@ ENTRIES["labs/cutlass_profiler_kernel_selector"] = lab_entry(
         commands=[
             "cd ai-performance-engineering",
             "python labs/cutlass_profiler_kernel_selector/run_cutlass_profiler_sweep.py --output-dir artifacts/cutlass_profiler",
-            "python labs/cutlass_profiler_kernel_selector/run_triton_matmul_baseline.py --output-dir artifacts/cutlass_profiler",
+            "python labs/cutlass_profiler_kernel_selector/run_triton_matmul.py --output-dir artifacts/cutlass_profiler",
             "python labs/cutlass_profiler_kernel_selector/compare_against_baselines.py --include-default-triton",
         ],
         notes=[
@@ -1068,8 +1068,7 @@ ENTRIES["labs/moe_parallelism"] = lab_entry(
     ],
     contents=[
         ("`run_lab.py`, `scenarios.py`, `plan.py`", "Tool entry point + canonical scenario definitions and sizing model."),
-        ("`benchmarking.py`", "Optional harness wrapper used by legacy shims and ad-hoc validation."),
-        ("`scenario_*.py`, `shim_*.py`", "Legacy compatibility entry points; prefer `aisp tools moe-parallelism`."),
+        ("`benchmarking.py`", "Optional harness wrapper for ad-hoc validation and integration."),
     ],
     validation=[
         "`python -m cli.aisp tools moe-parallelism -- --scenario memory_budget` runs a single scenario via the tool registry.",

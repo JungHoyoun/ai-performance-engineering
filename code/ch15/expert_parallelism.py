@@ -10,7 +10,7 @@ Distributed all-to-all demo (requires torchrun):
   torchrun --nproc_per_node 4 ch15/expert_parallelism.py --mode distributed
 
 Or via the CLI:
-  python -m cli.aisp tools expert-parallelism -- --mode local
+  python -m cli.aisp demos ch15-expert-parallel -- --mode local
 """
 
 from __future__ import annotations
@@ -289,4 +289,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

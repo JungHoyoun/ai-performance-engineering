@@ -3,7 +3,8 @@
 
 This is intentionally NOT a comparative benchmark pair for `aisp bench run`.
 Run via:
-  python -m cli.aisp tools tma-multicast -- --help
+  python ch10/tma_multicast_tool.py --help
+  python -m cli.aisp demos ch10-tma-multicast -- --help
 """
 
 from __future__ import annotations
@@ -78,4 +79,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

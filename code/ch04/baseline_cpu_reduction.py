@@ -4,7 +4,7 @@ This baseline demonstrates a common anti-pattern where tensor shards are
 copied to CPU for aggregation, then back to GPU. This is extremely slow
 due to PCIe bandwidth limitations vs HBM bandwidth.
 
-The optimized version (optimized_gpu_reduction.py) keeps all ops on GPU.
+The optimized version (optimized_cpu_reduction.py) keeps all ops on GPU.
 """
 
 from __future__ import annotations

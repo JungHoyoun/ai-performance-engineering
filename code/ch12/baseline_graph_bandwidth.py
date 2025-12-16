@@ -34,8 +34,10 @@ class BaselineGraphBandwidthBenchmark(VerificationPayloadMixin, BaseBenchmark):
         super().__init__()
         self.src = None
         self.dst = None
-        self.N = 50_000_000
-        self.iterations = 10
+        # Use a moderately sized buffer and many launches to keep the workload
+        # launch-bound (where CUDA graphs can materially reduce overhead).
+        self.N = 4_000_000
+        self.iterations = 100
         self._extension = None
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,
@@ -71,8 +73,10 @@ class BaselineGraphBandwidthBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
 
         with nvtx_range("graph_bandwidth", enable=enable_nvtx):
-            for _ in range(self.iterations):
-                self._extension.separate_kernel_launches(self.dst, self.src, 1)
+            # Keep Python overhead out of the comparison: launch the kernel loop
+            # inside the extension so baseline vs optimized differs only by
+            # kernel-launch vs graph-launch overhead.
+            self._extension.separate_kernel_launches(self.dst, self.src, self.iterations)
         if self._verify_input is None or self.dst is None:
             raise RuntimeError("Verification input/output not initialized")
 

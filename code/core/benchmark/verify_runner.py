@@ -33,6 +33,7 @@ from core.benchmark.verification import (
     EnforcementPhase,
     InputSignature,
     PrecisionFlags,
+    SignatureEquivalenceSpec,
     QuarantineReason,
     ToleranceSpec,
     VerifyResult,
@@ -40,10 +41,13 @@ from core.benchmark.verification import (
     compare_workload_metrics,
     detect_seed_mutation,
     get_enforcement_phase,
+    get_signature_equivalence_spec,
     get_output_tolerance,
     is_verification_enabled,
     get_tolerance_for_dtype,
     select_jitter_dimension,
+    signature_cache_key,
+    signature_workload_dict,
     set_deterministic_seeds,
 )
 from core.benchmark.quarantine import (
@@ -93,6 +97,7 @@ class GoldenOutput:
     along with metadata about the execution context.
     """
     signature_hash: str
+    signature: Optional[Dict[str, Any]]
     outputs: Dict[str, torch.Tensor]  # Named outputs
     workload_metrics: Dict[str, float]
     checksum: str
@@ -171,6 +176,7 @@ class GoldenOutputCache:
                 outputs[name] = value
             return GoldenOutput(
                 signature_hash=data["signature_hash"],
+                signature=data.get("signature"),
                 outputs=outputs,
                 workload_metrics=data["workload_metrics"],
                 checksum=data["checksum"],
@@ -190,6 +196,7 @@ class GoldenOutputCache:
         path = self._get_cache_path(golden.signature_hash)
         data = {
             "signature_hash": golden.signature_hash,
+            "signature": golden.signature,
             # Store CPU tensors directly (bf16-safe; avoids numpy conversion failures).
             "outputs": {k: v.detach().cpu().contiguous() for k, v in golden.outputs.items()},
             "workload_metrics": golden.workload_metrics,
@@ -395,6 +402,9 @@ class VerifyRunner:
         cache_path = Path(cache_dir) if isinstance(cache_dir, str) else cache_dir
         self.cache = GoldenOutputCache(cache_path)
         self.quarantine = quarantine_manager or QuarantineManager()
+        self._last_baseline_signature: Optional[InputSignature] = None
+        self._last_baseline_cache_key: Optional[str] = None
+        self._last_baseline_equivalence: Optional[SignatureEquivalenceSpec] = None
     
     def _extract_output(self, benchmark: Any) -> Dict[str, torch.Tensor]:
         """Extract output tensor from benchmark using ONLY get_verify_output().
@@ -878,6 +888,10 @@ class VerifyRunner:
                     declared_ids = set(post_streams)
                     if info.default_stream_id is not None:
                         declared_ids.add(info.default_stream_id)
+                    if getattr(benchmark, "declare_all_streams", False):
+                        declared_ids.update(info.stream_ids)
+                    elif declared_streams:
+                        declared_ids.update({s.cuda_stream for s in declared_streams if hasattr(s, "cuda_stream")})
                     undeclared_streams = info.stream_ids - declared_ids
                     if undeclared_streams:
                         issues.append(
@@ -1186,17 +1200,22 @@ class VerifyRunner:
         try:
             # Run baseline with deterministic seed
             outputs, metrics, seed_info, inputs, signature = self._run_with_seed(baseline, config.seed)
-            try:
-                self._validate_inputs_match_signature(signature, inputs)
-            except Exception as exc:
-                return VerifyResult.fail(f"Baseline inputs do not match signature: {exc}")
+            if not getattr(baseline, "parameter_signature_only", False):
+                try:
+                    self._validate_inputs_match_signature(signature, inputs)
+                except Exception as exc:
+                    return VerifyResult.fail(f"Baseline inputs do not match signature: {exc}")
 
             errors = signature.validate(strict=False)  # Allow simple parameter-based signatures
             if errors:
                 return VerifyResult.fail(f"Invalid signature: {errors[0]}")
 
-            sig_hash = signature.hash()
-            
+            equivalence = get_signature_equivalence_spec(baseline)
+            sig_hash = signature_cache_key(signature, equivalence=equivalence)
+            self._last_baseline_signature = signature
+            self._last_baseline_equivalence = equivalence
+            self._last_baseline_cache_key = sig_hash
+
             # Capture baseline tolerance (fail-fast)
             try:
                 baseline_tol = get_output_tolerance(baseline)
@@ -1207,7 +1226,7 @@ class VerifyRunner:
                     details={"error": str(exc)},
                     timestamp=datetime.now(),
                 )
-            
+
             if not outputs:
                 return VerifyResult(
                     passed=False,
@@ -1223,10 +1242,11 @@ class VerifyRunner:
                     details={"error": "Baseline did not provide workload metadata for invariant checking"},
                     timestamp=datetime.now(),
                 )
-            
+
             # Create and cache golden output
             golden = GoldenOutput(
                 signature_hash=sig_hash,
+                signature=signature.to_dict(),
                 outputs=outputs,
                 workload_metrics=metrics,
                 checksum="",  # Will be computed
@@ -1236,15 +1256,18 @@ class VerifyRunner:
             )
             golden.checksum = golden.compute_checksum()
             self.cache.put(golden)
-            
+
             return VerifyResult.success(
                 signature_hash=sig_hash,
                 baseline_checksum=golden.checksum,
                 workload_delta=None,
                 seed_info=seed_info,
             )
-            
+
         except Exception as e:
+            msg = str(e)
+            if msg.startswith("SKIPPED:"):
+                return VerifyResult.fail(msg)
             return VerifyResult.fail(f"Baseline execution failed: {e}\n{traceback.format_exc()}")
     
     def verify_optimized(
@@ -1285,26 +1308,98 @@ class VerifyRunner:
         try:
             # Run optimized with same seed
             outputs, metrics, seed_info, inputs, signature = self._run_with_seed(optimized, config.seed)
-            try:
-                self._validate_inputs_match_signature(signature, inputs)
-            except Exception as exc:
-                return VerifyResult.fail(f"Optimized inputs do not match signature: {exc}")
+            if not getattr(optimized, "parameter_signature_only", False):
+                try:
+                    self._validate_inputs_match_signature(signature, inputs)
+                except Exception as exc:
+                    return VerifyResult.fail(f"Optimized inputs do not match signature: {exc}")
 
-            sig_hash = signature.hash()
+            equivalence = get_signature_equivalence_spec(optimized)
+            sig_hash = signature_cache_key(signature, equivalence=equivalence)
             
             # Get golden output
             golden = self.cache.get(sig_hash)
             if golden is None:
+                details: Dict[str, Any] = {
+                    "error": (
+                        f"No golden output cached for cache key {sig_hash}. "
+                        "Run verify_baseline for the corresponding baseline workload first."
+                    ),
+                    "optimized_cache_key": sig_hash,
+                    "optimized_signature_hash": signature.hash(),
+                    "optimized_equivalence": (
+                        {
+                            "group": equivalence.group,
+                            "ignore_fields": list(equivalence.ignore_fields),
+                        }
+                        if equivalence is not None
+                        else None
+                    ),
+                }
+
+                if self._last_baseline_signature is not None:
+                    baseline_sig = self._last_baseline_signature
+                    baseline_equiv = self._last_baseline_equivalence
+
+                    def _diff_paths(a: Any, b: Any, prefix: str = "", out: Optional[List[str]] = None) -> List[str]:
+                        if out is None:
+                            out = []
+                        if len(out) >= 64:
+                            return out
+                        if isinstance(a, dict) and isinstance(b, dict):
+                            keys = sorted(set(a.keys()) | set(b.keys()))
+                            for k in keys:
+                                if len(out) >= 64:
+                                    break
+                                pa = a.get(k, None)
+                                pb = b.get(k, None)
+                                if k not in a:
+                                    out.append(f"{prefix}{k} (missing baseline)")
+                                    continue
+                                if k not in b:
+                                    out.append(f"{prefix}{k} (missing optimized)")
+                                    continue
+                                _diff_paths(pa, pb, prefix=f"{prefix}{k}.", out=out)
+                            return out
+                        if isinstance(a, list) and isinstance(b, list):
+                            if len(a) != len(b):
+                                out.append(f"{prefix}len {len(a)} != {len(b)}")
+                            for idx in range(min(len(a), len(b))):
+                                if len(out) >= 64:
+                                    break
+                                _diff_paths(a[idx], b[idx], prefix=f"{prefix}[{idx}].", out=out)
+                            return out
+                        if a != b:
+                            out.append(prefix[:-1] if prefix.endswith(".") else prefix or "<root>")
+                        return out
+
+                    details.update(
+                        {
+                            "last_baseline_cache_key": self._last_baseline_cache_key,
+                            "last_baseline_signature_hash": baseline_sig.hash(),
+                            "last_baseline_equivalence": (
+                                {
+                                    "group": baseline_equiv.group,
+                                    "ignore_fields": list(baseline_equiv.ignore_fields),
+                                }
+                                if baseline_equiv is not None
+                                else None
+                            ),
+                        }
+                    )
+
+                    try:
+                        baseline_workload = signature_workload_dict(baseline_sig, equivalence=baseline_equiv)
+                        optimized_workload = signature_workload_dict(signature, equivalence=equivalence)
+                        details["signature_mismatches"] = _diff_paths(baseline_workload, optimized_workload)
+                    except Exception as exc:
+                        details["signature_mismatches_error"] = str(exc)
+
                 return VerifyResult(
                     passed=False,
                     reason=QuarantineReason.SIGNATURE_MISMATCH.value,
                     signature_hash=sig_hash,
-                    details={
-                        "error": (
-                            f"No golden output cached for signature {sig_hash}. "
-                            "Run verify_baseline first."
-                        )
-                    },
+                    details=details,
                     timestamp=datetime.now(),
                 )
             
@@ -1422,7 +1517,7 @@ class VerifyRunner:
                 cpu_tensor = outputs[name].detach().cpu().contiguous()
                 parts.append(hashlib.sha256(cpu_tensor.view(torch.uint8).numpy().tobytes()).hexdigest()[:16])
             optimized_checksum = "-".join(parts)
-            
+
             return VerifyResult.success(
                 signature_hash=sig_hash,
                 baseline_checksum=golden.checksum,
@@ -1430,8 +1525,11 @@ class VerifyRunner:
                 comparison_details=comparison,
                 seed_info=seed_info,
             )
-            
+
         except Exception as e:
+            msg = str(e)
+            if msg.startswith("SKIPPED:"):
+                return VerifyResult.fail(msg)
             return VerifyResult.fail(f"Optimized execution failed: {e}\n{traceback.format_exc()}")
     
     def _validate_timing_config(

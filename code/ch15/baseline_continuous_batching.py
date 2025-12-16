@@ -26,12 +26,12 @@ class BaselineContinuousBatchingBenchmark(VerificationPayloadMixin, BaseBenchmar
         self.num_samples = self.batch_size * self.num_batches  # 144 total samples for signature matching
         tokens = self.batch_size * self.hidden_dim * self.num_batches
         self._workload = WorkloadMetadata(
-            requests_per_iteration=float(self.num_batches),
+            requests_per_iteration=float(self.num_samples),
             tokens_per_iteration=float(tokens),
         )
         self.output = None
         self.register_workload_metadata(
-            requests_per_iteration=float(self.num_batches),
+            requests_per_iteration=float(self.num_samples),
             tokens_per_iteration=float(tokens),
         )
     

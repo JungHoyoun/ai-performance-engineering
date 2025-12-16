@@ -492,13 +492,6 @@ def _read_optional(probe: EnvironmentProbe, path: str | Path) -> Optional[str]:
         return None
 
 
-def _env_flag_enabled(value: Optional[str]) -> bool:
-    if value is None:
-        return False
-    normalized = value.strip().lower()
-    return normalized in {"1", "true", "yes", "y", "on"}
-
-
 def _parse_cgroup_v2_path(cgroup_text: str) -> Optional[str]:
     for line in cgroup_text.splitlines():
         line = line.strip()
@@ -680,18 +673,7 @@ def validate_environment(
         is_virtualized = True
     details["virtualized"] = is_virtualized
     if is_virtualized:
-        allow_virtualization = _env_flag_enabled(probe.env.get("AISP_ALLOW_VIRTUALIZATION"))
-        details["allow_virtualization"] = allow_virtualization
-        if allow_virtualization:
-            warnings_list.append(
-                "Virtualization detected (hypervisor present) but AISP_ALLOW_VIRTUALIZATION=1 is set. "
-                "Results may include virtualization overhead; prefer bare metal for publishable numbers."
-            )
-        else:
-            errors.append(
-                "Virtualization detected (hypervisor present). Run benchmarks on bare metal for valid results "
-                "or set AISP_ALLOW_VIRTUALIZATION=1 for development runs."
-            )
+        errors.append("Virtualization detected (hypervisor present). Run benchmarks on bare metal for valid results.")
 
     # torch.compile backend sanity (Compile category)
     try:
@@ -912,6 +894,8 @@ class StreamAuditor:
         self._observed_streams: Set[int] = set()
         self._sync_count: int = 0
         self._orig_stream_cls = None
+        self._orig_stream_synchronize = None
+        self._orig_stream_wait_stream = None
         self._orig_synchronize = None
         self._orig_stream_fn = None
         self._orig_set_stream_fn = None
@@ -946,6 +930,33 @@ class StreamAuditor:
             torch.cuda.Stream = _audited_stream  # type: ignore[assignment]
         except Exception:
             self._orig_stream_cls = None
+
+        # Monkeypatch Stream methods to capture stream sync / dependencies
+        if self._orig_stream_cls is not None:
+            try:
+                self._orig_stream_synchronize = self._orig_stream_cls.synchronize
+                auditor = self
+
+                def _audited_stream_synchronize(stream_self, *args, **kwargs):
+                    auditor.record_sync("stream")
+                    return auditor._orig_stream_synchronize(stream_self, *args, **kwargs)
+
+                self._orig_stream_cls.synchronize = _audited_stream_synchronize  # type: ignore[assignment]
+            except Exception:
+                self._orig_stream_synchronize = None
+
+            try:
+                self._orig_stream_wait_stream = self._orig_stream_cls.wait_stream
+                auditor = self
+
+                def _audited_stream_wait_stream(stream_self, stream, *args, **kwargs):
+                    auditor.record_sync("wait_stream")
+                    auditor.record_stream_event(stream, operation="wait_stream")
+                    return auditor._orig_stream_wait_stream(stream_self, stream, *args, **kwargs)
+
+                self._orig_stream_cls.wait_stream = _audited_stream_wait_stream  # type: ignore[assignment]
+            except Exception:
+                self._orig_stream_wait_stream = None
         
         # Monkeypatch synchronize to capture syncs
         try:
@@ -1028,6 +1039,16 @@ class StreamAuditor:
                 torch.cuda.Stream = self._orig_stream_cls  # type: ignore[assignment]
             except Exception:
                 pass
+            if self._orig_stream_synchronize is not None:
+                try:
+                    self._orig_stream_cls.synchronize = self._orig_stream_synchronize  # type: ignore[assignment]
+                except Exception:
+                    pass
+            if self._orig_stream_wait_stream is not None:
+                try:
+                    self._orig_stream_cls.wait_stream = self._orig_stream_wait_stream  # type: ignore[assignment]
+                except Exception:
+                    pass
         if self._orig_synchronize is not None:
             try:
                 torch.cuda.synchronize = self._orig_synchronize  # type: ignore[assignment]
@@ -1078,9 +1099,10 @@ class StreamAuditor:
         if info.unsync_warning:
             warnings_list.append(
                 f"STREAM SYNC WARNING: {info.custom_streams_detected} custom stream(s) "
-                "detected but no device synchronization was recorded. "
+                "detected but no synchronization was recorded. "
                 "This could allow work to escape timing measurement. "
-                "Use torch.cuda.synchronize() for accurate multi-stream timing."
+                "Use torch.cuda.synchronize(), stream.synchronize(), or current_stream.wait_stream(...) "
+                "for accurate multi-stream timing."
             )
         
         # Warning: many custom streams (unusual for benchmarks)

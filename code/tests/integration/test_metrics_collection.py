@@ -61,6 +61,7 @@ class TestMetricsCollectionIntegration:
             warmup=5,
             enable_profiling=False,
             adaptive_iterations=False,
+            enforce_environment_validation=False,
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
         
@@ -103,6 +104,7 @@ class TestMetricsCollectionIntegration:
             warmup=5,
             enable_profiling=False,
             enable_memory_tracking=True,  # Enable memory tracking
+            enforce_environment_validation=False,
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
         
@@ -140,6 +142,7 @@ class TestMetricsCollectionIntegration:
             warmup=5,
             enable_profiling=False,
             adaptive_iterations=False,
+            enforce_environment_validation=False,
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
         

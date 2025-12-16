@@ -6,10 +6,6 @@ This is a *tool* (not a comparable baseline/optimized benchmark pair).
 Run with torchrun (multi-GPU required):
 
   torchrun --nproc_per_node 4 ch13/context_parallelism.py --sequence-length 131072
-
-Or via the CLI:
-
-  python -m cli.aisp tools context-parallelism -- --sequence-length 131072 --num-heads 32 --hidden-size 4096
 """
 
 from __future__ import annotations
@@ -264,4 +260,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

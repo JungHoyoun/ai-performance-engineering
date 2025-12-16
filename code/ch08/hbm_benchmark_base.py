@@ -29,6 +29,8 @@ class HBMBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA required for HBM benchmarks")
         self.device = torch.device("cuda")
+        bytes_per_iteration = float(self.rows * self.cols * 4 + self.rows * 4)
+        self.register_workload_metadata(bytes_per_iteration=bytes_per_iteration, requests_per_iteration=1.0)
         self.extension = None
         self.matrix_row: Optional[torch.Tensor] = None
         self.matrix_col: Optional[torch.Tensor] = None

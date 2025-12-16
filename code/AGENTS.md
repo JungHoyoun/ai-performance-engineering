@@ -18,23 +18,42 @@
 - Let's consider all options and find the best speedup 
 - Make sure we're staying with the intent of the example and within the context of the chapter (book/chXX.md).
 
-## Benchmarks vs Tools (CRITICAL)
+## Benchmarks vs Tools/Demos (CRITICAL)
 
 ### Benchmarks (comparable baseline vs optimized)
 - `aisp bench run --targets ...` should only include targets that are explicitly intended to demonstrate an optimization outcome.
   - Default: **performance** (speedup) with clear speedup potential.
   - Rare: **memory** (reduced memory) when explicitly the goal.
 - Comparable benchmarks must use `baseline_*.py` + `optimized_*.py` naming and MUST be equivalent workloads (no hidden work reduction, no extra work in a variant hot path).
+- DO NOT rename benchmark pairs to suffix forms like `*_baseline.py` / `*_optimized.py`. If it’s a real harness pair, keep the `baseline_*/optimized_*` prefix naming.
 
 ### Memory-goal benchmarks
 - Memory-goal benchmarks are still comparable baseline vs optimized pairs, but are evaluated on memory savings (not speed).
 - Gate on `baseline_memory_mb / optimized_memory_mb >= 1.05` (speed may regress; do not add a speed gate).
 
+### Demos / examples (NOT comparable benchmarks)
+- Demos are runnable chapter companions / examples. They are NOT compared by the benchmark harness.
+- Demos MUST NOT use `baseline_*/optimized_*` naming (to avoid accidental benchmark discovery).
+- Prefer `*_demo.py` naming for demo entry points.
+- Run these via `aisp demos <name> -- <args...>` by registering the script path in `core/demos/demos_commands.py` (`DEMOS` mapping).
+- Demos should convey the same optimization ideas as the chapter/book, but do not need to be byte-for-byte identical to the book snippets. Keep them aligned in intent and narrative.
+
 ### Tools / methodology / analysis scripts (NOT comparable benchmarks)
 - If something is not meant to be compared as baseline vs optimized (e.g., roofline analysis, config sweeps, monitoring bundles, validation workflows), it MUST NOT use `baseline_*/optimized_*` naming.
+- Do NOT use suffix forms like `*_baseline.py` / `*_optimized.py` for tools; prefer descriptive names like `*_tool.py`, `*_analysis.py`, or `*_demo.py` (if it’s a demo).
+- If you find an existing `baseline_*/optimized_*` pair that is NOT truly comparable, first try to make it a real harness-comparable pair. If that’s not possible, reclassify it as a demo/tool and rename it out of `baseline_*/optimized_*` (and do not leave compatibility shims/aliases behind).
 - Keep only the “full / sophisticated” version (no `_basic`, no smoke/minimal variants).
 - Keep the tool script at the chapter/lab level when book context references it, but decouple it from benchmark discovery and `bench run`.
 - Run these via `aisp tools <name> -- <args...>` by registering the script path in `core/tools/tools_commands.py` (`TOOLS` mapping).
+
+### Labs (CRITICAL)
+- Labs are intended to be **realistic, end-to-end optimization stories** that tie together multiple chapter techniques (kernel + runtime + system), and should be structured as **harness-comparable** `baseline_*.py` / `optimized_*.py` pairs whenever feasible.
+- Prefer **augmenting** an existing lab benchmark pair (adding additional optimizations to the optimized variant, keeping the same workload/output) over introducing one-off scripts.
+- If something in `labs/` is **not** a harness-comparable baseline/optimized workload (e.g., planners, config generators, diagnostic reporters), it must be treated as a **tool or demo**:
+  - It MUST NOT use `baseline_*/optimized_*` naming.
+  - It SHOULD be registered under `aisp tools` (utility/analysis) or `aisp demos` (example runner).
+  - It MUST NOT keep compatibility shims/wrappers/aliases.
+- Avoid duplicating a chapter pair verbatim in `labs/`; labs should add integration value (multi-optimization, multi-GPU, end-to-end workflow) rather than rehosting identical comparisons.
 
 ### Hardware Diagnostics (microbench)
 - Hardware microbenchmarks (e.g., `aisp_hw_*` tools / `core/diagnostics/microbench.py`) are **diagnostic-only** and intentionally bypass the benchmark harness and its 94 validity protections.
@@ -67,7 +86,7 @@ The table below documents known issues that can cause benchmark results to be mi
 
 **CUDA Graph Note:** Capturing CUDA graphs in `setup()` is allowed for steady-state replay benchmarks (we intentionally measure replay, not capture). It is NOT allowed to precompute and reuse the final output from `setup()`; the output used for verification must come from the timed `benchmark_fn()` run and be surfaced via `capture_verification_payload()`.
 
-**Virtualization Note:** `validate_environment()` treats virtualization as invalid by default for publishable performance numbers. For development/CI in a VM, set `AISP_ALLOW_VIRTUALIZATION=1` (results may include virtualization overhead; do not publish).
+**Virtualization Note:** `validate_environment()` treats virtualization (hypervisor present) as invalid. Benchmarks are supported only on bare metal.
 
 | Category | Issue | What Happens | Protection | Status | Real-World Incident |
 |----------|-------|--------------|------------|--------|---------------------|

@@ -50,8 +50,9 @@ class BaselinePagedAttnBenchmark(VerificationPayloadMixin, BaseBenchmark):
         torch.cuda.manual_seed_all(42)
         # Longer sequence to expose flash SDPA advantage (O(N) vs O(N²) memory).
         b, h, s, d = 4, 16, 2048, 64
-        # Baseline uses full-precision SDPA without flash/memory-efficient kernels.
-        self.qkv = torch.randn(b, h, s, 3, d, device=self.device, dtype=torch.float32)
+        # Baseline forces the unfused math backend; keep dtype aligned with optimized (BF16)
+        # so the comparison isolates backend choice (math vs flash).
+        self.qkv = torch.randn(b, h, s, 3, d, device=self.device, dtype=torch.bfloat16)
         # Aggressive warmup: run multiple times to fully JIT-compile the math SDPA path.
         q = self.qkv[:, :, :, 0]
         k = self.qkv[:, :, :, 1]

@@ -63,8 +63,8 @@ class OptimizedGraphBenchmark(VerificationPayloadMixin, BaseBenchmark):
         # Keep the tensor small enough that kernel launch overhead is visible.
         # CUDA graph replay amortizes those launches in the steady-state loop.
         self.batch_size = 16
-        self.seq_len = 128
-        self.hidden_dim = 512
+        self.seq_len = 64
+        self.hidden_dim = 256
         # Increase the number of tiny ops so the workload is launch-bound and
         # CUDA graph replay shows a clear steady-state speedup.
         self.num_loops = 64
@@ -106,27 +106,20 @@ class OptimizedGraphBenchmark(VerificationPayloadMixin, BaseBenchmark):
             device=self.device, dtype=dtype
         )
         self._verify_input = self.data.detach().clone()
-        
-        # Non-default stream required for graph capture
+
+        # Non-default stream required for graph capture.
         self._graph_stream = torch.cuda.Stream()
-        
-        # Warmup before capture (required for some ops)
-        torch.cuda.synchronize()
-        with torch.cuda.stream(self._graph_stream):
-            for _ in range(5):
-                self._compute_ops()
-        torch.cuda.synchronize()
-        
-        # Capture the execution graph while preserving baseline state
+
+        # Capture the execution graph while preserving the initial state so timed
+        # iterations begin from the same tensor as the baseline variant.
         initial_state = self.data.detach().clone()
         self._graph = CUDAGraph()
+        self._synchronize()
         with torch.cuda.stream(self._graph_stream):
             with torch.cuda.graph(self._graph, stream=self._graph_stream):
                 self._compute_ops()
-        # Restore data so post-capture state matches the baseline setup
         self.data.copy_(initial_state)
-        
-        torch.cuda.synchronize()
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark CUDA graph replay - much faster than fresh launches."""
@@ -135,11 +128,11 @@ class OptimizedGraphBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._synchronize()
         if self._verify_input is None or self.data is None:
             raise RuntimeError("Verification input/output not initialized")
-        dtype = self._verify_input.dtype
-        self._payload_dtype = dtype
 
     def capture_verification_payload(self) -> None:
-        dtype = self._payload_dtype
+        if self._verify_input is None:
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
+        dtype = self._verify_input.dtype
         self._set_verification_payload(
             inputs={"input": self._verify_input},
             output=self.data.detach().clone(),

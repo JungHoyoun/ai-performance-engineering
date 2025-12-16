@@ -112,14 +112,30 @@ def _iter_benchmark_dirs(bench_root: Path) -> Iterable[Path]:
         "node_modules",
         ".venv",
         "venv",
+        ".torch_inductor",
+        ".torch_extensions",
         ".next",
         ".turbo",
         "build",
         "dist",
         "out",
+        "artifacts",
+        "benchmark_profiles",
+        "benchmark_profiles_chXX",
+        "profiling_results",
+        "hta_output",
+        "gpt-oss-20b",
+        "third_party",
     }
     for current, dirnames, filenames in os.walk(bench_root):
-        dirnames[:] = [d for d in dirnames if d not in ignore_dirs and not d.startswith(".")]
+        dirnames[:] = [
+            d
+            for d in dirnames
+            if d not in ignore_dirs
+            and not d.startswith(".")
+            and not d.startswith("artifacts")
+            and not d.startswith("benchmark_profiles")
+        ]
         if any(
             fname.startswith("baseline_") and (fname.endswith(".py") or fname.endswith(".cu"))
             for fname in filenames

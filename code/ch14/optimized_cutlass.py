@@ -67,9 +67,8 @@ class OptimizedCutlassBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Setup: Initialize matrices with optimal configuration."""
         torch.manual_seed(42)
         
-        # ENABLE TF32 for tensor core acceleration (this IS the optimization!)
-        # Baseline disables TF32 to simulate non-optimized GEMM
-        self._tf32_state = configure_tf32(enable_matmul=True, enable_cudnn=True)
+        # Match baseline backend flags: this benchmark uses FP16 matmul, so TF32 is irrelevant.
+        self._tf32_state = configure_tf32(enable_matmul=False, enable_cudnn=False)
         torch.set_float32_matmul_precision("high")
         
         # Optimization: Enable cuDNN benchmarking for optimal kernel selection
@@ -123,7 +122,7 @@ class OptimizedCutlassBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 "fp16": True,
                 "bf16": False,
                 "fp8": False,
-                "tf32": True,
+                "tf32": False,
             },
             output_tolerance=(0.1, 2.0),
         )

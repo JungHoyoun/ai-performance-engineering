@@ -1777,6 +1777,13 @@ if typer:
     except Exception:
         TOOLS_APP = None
 
+    # Demos integration (core)
+    try:
+        from core.demos import demos_commands
+        DEMOS_APP = demos_commands.app if getattr(demos_commands, "TYPER_AVAILABLE", False) else None
+    except Exception:
+        DEMOS_APP = None
+
     plugin_apps = load_plugin_apps()
 
     if TOOLS_APP:
@@ -1786,6 +1793,15 @@ if typer:
         @app.command("tools", help="Run non-benchmark tools and utilities")
         def tools_stub() -> None:
             typer.echo("Tools CLI unavailable (typer not installed or import failed).")
+            raise typer.Exit(code=1)
+
+    if DEMOS_APP:
+        app.add_typer(DEMOS_APP, name="demos", help="Run demos and runnable examples (non-benchmark)")
+    else:  # pragma: no cover - demos missing during docs builds
+
+        @app.command("demos", help="Run demos and runnable examples (non-benchmark)")
+        def demos_stub() -> None:
+            typer.echo("Demos CLI unavailable (typer not installed or import failed).")
             raise typer.Exit(code=1)
 
     if BENCH_APP:

@@ -190,39 +190,32 @@ class InputSignature:
             sparsity_ratio=data.get("sparsity_ratio"),
             quantization_mode=data.get("quantization_mode"),
         )
-    
-    def matches(self, other: "InputSignature") -> bool:
-        """Check if two signatures are equivalent.
-        
-        Two signatures match if all their fields are equal. This is used to
-        verify baseline and optimized run on equivalent workloads.
-        """
-        return self.to_dict() == other.to_dict()
-    
+
     def validate(self, strict: bool = False) -> List[str]:
         """Validate that required fields are present and valid.
-        
+
         Args:
             strict: If True, require shapes and dtypes to be non-empty.
-                   If False (default), allow simple parameter-based signatures.
-        
+                If False (default), allow simple parameter-based signatures.
+
         Returns:
-            List of validation error messages (empty if valid)
+            List of validation error messages (empty if valid).
         """
-        errors = []
-        
-        # In strict mode, require shapes and dtypes
+        errors: List[str] = []
+
         if strict:
             if not self.shapes:
                 errors.append("shapes is required and cannot be empty")
             if not self.dtypes:
                 errors.append("dtypes is required and cannot be empty")
-        
-        # batch_size can be 0 for simple parameter-based signatures
+
         if self.batch_size < 0:
             errors.append("batch_size cannot be negative")
         if self.parameter_count < 0:
             errors.append("parameter_count cannot be negative")
+
+        if not isinstance(self.precision_flags, PrecisionFlags):
+            errors.append("precision_flags must be a PrecisionFlags instance")
 
         if self.pipeline_stages is not None:
             if self.pipeline_stages < 1:
@@ -261,8 +254,118 @@ class InputSignature:
                                     errors.append("pipeline_stage_boundaries must be contiguous and non-overlapping")
                                     break
                             prev_end = end
-            
+
         return errors
+    
+    def matches(self, other: "InputSignature") -> bool:
+        """Check if two signatures are equivalent.
+        
+        Two signatures match if all their fields are equal. This is used to
+        verify baseline and optimized run on equivalent workloads.
+        """
+        return self.to_dict() == other.to_dict()
+
+
+# =============================================================================
+# Signature Equivalence (Comparable Benchmark Pairs)
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class SignatureEquivalenceSpec:
+    """Explicit opt-in for signature fields allowed to differ between a pair.
+
+    Comparable baseline/optimized benchmarks must run equivalent workloads. In rare
+    cases (notably precision-change examples), it is valid for *selected* signature
+    fields to differ while preserving semantic workload equivalence.
+
+    This spec is fail-fast and must be declared explicitly by benchmarks via
+    `signature_equivalence_group` + `signature_equivalence_ignore_fields`.
+    """
+
+    group: str
+    ignore_fields: Tuple[str, ...] = ()
+
+    def validate(self) -> None:
+        if not isinstance(self.group, str) or not self.group.strip():
+            raise ValueError("SignatureEquivalenceSpec.group must be a non-empty string")
+        if not isinstance(self.ignore_fields, tuple):
+            raise TypeError("SignatureEquivalenceSpec.ignore_fields must be a tuple[str, ...]")
+        for field_name in self.ignore_fields:
+            if not isinstance(field_name, str) or not field_name:
+                raise TypeError("SignatureEquivalenceSpec.ignore_fields entries must be non-empty strings")
+        allowed = {"precision_flags"}
+        unknown = set(self.ignore_fields) - allowed
+        if unknown:
+            raise ValueError(
+                "SignatureEquivalenceSpec.ignore_fields contains unsupported fields: "
+                f"{sorted(unknown)}. Allowed: {sorted(allowed)}"
+            )
+
+
+def get_signature_equivalence_spec(benchmark: Any) -> Optional[SignatureEquivalenceSpec]:
+    """Extract an explicit signature-equivalence spec from a benchmark object.
+
+    Benchmarks may define:
+    - `signature_equivalence_group`: str (required when enabling equivalence)
+    - `signature_equivalence_ignore_fields`: tuple[str, ...] (required when enabling equivalence)
+    """
+
+    group = getattr(benchmark, "signature_equivalence_group", None)
+    ignore_fields = getattr(benchmark, "signature_equivalence_ignore_fields", None)
+
+    if group is None and ignore_fields is None:
+        return None
+
+    if group is None or ignore_fields is None:
+        raise RuntimeError(
+            "Signature equivalence requires BOTH `signature_equivalence_group` and "
+            "`signature_equivalence_ignore_fields` to be set explicitly."
+        )
+
+    if not isinstance(ignore_fields, tuple):
+        raise TypeError("signature_equivalence_ignore_fields must be a tuple[str, ...]")
+
+    spec = SignatureEquivalenceSpec(group=str(group), ignore_fields=ignore_fields)
+    spec.validate()
+    return spec
+
+
+def signature_workload_dict(
+    signature: "InputSignature",
+    *,
+    equivalence: Optional[SignatureEquivalenceSpec] = None,
+) -> Dict[str, Any]:
+    """Return a deterministic dict for workload equivalence comparisons."""
+
+    data = signature.to_dict()
+    if equivalence is None:
+        return data
+    equivalence.validate()
+    for field_name in equivalence.ignore_fields:
+        data.pop(field_name, None)
+    return data
+
+
+def signature_cache_key(
+    signature: "InputSignature",
+    *,
+    equivalence: Optional[SignatureEquivalenceSpec] = None,
+) -> str:
+    """Generate a cache key, optionally using an equivalence spec.
+
+    When `equivalence` is provided, the key is derived from:
+    - the workload dict with ignored fields removed, plus
+    - an explicit equivalence-group tag to avoid cross-benchmark collisions.
+    """
+
+    if equivalence is None:
+        return signature.hash()
+
+    workload = signature_workload_dict(signature, equivalence=equivalence)
+    workload["_equivalence_group"] = equivalence.group
+    json_str = json.dumps(workload, sort_keys=True)
+    return hashlib.sha256(json_str.encode()).hexdigest()[:16]
 
 
 # =============================================================================

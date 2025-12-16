@@ -13,7 +13,7 @@ Automates CUTLASS profiler sweeps for transformer-style GEMMs, records Triton or
 | Path | Description |
 | --- | --- |
 | `run_cutlass_profiler_sweep.py` | Invokes `cutlass_profiler` for every shape in `shapes.py` and stores JSON summaries. |
-| `run_triton_matmul_baseline.py` | Optional Triton matmul baseline for parity checks. |
+| `run_triton_matmul.py` | Optional Triton matmul runner for parity checks. |
 | `compare_against_baselines.py` | Reads CUTLASS + competitor JSON files and emits TFLOP/s + speedup tables. |
 | `shapes.py` | Central list of GEMM shapes (prefill, decode, KV proj, etc.). |
 
@@ -22,7 +22,7 @@ Use the benchmark harness for quick comparisons or drive the Typer CLI when you 
 ```bash
 cd ai-performance-engineering
 python labs/cutlass_profiler_kernel_selector/run_cutlass_profiler_sweep.py --output-dir artifacts/cutlass_profiler
-python labs/cutlass_profiler_kernel_selector/run_triton_matmul_baseline.py --output-dir artifacts/cutlass_profiler
+python labs/cutlass_profiler_kernel_selector/run_triton_matmul.py --output-dir artifacts/cutlass_profiler
 python labs/cutlass_profiler_kernel_selector/compare_against_baselines.py --include-default-triton
 ```
 - Set `CUTLASS_PROFILER_BIN` to point at your `cutlass_profiler` binary after running `./setup.sh`.

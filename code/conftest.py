@@ -18,9 +18,6 @@ os.environ.setdefault("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 # Keep linear warnings visible by default; callers can still override PYTHONWARNINGS.
 os.environ.setdefault("PYTHONWARNINGS", "default")
-# CI and dev environments frequently run inside a hypervisor; allow harness
-# benchmarks to execute while still recording virtualization metadata.
-os.environ.setdefault("AISP_ALLOW_VIRTUALIZATION", "1")
 # Torch debug logging is enabled in many environments via TORCH_LOGS.
 # When those atexit hooks fire after pytest has closed capture streams,
 # the logging writes can raise ValueError on a closed file. Disable noisy

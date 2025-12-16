@@ -20,8 +20,6 @@ class BaselineHBMBenchmark(HBMBenchmarkBase):
         assert self.host_col is not None
         assert self.matrix_col is not None
         assert self.output is not None
-        # Naive path: copy pageable host memory to device every iteration before running the kernel.
-        self.matrix_col.copy_(self.host_col, non_blocking=False)
         self.extension.hbm_baseline(self.matrix_col, self.output)
 
 

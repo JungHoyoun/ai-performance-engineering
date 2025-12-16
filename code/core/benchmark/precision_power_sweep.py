@@ -24,7 +24,7 @@ from typing import Dict, Iterable, List, Optional
 
 import torch
 
-from ch16.test_gpt_large_optimized import (
+from ch16.gpt_large_benchmark import (
     GPTConfig,
     Workload,
     run_workload,
@@ -34,12 +34,17 @@ from ch16.test_gpt_large_optimized import (
 
 try:
     import pynvml  # type: ignore
+except ImportError as exc:  # pragma: no cover - required dependency
+    raise RuntimeError(
+        "precision_power_sweep requires pynvml (nvidia-ml-py) when CUDA is available."
+    ) from exc
 
-    PYNVML_AVAILABLE = True
+try:
     pynvml.nvmlInit()
-except Exception:
-    PYNVML_AVAILABLE = False
-    pynvml = None  # type: ignore
+except Exception as exc:
+    raise RuntimeError(f"NVML initialization failed: {exc}") from exc
+
+PYNVML_AVAILABLE = True
 
 
 @dataclass
@@ -80,18 +85,14 @@ class PowerSampler:
         self.samples: List[tuple[float, List[float], float]] = []
         self._thread: Optional[threading.Thread] = None
         self._stop_event: Optional[threading.Event] = None
-        if self.available:
-            self._handles = [
-                pynvml.nvmlDeviceGetHandleByIndex(idx) for idx in self.gpu_indices
-            ]
-        else:
-            self._handles = []
+        self._error: Optional[BaseException] = None
+        self._error_lock = threading.Lock()
+        self._handles = [pynvml.nvmlDeviceGetHandleByIndex(idx) for idx in self.gpu_indices]
 
     def start(self) -> None:
-        if not self.available:
-            return
         if self._thread is not None and self._thread.is_alive():
             raise RuntimeError("PowerSampler already running.")
+        self._error = None
         self.samples = []
         self._stop_event = threading.Event()
         self._sample_once()
@@ -99,8 +100,6 @@ class PowerSampler:
         self._thread.start()
 
     def stop(self) -> Optional[Dict[str, object]]:
-        if not self.available:
-            return None
         if self._thread is None:
             return self._build_metrics()
         assert self._stop_event is not None
@@ -108,31 +107,31 @@ class PowerSampler:
         self._thread.join()
         self._thread = None
         self._stop_event = None
+        self._raise_if_error()
         self._sample_once()
         return self._build_metrics()
 
     def close(self) -> None:
-        if self.available:
-            pynvml.nvmlShutdown()
+        self._raise_if_error()
+        pynvml.nvmlShutdown()
         self.available = False
         self._handles = []
 
     def _run(self) -> None:
         assert self._stop_event is not None
-        while not self._stop_event.wait(self.interval):
-            self._sample_once()
+        try:
+            while not self._stop_event.wait(self.interval):
+                self._sample_once()
+        except BaseException as exc:
+            self._record_error(exc)
+            self._stop_event.set()
 
     def _sample_once(self) -> None:
-        if not self.available:
-            return
         timestamp = time.time()
         per_device: List[float] = []
         total_power = 0.0
         for handle in self._handles:
-            try:
-                milliwatts = pynvml.nvmlDeviceGetPowerUsage(handle)
-            except pynvml.NVMLError:  # type: ignore[attr-defined]
-                milliwatts = 0
+            milliwatts = pynvml.nvmlDeviceGetPowerUsage(handle)
             watts = milliwatts / 1000.0
             per_device.append(float(watts))
             total_power += watts
@@ -140,14 +139,9 @@ class PowerSampler:
 
     def _build_metrics(self) -> Dict[str, object]:
         if len(self.samples) < 2:
-            return {
-                "avg_watts": 0.0,
-                "max_watts": 0.0,
-                "min_watts": 0.0,
-                "duration_s": 0.0,
-                "energy_joules": 0.0,
-                "per_device": [],
-            }
+            raise RuntimeError(
+                "PowerSampler requires at least two samples to compute energy metrics."
+            )
 
         totals = [sample[2] for sample in self.samples]
         timestamps = [sample[0] for sample in self.samples]
@@ -179,6 +173,17 @@ class PowerSampler:
             "energy_joules": float(energy),
             "per_device": per_device_stats,
         }
+
+    def _record_error(self, exc: BaseException) -> None:
+        with self._error_lock:
+            if self._error is None:
+                self._error = exc
+
+    def _raise_if_error(self) -> None:
+        with self._error_lock:
+            if self._error is None:
+                return
+            raise RuntimeError("NVML power sampling failed.") from self._error
 
 
 AVAILABLE_MODES: Dict[str, PrecisionRunConfig] = {

@@ -46,8 +46,8 @@ class BaselineGraphBenchmark(VerificationPayloadMixin, BaseBenchmark):
         # Keep the tensor small enough that kernel launch overhead is visible.
         # The optimized variant uses CUDA graph replay to amortize those launches.
         self.batch_size = 16
-        self.seq_len = 128
-        self.hidden_dim = 512
+        self.seq_len = 64
+        self.hidden_dim = 256
         # Increase the number of tiny ops so the workload is launch-bound and
         # CUDA graph replay shows a clear steady-state speedup.
         self.num_loops = 64
@@ -86,12 +86,14 @@ class BaselineGraphBenchmark(VerificationPayloadMixin, BaseBenchmark):
             device=self.device, dtype=dtype
         )
         self._verify_input = self.data.detach().clone()
-        
-        # Warmup
-        for _ in range(5):
-            self._compute_ops()
-        
-        torch.cuda.synchronize()
+
+        # Match the optimized variant's unavoidable "one execution" during graph capture:
+        # run the ops once, then restore state so timed iterations start from the same tensor.
+        initial_state = self.data.detach().clone()
+        self._compute_ops()
+        self.data.copy_(initial_state)
+
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark fresh kernel launches."""

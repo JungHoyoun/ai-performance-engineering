@@ -39,6 +39,10 @@ class LoopUnrollingBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
     def __init__(self) -> None:
         super().__init__()
         self.device = resolve_device()
+        bytes_per_iteration = float(
+            self.rows * self.elements_per_row * 4 + self.weight_period * 4 + self.rows * 4
+        )
+        self.register_workload_metadata(bytes_per_iteration=bytes_per_iteration, requests_per_iteration=1.0)
         self.extension = None
         self.inputs: Optional[torch.Tensor] = None
         self.weights: Optional[torch.Tensor] = None

@@ -198,7 +198,7 @@ class OptimizedFP8PerChannelBenchmark(VerificationPayloadMixin, BaseBenchmark):
         dtype = self._payload_dtype
         self._set_verification_payload(
             inputs={"input": self._verify_input},
-            output=self.output.detach().clone(),
+            output=self.output.detach().to(torch.float32).clone(),
             batch_size=self._verify_input.shape[0],
             parameter_count=self.parameter_count,
             precision_flags={

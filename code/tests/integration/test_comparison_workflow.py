@@ -81,6 +81,7 @@ class TestComparisonWorkflowIntegration:
             iterations=5,
             warmup=5,
             enable_profiling=False,
+            enforce_environment_validation=False,
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
         

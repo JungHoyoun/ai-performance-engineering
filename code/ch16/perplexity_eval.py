@@ -16,7 +16,7 @@ from typing import List
 import torch
 import torch.nn.functional as F
 
-from ch16.test_gpt_large_optimized import GPTConfig, GPTModel
+from ch16.gpt_large_benchmark import GPTConfig, GPTModel
 
 
 def load_tokens(path: Path) -> List[int]:

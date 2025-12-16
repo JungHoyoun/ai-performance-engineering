@@ -17,6 +17,8 @@ from core.benchmark.verification import simple_signature
 class TorchrunScriptBenchmark(BaseBenchmark):
     """Wrap a script-based training demo so the harness can launch it via torchrun."""
 
+    verification_not_applicable_reason = "torchrun benchmarks execute in external processes"
+
     def __init__(
         self,
         *,
@@ -38,6 +40,12 @@ class TorchrunScriptBenchmark(BaseBenchmark):
         self.name = name or self._script_path.stem
         # Compliance: verification interface
         self.register_workload_metadata(requests_per_iteration=1.0)
+
+    def skip_input_verification(self) -> bool:
+        return True
+
+    def skip_output_verification(self) -> bool:
+        return True
 
     def get_config(self) -> BenchmarkConfig:
         cfg = BenchmarkConfig(

@@ -30,6 +30,16 @@ python -m cli.aisp bench run --targets ch12 --profile minimal
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
 - Expectation baselines live next to each chapter in `expectations_b200.json`; refresh with `--update-expectations` after validating new hardware.
 
+## Demos (Non-Benchmark)
+These are runnable CUDA-graph companions (not baseline/optimized benchmark pairs). Run them via `aisp demos`:
+```bash
+python -m cli.aisp demos ch12-graph-capture
+python -m cli.aisp demos ch12-graph-replay
+python -m cli.aisp demos ch12-instantiation-overhead
+```
+- List all demos: `python -m cli.aisp demos list`
+- Pass args to a demo with `--` (e.g., `python -m cli.aisp demos ch12-graph-capture -- --help`)
+
 ## Validation Checklist
 - `python optimized_cuda_graphs.py --iterations 100` should report lower wall-clock time than the baseline while matching outputs.
 - Device-side dynamic parallelism samples emit warnings on unsupported hardware, ensuring you only trust data from GPUs with the feature enabled.

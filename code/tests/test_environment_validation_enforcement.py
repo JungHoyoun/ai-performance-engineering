@@ -139,13 +139,3 @@ def test_environment_enforcement_virtualization_detected() -> None:
         _write_file(env_root, "/proc/cpuinfo", "processor\t: 0\nflags\t: hypervisor\n")
         errors = _run_harness(env_root, probe=EnvironmentProbe(root=env_root, env={}))
         assert any("ENVIRONMENT INVALID" in e and "Virtualization detected" in e for e in errors), errors
-
-
-def test_environment_virtualization_override_allows_run() -> None:
-    with tempfile.TemporaryDirectory() as env_dir:
-        env_root = Path(env_dir)
-        _make_base_env(env_root)
-        _write_file(env_root, "/proc/cpuinfo", "processor\t: 0\nflags\t: hypervisor\n")
-        probe = EnvironmentProbe(root=env_root, env={"AISP_ALLOW_VIRTUALIZATION": "1"})
-        errors = _run_harness(env_root, probe=probe)
-        assert not any("ENVIRONMENT INVALID" in e for e in errors), errors

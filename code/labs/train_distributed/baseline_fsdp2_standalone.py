@@ -18,14 +18,13 @@ import os
 # Add common to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from core.benchmark.verification import simple_signature
+from core.benchmark.verification import PrecisionFlags, simple_signature
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
 )
-from core.benchmark.verification import simple_signature
 from core.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -179,16 +178,17 @@ class BaselineFSDP2Standard(BaseBenchmark):
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return simple_signature(
+        signature = simple_signature(
             batch_size=self.batch_size,
             dtype="bfloat16",
-            precision_flags={"bf16": True, "tf32": False},
             seq_length=self.seq_length,
             hidden_size=self.hidden_size,
             num_layers=self.num_layers,
             micro_batch_size=self.micro_batch_size,
-            world_size=self.world_size,
+            precision_flags=PrecisionFlags(bf16=True, tf32=False),
         )
+        signature.world_size = getattr(self, "world_size", None)
+        return signature
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

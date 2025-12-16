@@ -2,7 +2,7 @@
 
 This matches the chapter narrative and expectations by exposing the
 overlapped training path as `optimized_no_overlap.py`, reusing the
-implementation from `optimized_ddp_overlap.py`.
+implementation from `ddp_overlap.py`.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ CHAPTER_DIR = Path(__file__).parent
 if str(CHAPTER_DIR) not in sys.path:
     sys.path.insert(0, str(CHAPTER_DIR))
 
-from optimized_ddp_overlap import OptimizedOverlapDdpBenchmark
+from ddp_overlap import OptimizedOverlapDdpBenchmark
 
 
 def get_benchmark() -> OptimizedOverlapDdpBenchmark:

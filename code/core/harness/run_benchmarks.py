@@ -85,6 +85,9 @@ try:
         get_enforcement_phase,
         QuarantineReason,
         VerifyResult,
+        coerce_input_signature,
+        get_signature_equivalence_spec,
+        signature_workload_dict,
     )
     from core.benchmark.quarantine import QuarantineManager
     VERIFICATION_AVAILABLE = True
@@ -111,6 +114,18 @@ TORCH_PROFILER_AVAILABLE = hasattr(torch, 'profiler') and hasattr(torch.profiler
 
 # Generous timeout so deep NCU profiling can finish (pulled from benchmark defaults)
 NCU_TIMEOUT_SECONDS = get_defaults().ncu_timeout_seconds
+
+# BenchmarkConfig fields that are owned by the caller/CLI and must never be
+# overridden by per-benchmark get_config() defaults. Keeping these centralized
+# makes it obvious which knobs are policy/CLI-level rather than benchmark-level.
+CALLER_OWNED_FIELDS: Set[str] = {
+    # Preserve CLI-provided timeout scaling so per-benchmark defaults cannot
+    # silently stretch timeouts.
+    "timeout_multiplier",
+    # Environment validation is a harness policy knob (e.g., --allow-invalid-environment).
+    # If benchmarks can override it, the CLI flag becomes ineffective.
+    "enforce_environment_validation",
+}
 
 # Import metric extraction utilities
 try:
@@ -1985,6 +2000,7 @@ def _test_chapter_impl(
     cold_start: bool = False,
     iterations: Optional[int] = None,
     warmup: Optional[int] = None,
+    enforce_environment_validation: bool = True,
     only_examples: Optional[List[str]] = None,
     accept_regressions: bool = False,
     update_expectations: bool = False,
@@ -2214,6 +2230,7 @@ def _test_chapter_impl(
         enable_ncu=enable_profiling,  # ncu profiling (gracefully degrades if unavailable)
         seed=42 if reproducible else None,  # Set seed for reproducibility
         deterministic=reproducible,  # Enable deterministic algorithms for reproducibility
+        enforce_environment_validation=enforce_environment_validation,
         ncu_metric_set=ncu_metric_set,
         profile_type=profile_type if enable_profiling else "none",
         launch_via=launch_via,
@@ -2257,9 +2274,7 @@ def _test_chapter_impl(
                 value = getattr(override, field.name, None)
                 if value is None:
                     continue
-                if field.name == "timeout_multiplier":
-                    # Preserve CLI-provided timeout scaling so per-benchmark defaults
-                    # cannot silently stretch timeouts.
+                if field.name in CALLER_OWNED_FIELDS:
                     continue
                 if field.name == "launch_via":
                     base_value = getattr(merged, field.name, None)
@@ -2331,6 +2346,65 @@ def _test_chapter_impl(
         logger.info("merged config launch_via=%s execution_mode=%s", merged.launch_via, merged.execution_mode)
         local_harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=merged)
         return local_harness.benchmark_with_manifest(benchmark_obj, run_id=run_id)
+
+    # ---------------------------------------------------------------------
+    # Post-timing verification helpers (no re-execution)
+    # ---------------------------------------------------------------------
+    perf_compare_runner = VerifyRunner() if VERIFICATION_AVAILABLE else None
+
+    def _get_perf_output(bench: Any):
+        if hasattr(bench, "_subprocess_verify_output"):
+            out = getattr(bench, "_subprocess_verify_output")
+            if out is None:
+                raise RuntimeError("Missing subprocess verify_output")
+            return out
+        return bench.get_verify_output()
+
+    def _get_perf_tolerance(bench: Any) -> tuple[float, float]:
+        if hasattr(bench, "_subprocess_output_tolerance"):
+            tol = getattr(bench, "_subprocess_output_tolerance")
+            if tol is None:
+                raise RuntimeError("Missing subprocess output_tolerance")
+            return tol
+        return bench.get_output_tolerance()
+
+    def _get_perf_signature(bench: Any):
+        if hasattr(bench, "_subprocess_input_signature"):
+            sig = getattr(bench, "_subprocess_input_signature")
+            if sig is None:
+                raise RuntimeError("Missing subprocess input_signature")
+            return sig
+        return bench.get_input_signature()
+
+    def _diff_paths(a: Any, b: Any, prefix: str = "", out: Optional[List[str]] = None) -> List[str]:
+        if out is None:
+            out = []
+        if len(out) >= 64:
+            return out
+        if isinstance(a, dict) and isinstance(b, dict):
+            keys = sorted(set(a.keys()) | set(b.keys()))
+            for k in keys:
+                if len(out) >= 64:
+                    break
+                if k not in a:
+                    out.append(f"{prefix}{k} (missing baseline)")
+                    continue
+                if k not in b:
+                    out.append(f"{prefix}{k} (missing optimized)")
+                    continue
+                _diff_paths(a.get(k), b.get(k), prefix=f"{prefix}{k}.", out=out)
+            return out
+        if isinstance(a, list) and isinstance(b, list):
+            if len(a) != len(b):
+                out.append(f"{prefix}len {len(a)} != {len(b)}")
+            for idx in range(min(len(a), len(b))):
+                if len(out) >= 64:
+                    break
+                _diff_paths(a[idx], b[idx], prefix=f"{prefix}[{idx}].", out=out)
+            return out
+        if a != b:
+            out.append(prefix[:-1] if prefix.endswith(".") else prefix or "<root>")
+        return out
     
     benchmark_results = []
     successful = 0
@@ -2384,6 +2458,11 @@ def _test_chapter_impl(
                 'status': 'failed_error',
                 'error': None,
             }
+
+            baseline_signature = None
+            baseline_equivalence = None
+            baseline_verify_output = None
+            baseline_verify_tolerance = None
         
             # Check if this is a distributed benchmark and we have only 1 GPU
             is_distributed = is_distributed_benchmark(baseline_path)
@@ -2533,6 +2612,37 @@ def _test_chapter_impl(
                     logger.warning(f"      ⚠️ torch.compile fallback: {compile_error}")
                 elif used_compile:
                     logger.info("      🚀 torch.compile enabled (reduce-overhead)")
+
+                # Capture baseline verification artifacts from the timing run (no re-execution).
+                if verify_input or verify_output:
+                    if not VERIFICATION_AVAILABLE:
+                        result_entry["status"] = "failed_verification"
+                        result_entry["error"] = "Verification system unavailable; cannot validate benchmark correctness"
+                        benchmark_results.append(result_entry)
+                        failed_error += 1
+                        mark_progress(example_name)
+                        reset_cuda_state()
+                        if cold_start:
+                            reset_gpu_state()
+                        continue
+                    try:
+                        if verify_input:
+                            baseline_signature = coerce_input_signature(_get_perf_signature(baseline_benchmark))
+                            baseline_equivalence = get_signature_equivalence_spec(baseline_benchmark)
+                        if verify_output:
+                            baseline_verify_output = _get_perf_output(baseline_benchmark)
+                            baseline_verify_tolerance = _get_perf_tolerance(baseline_benchmark)
+                    except Exception as exc:
+                        logger.error("    ✗ BASELINE VERIFICATION SETUP FAILED: %s", exc)
+                        result_entry["status"] = "failed_verification"
+                        result_entry["error"] = f"Baseline verification artifacts missing: {exc}"
+                        benchmark_results.append(result_entry)
+                        failed_error += 1
+                        mark_progress(example_name)
+                        reset_cuda_state()
+                        if cold_start:
+                            reset_gpu_state()
+                        continue
 
                 # Profile baseline if profiling is enabled (nsys, ncu, PyTorch)
                 if enable_profiling and profiling_output_dir:
@@ -2847,6 +2957,68 @@ def _test_chapter_impl(
                         'time_ms': optimized_time,
                         'speedup': speedup,
                     }
+
+                    # POST-TIMING VERIFICATION: validate workload equivalence + outputs using the timing-run artifacts.
+                    if verify_input:
+                        try:
+                            if baseline_signature is None:
+                                raise RuntimeError("Baseline input signature missing")
+                            optimized_signature = coerce_input_signature(_get_perf_signature(optimized_benchmark))
+                            optimized_equivalence = get_signature_equivalence_spec(optimized_benchmark)
+                            if baseline_equivalence != optimized_equivalence:
+                                raise RuntimeError(
+                                    "Signature equivalence mismatch: "
+                                    f"baseline={baseline_equivalence} optimized={optimized_equivalence}"
+                                )
+                            workload_equiv = baseline_equivalence
+                            baseline_workload = signature_workload_dict(baseline_signature, equivalence=workload_equiv)
+                            optimized_workload = signature_workload_dict(optimized_signature, equivalence=workload_equiv)
+                            mismatches = _diff_paths(baseline_workload, optimized_workload)
+                            opt_result["input_verification"] = {
+                                "passed": len(mismatches) == 0,
+                                "mismatches": mismatches,
+                                "equivalence": (
+                                    {
+                                        "group": workload_equiv.group,
+                                        "ignore_fields": list(workload_equiv.ignore_fields),
+                                    }
+                                    if workload_equiv is not None
+                                    else None
+                                ),
+                            }
+                            if mismatches:
+                                raise RuntimeError(f"Input signature mismatch: {mismatches[0]}")
+                        except Exception as exc:
+                            opt_result["status"] = "failed_verification"
+                            opt_result["error"] = f"Input verification failed: {exc}"
+
+                    if verify_output and opt_result.get("status") == "succeeded":
+                        try:
+                            if perf_compare_runner is None:
+                                raise RuntimeError("Verification system unavailable")
+                            if baseline_verify_output is None or baseline_verify_tolerance is None:
+                                raise RuntimeError("Baseline verify_output/tolerance missing")
+                            optimized_verify_output = _get_perf_output(optimized_benchmark)
+                            comparison = perf_compare_runner.compare_perf_outputs(
+                                baseline_verify_output,
+                                optimized_verify_output,
+                                baseline_verify_tolerance,
+                            )
+                            opt_result["verification"] = {
+                                "passed": comparison.passed,
+                                "max_diff": comparison.max_diff,
+                                "location": comparison.location,
+                                "rtol": baseline_verify_tolerance[0],
+                                "atol": baseline_verify_tolerance[1],
+                            }
+                            if not comparison.passed:
+                                reason = "Output mismatch"
+                                if comparison.max_diff is not None:
+                                    reason = f"Output mismatch (max_diff={comparison.max_diff:.6f})"
+                                raise RuntimeError(reason)
+                        except Exception as exc:
+                            opt_result["status"] = "failed_verification"
+                            opt_result["error"] = f"Output verification failed: {exc}"
                     
                     # Add memory metrics
                     if optimized_memory and optimized_memory.peak_mb:
@@ -2946,7 +3118,7 @@ def _test_chapter_impl(
                     
                     result_entry['optimizations'].append(opt_result)
                     
-                    if speedup > result_entry['best_speedup']:
+                    if opt_result.get("status") == "succeeded" and speedup > result_entry['best_speedup']:
                         result_entry['best_speedup'] = speedup
                         speedups.append(speedup)
                     
@@ -3046,81 +3218,19 @@ def _test_chapter_impl(
             optimizations = result_entry.get('optimizations', [])
             has_success = any(opt.get('status') == 'succeeded' for opt in optimizations)
             all_skipped_opt = bool(optimizations) and all(opt.get('status') == 'skipped' for opt in optimizations)
+            any_failed_verification = any(opt.get('status') == 'failed_verification' for opt in optimizations)
+            any_failed_error_opt = any(opt.get('status') == 'failed_error' for opt in optimizations)
     
             update_result = None
             if baseline_ok and has_success:
                 example_key = expectation_example_key(result_entry['example'], result_entry.get('type', 'python'))
                 optimization_goal = (result_entry.get("optimization_goal") or "speed").strip().lower()
                 best_opt = select_best_optimization(result_entry.get("optimizations", []), goal=optimization_goal)
-                # POST-TIMING VERIFICATION: Strictly compare perf-run outputs
-                # Uses outputs captured from the timing run (no re-execution).
-                if verify_output and best_opt:
-                    from core.benchmark.verify_runner import VerifyRunner
-
-                    try:
-                        runner = _get_verify_runner() or VerifyRunner()
-
-                        def _get_perf_output(bench: Any):
-                            if hasattr(bench, "_subprocess_verify_output"):
-                                out = getattr(bench, "_subprocess_verify_output")
-                                if out is None:
-                                    raise RuntimeError("Missing subprocess verify_output")
-                                return out
-                            return bench.get_verify_output()
-
-                        def _get_perf_tolerance(bench: Any) -> tuple[float, float]:
-                            if hasattr(bench, "_subprocess_output_tolerance"):
-                                tol = getattr(bench, "_subprocess_output_tolerance")
-                                if tol is None:
-                                    raise RuntimeError("Missing subprocess output_tolerance")
-                                return tol
-                            return bench.get_output_tolerance()
-
-                        baseline_output = _get_perf_output(baseline_benchmark)
-                        optimized_output = _get_perf_output(optimized_benchmark)
-                        tol = _get_perf_tolerance(baseline_benchmark)
-
-                        comparison = runner.compare_perf_outputs(baseline_output, optimized_output, tol)
-
-                        result_entry["verification"] = {
-                            "passed": comparison.passed,
-                            "max_diff": comparison.max_diff,
-                            "location": comparison.location,
-                            "rtol": tol[0],
-                            "atol": tol[1],
-                        }
-
-                        if comparison.passed:
-                            logger.info(
-                                "    ✓ VERIFICATION PASSED: outputs match (max_diff=%s)",
-                                f"{comparison.max_diff:.6f}" if comparison.max_diff is not None else "0.0",
-                            )
-                        else:
-                            reason = "Output mismatch"
-                            if comparison.max_diff is not None:
-                                reason = f"Output mismatch (max_diff={comparison.max_diff:.6f})"
-                            logger.error("    ✗ VERIFICATION FAILED: %s", reason)
-                            result_entry["status"] = "failed_verification"
-                            result_entry["error"] = reason
-                            failed_error += 1
-                            benchmark_results.append(result_entry)
-                            mark_progress(example_name)
-                            reset_cuda_state()
-                            if cold_start:
-                                reset_gpu_state()
-                            continue
-                    except Exception as e:
-                        logger.error("    ✗ VERIFICATION FAILED: %s", e)
-                        result_entry["verification"] = {"passed": False, "reason": str(e)}
-                        result_entry["status"] = "failed_verification"
-                        result_entry["error"] = str(e)
-                        failed_error += 1
-                        benchmark_results.append(result_entry)
-                        mark_progress(example_name)
-                        reset_cuda_state()
-                        if cold_start:
-                            reset_gpu_state()
-                        continue
+                if best_opt:
+                    if verify_input and isinstance(best_opt.get("input_verification"), dict):
+                        result_entry["input_verification"] = best_opt.get("input_verification")
+                    if verify_output and isinstance(best_opt.get("verification"), dict):
+                        result_entry["verification"] = best_opt.get("verification")
 
                 if best_opt:
                     provenance = RunProvenance(
@@ -3189,6 +3299,10 @@ def _test_chapter_impl(
             elif baseline_ok and (all_skipped_opt or not optimizations):
                 result_entry['status'] = 'succeeded'
                 successful += 1
+            elif baseline_ok and (not has_success) and any_failed_verification and (not any_failed_error_opt):
+                result_entry['status'] = 'failed_verification'
+                result_entry['error'] = result_entry.get('error') or 'No optimizations passed verification'
+                failed_error += 1
             else:
                 result_entry['status'] = 'failed_error'
                 if not result_entry.get('error'):
@@ -5313,6 +5427,7 @@ def test_chapter(
     cold_start: bool = False,
     iterations: Optional[int] = None,
     warmup: Optional[int] = None,
+    enforce_environment_validation: bool = True,
     only_examples: Optional[List[str]] = None,
     accept_regressions: bool = False,
     update_expectations: bool = False,
@@ -5352,6 +5467,7 @@ def test_chapter(
         cold_start=cold_start,
         iterations=iterations,
         warmup=warmup,
+        enforce_environment_validation=enforce_environment_validation,
         graph_capture_ratio_threshold=graph_capture_ratio_threshold,
         graph_capture_memory_threshold_mb=graph_capture_memory_threshold_mb,
         only_examples=only_examples,

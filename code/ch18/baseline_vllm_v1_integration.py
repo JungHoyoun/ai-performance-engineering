@@ -25,7 +25,7 @@ import numba  # noqa: F401
 # Add common to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
+from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.utils.logger import get_logger
 
@@ -182,7 +182,10 @@ class BaselineVLLMV1IntegrationBenchmark(VerificationPayloadMixin, BaseBenchmark
         self.output: Optional[torch.Tensor] = None
         self._last_token_ids: Optional[torch.Tensor] = None
         self._verification_payload = None
-        self.register_workload_metadata(requests_per_iteration=8.0)
+        self.register_workload_metadata(
+            requests_per_iteration=float(self.runner.batch_size),
+            tokens_per_iteration=float(self.runner.batch_size * self.runner.max_tokens),
+        )
 
     def setup(self) -> None:
         self.runner.setup()
@@ -226,6 +229,12 @@ class BaselineVLLMV1IntegrationBenchmark(VerificationPayloadMixin, BaseBenchmark
             setup_timeout_seconds=600,
             measurement_timeout_seconds=600,
             timing_method="wall_clock",
+        )
+
+    def get_workload_metadata(self) -> WorkloadMetadata | None:
+        return WorkloadMetadata(
+            requests_per_iteration=float(self.runner.batch_size),
+            tokens_per_iteration=float(self.runner.batch_size * self.runner.max_tokens),
         )
 
     def get_custom_metrics(self) -> Dict[str, Any]:

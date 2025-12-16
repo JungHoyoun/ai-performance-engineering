@@ -21,7 +21,7 @@ export PYTHONPATH="${ROOT_DIR}"
 
 # Warmup to keep compile overhead out of traces
 echo "[capture] Running warmup benchmark..."
-python "${ROOT_DIR}/ch16/test_gpt_large_optimized.py" \
+python "${ROOT_DIR}/ch16/gpt_large_benchmark.py" \
   --tensor-parallel-gpus "${TENSOR_PARALLEL_GPUS}" \
   --attention-backend flex \
   --fp8-mode transformer-engine \
