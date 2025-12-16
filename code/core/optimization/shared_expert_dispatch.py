@@ -1,0 +1,78 @@
+"""Shared dispatch helpers for benchmarks that use identical/shared experts.
+
+These utilities support benchmark pairs where routing/placement changes should
+not change the final tensor semantics (e.g., identical experts), while still
+paying realistic dispatch costs (grouping, gather/scatter, kernel launch count).
+"""
+
+from __future__ import annotations
+
+from typing import Iterable
+
+import torch
+import torch.nn as nn
+
+
+def _validate_dispatch_inputs(
+    flat_tokens: torch.Tensor,
+    expert_ids: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    if flat_tokens.dim() != 2:
+        raise ValueError(f"flat_tokens must be 2D [T, H], got shape {tuple(flat_tokens.shape)}")
+    if expert_ids.dim() != 1:
+        raise ValueError(f"expert_ids must be 1D [T], got shape {tuple(expert_ids.shape)}")
+    if flat_tokens.shape[0] != expert_ids.shape[0]:
+        raise ValueError(
+            f"flat_tokens and expert_ids must agree on T, got {flat_tokens.shape[0]} vs {expert_ids.shape[0]}"
+        )
+    if out.shape != flat_tokens.shape:
+        raise ValueError(f"out must match flat_tokens shape {tuple(flat_tokens.shape)}, got {tuple(out.shape)}")
+
+
+def dispatch_shared_expert_mask_scan(
+    flat_tokens: torch.Tensor,
+    expert_ids: torch.Tensor,
+    expert: nn.Module,
+    *,
+    num_experts: int,
+    out: torch.Tensor,
+) -> torch.Tensor:
+    """Dispatch by scanning all experts and masking tokens per expert.
+
+    This baseline intentionally uses `mask.any()` which can trigger host sync
+    in eager mode. Use only as a baseline dispatch implementation.
+    """
+    _validate_dispatch_inputs(flat_tokens, expert_ids, out)
+    if num_experts <= 0:
+        raise ValueError("num_experts must be positive")
+
+    out.zero_()
+    for expert_id in range(int(num_experts)):
+        mask = expert_ids == expert_id
+        if mask.any():
+            indices = mask.nonzero(as_tuple=False).squeeze(-1)
+            out.index_copy_(0, indices, expert(flat_tokens.index_select(0, indices)))
+    return out
+
+
+def dispatch_shared_expert_active_experts(
+    flat_tokens: torch.Tensor,
+    expert_ids: torch.Tensor,
+    expert: nn.Module,
+    *,
+    out: torch.Tensor,
+) -> torch.Tensor:
+    """Dispatch by iterating only active experts (unique expert ids)."""
+    _validate_dispatch_inputs(flat_tokens, expert_ids, out)
+
+    out.zero_()
+    active = torch.unique(expert_ids)
+    active_cpu: Iterable[int] = active.detach().to("cpu", non_blocking=False).tolist()
+    for expert_id in active_cpu:
+        indices = (expert_ids == int(expert_id)).nonzero(as_tuple=False).squeeze(-1)
+        if indices.numel() == 0:
+            continue
+        out.index_copy_(0, indices, expert(flat_tokens.index_select(0, indices)))
+    return out
+

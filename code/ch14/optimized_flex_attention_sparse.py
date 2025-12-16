@@ -1,5 +1,5 @@
 """
-optimized_flexattention_sparse.py - FlexAttention with Block Sparsity (Ch14)
+optimized_flex_attention_sparse.py - FlexAttention with block-sparse sliding-window masks (Ch14)
 
 WHAT: FlexAttention is PyTorch's flexible attention API that allows custom
 attention patterns via user-defined mask functions, compiled to efficient kernels.
@@ -253,14 +253,15 @@ class FlexAttentionSparseBenchmark(VerificationPayloadMixin, BaseBenchmark):
         super().__init__()
         self.attn = None
         self.x = None
-        self.batch_size = 2
-        self.num_heads = 32
-        self.head_dim = 128
-        self.seq_len = 4096
-        self.window_size = 512
+        self.batch_size = 1
+        self.num_heads = 16
+        self.head_dim = 64
+        self.seq_len = 2048
+        self.window_size = 256
         self._last = 0.0
         self.parameter_count: int = 0
         self._verification_payload = None
+        self.output = None
         
         tokens = self.batch_size * self.seq_len
         self._workload = WorkloadMetadata(
@@ -270,20 +271,27 @@ class FlexAttentionSparseBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def setup(self) -> None:
         """Setup: Initialize sliding window causal attention."""
+        if not torch.cuda.is_available():
+            raise RuntimeError("SKIPPED: CUDA required for FlexAttention sparse benchmark")
+        if not HAS_FLEX_ATTENTION:
+            raise RuntimeError("SKIPPED: FlexAttention requires PyTorch 2.5+ (torch.nn.attention.flex_attention)")
+
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         
         embed_dim = self.num_heads * self.head_dim
         self.attn = SlidingWindowCausalAttention(
             embed_dim=embed_dim,
             num_heads=self.num_heads,
             window_size=self.window_size,
-        ).to(self.device)
+        ).to(self.device, dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16)
         self.parameter_count = sum(p.numel() for p in self.attn.parameters())
         
+        dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
         self.x = torch.randn(
             self.batch_size, self.seq_len, embed_dim,
             device=self.device,
-            dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
+            dtype=dtype,
         )
         
         # Warmup
@@ -296,18 +304,16 @@ class FlexAttentionSparseBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Benchmark: FlexAttention sliding window forward pass."""
         with torch.no_grad():
             self.output = self.attn(self.x)
-            self._last = float(self.output.sum())
             self._synchronize()
         if self.output is None or self.x is None:
             raise RuntimeError("benchmark_fn() must produce output")
-        dtype = self.x.dtype
-        self._payload_dtype = dtype
+        self._payload_dtype = self.x.dtype
 
     def capture_verification_payload(self) -> None:
         dtype = self._payload_dtype
         self._set_verification_payload(
             inputs={"input": self.x},
-            output=self.output,
+            output=self.output.detach().float().clone(),
             batch_size=self.batch_size,
             parameter_count=self.parameter_count,
             precision_flags={
@@ -326,7 +332,7 @@ class FlexAttentionSparseBenchmark(VerificationPayloadMixin, BaseBenchmark):
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=30, warmup=5)
+        return BenchmarkConfig(iterations=10, warmup=5)
     
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload

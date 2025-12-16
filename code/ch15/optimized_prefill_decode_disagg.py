@@ -1,233 +1,185 @@
 #!/usr/bin/env python3
-"""Optimized: Disaggregated serving with NVLink KV pooling.
+"""optimized_prefill_decode_disagg.py - NVLink peer-copy + pipelined disaggregation.
 
-Optimized disaggregated serving with:
-- NVLink-pooled KV cache (zero-copy between pools)
-- FP8 KV compression
-- Async prefill-decode handoff
-- Topology-aware scheduling
+Same semantic workload as `baseline_prefill_decode_disagg.py`:
+- Prefill on `cuda:0`
+- Decode on `cuda:1`
+- Same models, same inputs, same decode recurrence
+
+Optimizations:
+- KV handoff uses direct GPU peer copy (NVLink/NVSwitch when available)
+- Prefill for request i+1 overlaps decode for request i (device-level pipelining)
 """
+
+from __future__ import annotations
+
+from typing import Optional
 
 import torch
 import torch.nn as nn
-import torch.distributed as dist
-from typing import Dict, Any, List, Optional
-import sys
-from pathlib import Path
-import time
-import os
 
-# Add common to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from core.harness.benchmark_harness import (
-    BaseBenchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
-    WorkloadMetadata,
-)
-from core.utils.logger import get_logger
+from core.benchmark.gpu_requirements import require_peer_access
+from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch15.verification_payload_mixin import VerificationPayloadMixin
 
-logger = get_logger(__name__)
+
+def _enable_peer_access() -> None:
+    # Fail fast if peer access is not supported. This benchmark is specifically about NVLink pooling.
+    require_peer_access(0, 1)
+    try:
+        torch.cuda.device(0).enable_peer_access(1)
+        torch.cuda.device(1).enable_peer_access(0)
+    except RuntimeError:
+        # enable_peer_access can throw if already enabled; peer capability is still enforced above.
+        pass
 
 
-class OptimizedDisaggregatedNVLinkPool:
-    """Optimized disaggregated with NVLink pooling."""
-    
+class OptimizedPrefillDecodeDisaggBenchmark(VerificationPayloadMixin, BaseBenchmark):
+    """Optimized prefill/decode disaggregation with peer KV handoff + pipelining."""
+
     def __init__(
         self,
-        num_prefill_gpus: int = 2,
-        num_decode_gpus: int = 6,
+        *,
         batch_size: int = 8,
         prefill_length: int = 1024,
-        decode_length: int = 128,
-        use_fp8_kv: bool = True,
-    ):
-        self.num_prefill_gpus = num_prefill_gpus
-        self.num_decode_gpus = num_decode_gpus
-        self.batch_size = batch_size
-        self.prefill_length = prefill_length
-        self.decode_length = decode_length
-        self.use_fp8_kv = use_fp8_kv
-        
-        # Initialize distributed (if available)
-        self._init_distributed()
-        
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
-        logger.info(f"Optimized Disaggregated (NVLink pooling)")
-        logger.info(f"  FP8 KV: {use_fp8_kv}")
-    
-    def _init_distributed(self):
-        """Initialize distributed."""
-        if not dist.is_initialized():
-            if 'RANK' in os.environ:
-                dist.init_process_group(backend='nccl')
-                self.rank = dist.get_rank()
-                self.world_size = dist.get_world_size()
-            else:
-                self.rank = 0
-                self.world_size = 1
-        else:
-            self.rank = dist.get_rank()
-            self.world_size = dist.get_world_size()
-    
-    def setup(self):
-        """Initialize models with NVLink-aware placement."""
-        hidden_size = 4096
-        
-        # Prefill model
-        self.prefill_model = nn.Linear(hidden_size, hidden_size).to(self.device)
-        
-        # Decode model
-        self.decode_model = nn.Linear(hidden_size, hidden_size).to(self.device)
-        
-        # Create input
-        self.prefill_input = torch.randn(
-            self.batch_size, self.prefill_length, hidden_size,
-            device=self.device, dtype=torch.bfloat16
-        )
-        
-        # KV cache dtype
-        if self.use_fp8_kv and hasattr(torch, 'float8_e4m3fn'):
-            self.kv_dtype = torch.float8_e4m3fn
-            logger.info("Using FP8 KV cache (2× compression)")
-        else:
-            self.kv_dtype = torch.bfloat16
-        
-        # Create async stream for overlap
-        self.transfer_stream = torch.cuda.Stream()
-        
-        logger.info("Optimized setup complete")
-    
-    def run(self) -> Dict[str, float]:
-        """Execute optimized disaggregated serving."""
-        torch.cuda.synchronize()
-        start_total = time.perf_counter()
-        
-        # Prefill phase
-        prefill_start = time.perf_counter()
-        prefill_output = self.prefill_model(self.prefill_input)
-        
-        # Compress KV if using FP8
-        if self.use_fp8_kv:
-            kv_cache = prefill_output.to(self.kv_dtype)
-        else:
-            kv_cache = prefill_output
-        
-        torch.cuda.synchronize()
-        prefill_time = time.perf_counter() - prefill_start
-        
-        # Optimized: Async transfer via NVLink (no CPU intermediary)
-        # On NVLink-connected GPUs, peer access enables direct GPU-GPU transfer
-        transfer_start = time.perf_counter()
-        
-        with torch.cuda.stream(self.transfer_stream):
-            # Enable peer access (simulated - actual impl would use torch.cuda.device)
-            if torch.cuda.device_count() > 1:
-                # Direct GPU-GPU copy via NVLink
-                kv_cache_decode = kv_cache.clone()
-            else:
-                kv_cache_decode = kv_cache
-        
-        # Overlap: Start decode immediately while transfer completes
-        self.transfer_stream.synchronize()
-        transfer_time = time.perf_counter() - transfer_start
-        
-        # Decode phase
-        decode_start = time.perf_counter()
-        
-        # Decompress if FP8
-        if self.use_fp8_kv:
-            kv_cache_decode = kv_cache_decode.to(torch.bfloat16)
-        
-        decode_outputs = []
-        for _ in range(self.decode_length):
-            decode_output = self.decode_model(kv_cache_decode[:, -1:, :])
-            decode_outputs.append(decode_output)
-        
-        torch.cuda.synchronize()
-        decode_time = time.perf_counter() - decode_start
-        
-        total_time = time.perf_counter() - start_total
-        
-        logger.info(f"Prefill: {prefill_time*1000:.2f} ms")
-        logger.info(f"NVLink Transfer: {transfer_time*1000:.2f} ms (direct GPU-GPU)")
-        logger.info(f"Decode: {decode_time*1000:.2f} ms")
-        logger.info(f"Total: {total_time*1000:.2f} ms")
-        
-        return {
-            "total_latency_ms": total_time * 1000,
-            "prefill_ms": prefill_time * 1000,
-            "transfer_ms": transfer_time * 1000,
-            "decode_ms": decode_time * 1000,
-            "transfer_overhead_pct": (transfer_time / total_time) * 100,
-            "compression": "fp8" if self.use_fp8_kv else "none",
-        }
-    
-    def cleanup(self):
-        """Clean up."""
-        del self.prefill_model, self.decode_model, self.prefill_input
-        del self.transfer_stream
-        torch.cuda.empty_cache()
-
-
-def run_benchmark(
-    num_prefill_gpus: int = 2,
-    num_decode_gpus: int = 6,
-    batch_size: int = 8,
-    prefill_length: int = 1024,
-    decode_length: int = 128,
-    use_fp8_kv: bool = True,
-    profile: str = "none",
-    **kwargs
-) -> Dict[str, Any]:
-    """Run optimized disaggregated benchmark."""
-    
-    benchmark = OptimizedDisaggregatedNVLinkPool(
-        num_prefill_gpus=num_prefill_gpus,
-        num_decode_gpus=num_decode_gpus,
-        batch_size=batch_size,
-        prefill_length=prefill_length,
-        decode_length=decode_length,
-        use_fp8_kv=use_fp8_kv,
-    )
-    benchmark.setup()
-    
-    config = BenchmarkConfig(iterations=3, warmup=5, profile_mode=profile)
-    harness = BenchmarkHarness(mode=BenchmarkMode.INFERENCE, config=config)
-    
-    result = harness.benchmark(benchmark.run, name="optimized_disaggregated")
-    
-    metrics = benchmark.run()
-    benchmark.cleanup()
-    
-    return {"mean_time_ms": result.timing.mean_ms, **metrics}
-
-
-class _DisaggregatedNVLinkPoolBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Wrapper benchmark for disaggregated NVLink pool - requires multi-GPU."""
-
-    def __init__(self) -> None:
+        decode_length: int = 64,
+        hidden_size: int = 2048,
+    ) -> None:
         super().__init__()
-        self.register_workload_metadata(requests_per_iteration=1.0)
+        self.batch_size = int(batch_size)
+        self.prefill_length = int(prefill_length)
+        self.decode_length = int(decode_length)
+        self.hidden_size = int(hidden_size)
+
+        tokens = self.batch_size * (self.prefill_length + self.decode_length)
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
+        self.register_workload_metadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
+
+        self.prefill_device: Optional[torch.device] = None
+        self.decode_device: Optional[torch.device] = None
+        self.prefill_model: Optional[nn.Module] = None
+        self.decode_model: Optional[nn.Module] = None
+        self.prefill_inputs: Optional[torch.Tensor] = None
+        self._verify_probe: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
+
+    def setup(self) -> None:
+        if not torch.cuda.is_available():
+            raise RuntimeError("SKIPPED: CUDA required for prefill/decode disaggregation")
+        if torch.cuda.device_count() < 2:
+            raise RuntimeError("SKIPPED: prefill/decode disaggregation requires >=2 GPUs")
+
+        _enable_peer_access()
+
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+
+        self.prefill_device = torch.device("cuda:0")
+        self.decode_device = torch.device("cuda:1")
+
+        self.prefill_model = nn.Linear(self.hidden_size, self.hidden_size, bias=False).to(
+            self.prefill_device, dtype=torch.bfloat16
+        ).eval()
+        self.decode_model = nn.Linear(self.hidden_size, self.hidden_size, bias=False).to(
+            self.decode_device, dtype=torch.bfloat16
+        ).eval()
+
+        self.prefill_inputs = torch.randn(
+            self.batch_size,
+            self.prefill_length,
+            self.hidden_size,
+            device=self.prefill_device,
+            dtype=torch.bfloat16,
+        )
+        self._verify_probe = self.prefill_inputs[:1, :1, :256].detach()
+        torch.cuda.synchronize(self.prefill_device)
+        torch.cuda.synchronize(self.decode_device)
 
     def benchmark_fn(self) -> None:
-        raise RuntimeError("SKIPPED: optimized_disaggregated_nvlink_pool requires >=2 GPUs")
+        if (
+            self.prefill_device is None
+            or self.decode_device is None
+            or self.prefill_model is None
+            or self.decode_model is None
+            or self.prefill_inputs is None
+        ):
+            raise RuntimeError("setup() must run before benchmark_fn()")
+
+        outputs: list[torch.Tensor] = [torch.empty(self.hidden_size, device=self.decode_device, dtype=torch.bfloat16) for _ in range(self.batch_size)]
+
+        with self._nvtx_range("optimized_prefill_decode_disagg"):
+            with torch.no_grad():
+                for idx in range(self.batch_size):
+                    # Prefill on GPU0 (async wrt GPU1 work).
+                    prefill_out = self.prefill_model(self.prefill_inputs[idx : idx + 1])
+
+                    # Direct peer handoff to GPU1 (no CPU staging).
+                    kv_decode = prefill_out.to(self.decode_device, non_blocking=True)
+
+                    # Decode on GPU1. This work overlaps the next request's prefill on GPU0.
+                    token_state = kv_decode[:, -1:, :]
+                    for _ in range(self.decode_length):
+                        token_state = self.decode_model(token_state)
+                    outputs[idx] = token_state.squeeze(0).squeeze(0)
+
+        torch.cuda.synchronize(self.prefill_device)
+        torch.cuda.synchronize(self.decode_device)
+        self.output = torch.stack(outputs, dim=0)
+
+    def capture_verification_payload(self) -> None:
+        if (
+            self.output is None
+            or self._verify_probe is None
+            or self.prefill_model is None
+            or self.decode_model is None
+        ):
+            raise RuntimeError("setup() and benchmark_fn() must run before capture_verification_payload()")
+
+        output_slice = self.output[:2, :256].detach().cpu().float().clone()
+        param_count = sum(p.numel() for p in self.prefill_model.parameters()) + sum(
+            p.numel() for p in self.decode_model.parameters()
+        )
+        self._set_verification_payload(
+            inputs={"probe": self._verify_probe.detach().cpu()},
+            output=output_slice,
+            batch_size=int(self.batch_size),
+            parameter_count=int(param_count),
+            precision_flags={
+                "fp16": False,
+                "bf16": True,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-3, 1e-3),
+        )
+
+    def teardown(self) -> None:
+        self.prefill_model = None
+        self.decode_model = None
+        self.prefill_inputs = None
+        self._verify_probe = None
+        self.output = None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=1, warmup=5, multi_gpu_required=True)
+        return BenchmarkConfig(iterations=5, warmup=5, multi_gpu_required=True)
+
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
 
 
 def get_benchmark() -> BaseBenchmark:
-    gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
-    if gpu_count < 2:
-        return _DisaggregatedNVLinkPoolBenchmark()
-    return _DisaggregatedNVLinkPoolBenchmark()
+    return OptimizedPrefillDecodeDisaggBenchmark()
 
 
 if __name__ == "__main__":
     from core.harness.benchmark_harness import benchmark_main
+
     benchmark_main(get_benchmark)

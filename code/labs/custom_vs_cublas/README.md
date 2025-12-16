@@ -121,6 +121,15 @@ python run_lab.py --size 16384
 python run_lab.py --verify
 ```
 
+## Harness benchmark pair (baseline vs optimized)
+
+This lab also ships a harness-comparable benchmark pair:
+
+```bash
+python -m cli.aisp bench run --targets labs/custom_vs_cublas:tcgen05_matmul
+python -m cli.aisp bench verify -t labs/custom_vs_cublas:tcgen05_matmul
+```
+
 ## Files
 
 - `run_lab.py` - Main lab runner with all stages

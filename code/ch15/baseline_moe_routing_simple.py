@@ -1,211 +1,155 @@
 #!/usr/bin/env python3
-"""Baseline: Simple MoE routing without topology awareness.
+"""baseline_moe_routing_simple.py - Uniform MoE routing + naive dispatch (Ch15).
 
-Basic MoE routing that doesn't consider GPU topology or NVLink locality.
+This benchmark is a *comparable* baseline for topology-aware routing variants.
+
+Design choice (for benchmarkability):
+- All experts share the same weights (a single shared expert module).
+- Routing/placement changes therefore do NOT change the final output tensor.
+- The measured speedup comes purely from dispatch/routing efficiency, not from
+  changing the math.
 """
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from typing import Optional
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from typing import Dict, Any, Optional
-import sys
-from pathlib import Path
 
-# Add common to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+repo_root = Path(__file__).parent.parent
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
 
-from core.harness.benchmark_harness import (
-    BaseBenchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
-    WorkloadMetadata,
-)
-from core.utils.logger import get_logger
 from ch15.verification_payload_mixin import VerificationPayloadMixin
-
-logger = get_logger(__name__)
-
-
-class BaselineMoERoutingSimple:
-    """Baseline MoE routing without topology awareness."""
-    
-    def __init__(
-        self,
-        batch_size: int = 16,
-        seq_length: int = 2048,
-        hidden_size: int = 4096,
-        num_experts: int = 64,
-        top_k: int = 2,
-    ):
-        self.batch_size = batch_size
-        self.seq_length = seq_length
-        self.hidden_size = hidden_size
-        self.num_experts = num_experts
-        self.top_k = top_k
-        
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.last_output = None  # For verification
-        
-        logger.info(f"Baseline MoE Routing")
-        logger.info(f"  Experts: {num_experts}, Top-K: {top_k}")
-    
-    def setup(self):
-        """Initialize router."""
-        # Simple linear router
-        self.router = nn.Linear(self.hidden_size, self.num_experts, bias=False).to(self.device)
-        
-        # Create input
-        self.input = torch.randn(
-            self.batch_size,
-            self.seq_length,
-            self.hidden_size,
-            device=self.device,
-            dtype=torch.bfloat16
-        )
-        
-        logger.info("Router initialized")
-    
-    def run(self) -> Dict[str, float]:
-        """Execute baseline routing."""
-        import time
-        
-        torch.cuda.synchronize()
-        start = time.perf_counter()
-        
-        # Compute routing scores
-        routing_logits = self.router(self.input)  # [batch, seq, num_experts]
-        
-        # Top-K selection (no topology consideration)
-        routing_weights, selected_experts = torch.topk(routing_logits, self.top_k, dim=-1)
-        routing_weights = F.softmax(routing_weights, dim=-1)
-        
-        # Capture output for verification
-        self.last_output = routing_weights.detach()
-        
-        torch.cuda.synchronize()
-        elapsed = time.perf_counter() - start
-        
-        # Calculate load imbalance
-        expert_counts = torch.bincount(
-            selected_experts.view(-1),
-            minlength=self.num_experts
-        ).float()
-        
-        ideal_count = expert_counts.sum() / self.num_experts
-        load_variance = torch.var(expert_counts).item()
-        max_imbalance = (expert_counts.max() / ideal_count).item()
-        
-        logger.info(f"Load variance: {load_variance:.2f}")
-        logger.info(f"Max imbalance: {max_imbalance:.2f}×")
-        
-        return {
-            "latency_ms": elapsed * 1000,
-            "load_variance": load_variance,
-            "max_imbalance": max_imbalance,
-            "topology_aware": False,
-        }
-    
-    def cleanup(self):
-        """Clean up."""
-        del self.router, self.input
-        torch.cuda.empty_cache()
+from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
+from core.optimization.moe_inference import ExpertMLP
+from core.optimization.shared_expert_dispatch import dispatch_shared_expert_mask_scan
 
 
-def run_benchmark(
-    batch_size: int = 16,
-    seq_length: int = 2048,
-    hidden_size: int = 4096,
-    num_experts: int = 64,
-    top_k: int = 2,
-    profile: str = "none",
-    **kwargs
-) -> Dict[str, Any]:
-    """Run baseline MoE routing benchmark."""
-    
-    benchmark = BaselineMoERoutingSimple(
-        batch_size=batch_size,
-        seq_length=seq_length,
-        hidden_size=hidden_size,
-        num_experts=num_experts,
-        top_k=top_k,
-    )
-    benchmark.setup()
-    
-    config = BenchmarkConfig(iterations=10, warmup=5, profile_mode=profile)
-    harness = BenchmarkHarness(mode=BenchmarkMode.INFERENCE, config=config)
-    
-    result = harness.benchmark(benchmark.run, name="baseline_moe_routing")
-    
-    metrics = benchmark.run()
-    benchmark.cleanup()
-    
-    return {"mean_time_ms": result.timing.mean_ms, **metrics}
+def _pseudo_uniform_expert_ids(token_ids: torch.Tensor, num_experts: int) -> torch.Tensor:
+    if token_ids.dtype != torch.int64:
+        token_ids = token_ids.to(torch.int64)
+    return ((token_ids * 1103515245 + 12345) % int(num_experts)).to(torch.int64)
 
 
-class _MoERoutingSimpleBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Wrapper benchmark for simple MoE routing."""
+class BaselineMoERoutingSimpleBenchmark(VerificationPayloadMixin, BaseBenchmark):
+    """Baseline: uniform-ish routing and a slow mask-scan dispatch."""
 
     def __init__(self) -> None:
         super().__init__()
-        self._impl = BaselineMoERoutingSimple()
-        self._metrics = {}
-        self.output = None
-        self._verify_probe = None
-        self.register_workload_metadata(requests_per_iteration=1.0)
+        self.hidden_size = 1024
+        self.ffn_size = 4096
+        self.num_experts = 64
+        self.batch = 64
+        self.seq = 16
+        self.dtype = torch.bfloat16
+
+        tokens = self.batch * self.seq
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch),
+            tokens_per_iteration=float(tokens),
+        )
+        self.register_workload_metadata(
+            requests_per_iteration=float(self.batch),
+            tokens_per_iteration=float(tokens),
+        )
+
+        self.expert: Optional[nn.Module] = None
+        self.inputs: Optional[torch.Tensor] = None
+        self.expert_ids: Optional[torch.Tensor] = None
+        self._out_flat: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
+        self._verify_probe: Optional[torch.Tensor] = None
+        self._verify_meta: Optional[torch.Tensor] = None
 
     def setup(self) -> None:
+        if not torch.cuda.is_available():
+            raise RuntimeError("SKIPPED: CUDA required for MoE routing benchmark")
+
         torch.manual_seed(42)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(42)
-        self._impl.setup()
-        impl_input = getattr(self._impl, "input", None)
-        if impl_input is None or not isinstance(impl_input, torch.Tensor):
-            raise RuntimeError("BaselineMoERoutingSimple.setup() must create input tensor")
-        self._verify_probe = impl_input[:1, :1, :256].detach()
+        torch.cuda.manual_seed_all(42)
+
+        self.expert = ExpertMLP(self.hidden_size, self.ffn_size, device=self.device, dtype=self.dtype).eval()
+        self.inputs = torch.randn(self.batch, self.seq, self.hidden_size, device=self.device, dtype=self.dtype)
+
+        token_ids = torch.arange(self.batch * self.seq, device=self.device, dtype=torch.int64)
+        self.expert_ids = _pseudo_uniform_expert_ids(token_ids, self.num_experts).view(self.batch, self.seq)
+
+        self._out_flat = torch.empty(self.batch * self.seq, self.hidden_size, device=self.device, dtype=self.dtype)
+        self._verify_probe = self.inputs[:1, :1, :256].detach().cpu()
+        self._verify_meta = torch.zeros(self.num_experts, dtype=torch.int8)
+
+        for _ in range(3):
+            with torch.no_grad():
+                _ = self.expert(self.inputs.view(-1, self.hidden_size))
+        self._synchronize()
 
     def benchmark_fn(self) -> None:
-        self._metrics = self._impl.run()
-        self.output = self._impl.last_output
+        if self.expert is None or self.inputs is None or self.expert_ids is None or self._out_flat is None:
+            raise RuntimeError("setup() must run before benchmark_fn()")
+
+        flat = self.inputs.view(-1, self.hidden_size)
+        expert_ids_flat = self.expert_ids.reshape(-1)
+
+        with self._nvtx_range("baseline_moe_routing_simple"):
+            with torch.no_grad():
+                dispatch_shared_expert_mask_scan(
+                    flat,
+                    expert_ids_flat,
+                    self.expert,
+                    num_experts=self.num_experts,
+                    out=self._out_flat,
+                )
+                self.output = self._out_flat.view(self.batch, self.seq, self.hidden_size)
+        self._synchronize()
 
     def capture_verification_payload(self) -> None:
-        if self.output is None or self._verify_probe is None:
-            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
-        param_count = sum(p.numel() for p in self._impl.router.parameters()) if hasattr(self._impl, "router") else 0
+        if self.output is None or self._verify_probe is None or self._verify_meta is None:
+            raise RuntimeError("setup() and benchmark_fn() must run before capture_verification_payload()")
+        output_slice = self.output[:2, :2, :256].detach().cpu().float().clone()
+        param_count = sum(p.numel() for p in self.expert.parameters()) if self.expert is not None else 0
         self._set_verification_payload(
-            inputs={"probe": self._verify_probe},
-            output=self.output,
-            batch_size=int(getattr(self._impl, "batch_size", 1)),
-            parameter_count=param_count,
+            inputs={"probe": self._verify_probe, "expert_meta": self._verify_meta},
+            output=output_slice,
+            batch_size=int(self.batch),
+            parameter_count=int(param_count),
             precision_flags={
                 "fp16": False,
                 "bf16": True,
                 "fp8": False,
                 "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
             },
-            output_tolerance=(1e-3, 1e-3),
+            output_tolerance=(0.0, 0.0),
         )
 
     def teardown(self) -> None:
-        self._impl.cleanup()
+        self.expert = None
+        self.inputs = None
+        self.expert_ids = None
+        self._out_flat = None
+        self.output = None
+        super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=10, warmup=5)
+        return BenchmarkConfig(iterations=30, warmup=10)
 
-    def get_verify_output(self) -> torch.Tensor:
-        return super().get_verify_output()
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
 
-    def get_input_signature(self) -> dict:
-        return super().get_input_signature()
-
-    def get_output_tolerance(self) -> tuple:
-        return super().get_output_tolerance()
+    def validate_result(self) -> Optional[str]:
+        if self.output is None:
+            return "Output not produced"
+        return None
 
 
 def get_benchmark() -> BaseBenchmark:
-    return _MoERoutingSimpleBenchmark()
+    return BaselineMoERoutingSimpleBenchmark()
 
 
 if __name__ == "__main__":
     from core.harness.benchmark_harness import benchmark_main
+
     benchmark_main(get_benchmark)

@@ -6,14 +6,13 @@ A progressive optimization exercise showing how to approach
 cuBLAS-level performance with custom tensor core kernels.
 
 Run with:
-    python -m labs.matching_cublas.run_lab
+    python -m labs.custom_vs_cublas.run_lab
     
 Or directly:
-    python labs/matching_cublas/run_lab.py
+    python labs/custom_vs_cublas/run_lab.py
 """
 
 from pathlib import Path
 
 LAB_DIR = Path(__file__).parent
 README = LAB_DIR / "README.md"
-

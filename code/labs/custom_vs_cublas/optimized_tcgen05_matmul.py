@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""Optimized: tcgen05 GEMM with clustered launch (Blackwell)."""
+
+from __future__ import annotations
+
+from typing import Optional
+
+import torch
+
+from core.benchmark.tcgen05_requirements import ensure_tcgen05_supported
+from core.benchmark.verification_mixin import VerificationPayloadMixin
+from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
+from labs.custom_vs_cublas.tcgen05_loader import load_tcgen05_cluster_module, matmul_tcgen05_cluster
+
+
+class OptimizedTcgen05MatmulBenchmark(VerificationPayloadMixin, BaseBenchmark):
+    allow_cpu = False
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.size = 8192
+        self.a: Optional[torch.Tensor] = None
+        self.b: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
+        self.register_workload_metadata(
+            bytes_per_iteration=float(6 * self.size * self.size),
+            custom_units_per_iteration=float(2 * self.size * self.size * self.size),
+            custom_unit_name="FLOPs",
+        )
+
+    def setup(self) -> None:
+        ensure_tcgen05_supported(module_name="labs/custom_vs_cublas tcgen05 kernels")
+
+        # Compile the extension (first time only) outside the timed hot path.
+        load_tcgen05_cluster_module()
+
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+
+        dtype = torch.float16
+        self.a = torch.randn((self.size, self.size), device=self.device, dtype=dtype)
+        self.b = torch.randn((self.size, self.size), device=self.device, dtype=dtype)
+
+    def benchmark_fn(self) -> None:
+        if self.a is None or self.b is None:
+            raise RuntimeError("setup() must run before benchmark_fn()")
+        with torch.inference_mode():
+            self.output = matmul_tcgen05_cluster(self.a, self.b)
+
+    def capture_verification_payload(self) -> None:
+        if self.a is None or self.b is None or self.output is None:
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
+        self._set_verification_payload(
+            inputs={"A": self.a, "B": self.b},
+            output=self.output.detach().float().clone(),
+            batch_size=self.size,
+            precision_flags={"fp16": True, "bf16": False, "fp8": False, "tf32": False},
+            output_tolerance=(0.1, 0.5),
+        )
+
+    def validate_result(self) -> Optional[str]:
+        if self.output is None:
+            return "benchmark_fn() did not produce output"
+        return None
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(iterations=20, warmup=5)
+
+
+def get_benchmark() -> BaseBenchmark:
+    return OptimizedTcgen05MatmulBenchmark()
+
+
+if __name__ == "__main__":
+    from core.harness.benchmark_harness import benchmark_main
+
+    benchmark_main(get_benchmark)
+

@@ -590,6 +590,15 @@ class TestSkipFlagDetection:
 
 class TestGoldenOutputCache:
     """Tests for GoldenOutputCache."""
+
+    def _signature(self, batch_size: int = 1) -> Dict[str, Any]:
+        return {
+            "shapes": {"input": [batch_size, 1]},
+            "dtypes": {"input": "float32"},
+            "batch_size": batch_size,
+            "parameter_count": 0,
+            "precision_flags": {"fp16": False, "bf16": False, "fp8": False, "tf32": True},
+        }
     
     @pytest.fixture
     def temp_cache_dir(self, tmp_path):
@@ -602,6 +611,7 @@ class TestGoldenOutputCache:
         
         golden = GoldenOutput(
             signature_hash="abc123",
+            signature=self._signature(batch_size=1),
             outputs={"output": torch.tensor([1.0, 2.0, 3.0])},
             workload_metrics={"bytes_per_iter": 1000.0},
             checksum="",
@@ -623,6 +633,7 @@ class TestGoldenOutputCache:
         output = torch.randn(8, dtype=torch.bfloat16)
         golden = GoldenOutput(
             signature_hash="bf16",
+            signature=self._signature(batch_size=1),
             outputs={"output": output},
             workload_metrics={"tokens_per_iteration": 8.0},
             checksum="",
@@ -645,6 +656,7 @@ class TestGoldenOutputCache:
         
         golden = GoldenOutput(
             signature_hash="exists",
+            signature=self._signature(batch_size=1),
             outputs={"out": torch.tensor([1.0])},
             workload_metrics={},
             checksum="",
@@ -661,6 +673,7 @@ class TestGoldenOutputCache:
         
         golden = GoldenOutput(
             signature_hash="to_delete",
+            signature=self._signature(batch_size=1),
             outputs={"out": torch.tensor([1.0])},
             workload_metrics={},
             checksum="",
@@ -1274,6 +1287,7 @@ class TestPropertyBasedGoldenOutput:
         
         golden1 = GoldenOutput(
             signature_hash="test_hash",
+            signature={"batch_size": size},
             outputs=outputs,
             workload_metrics={},
             checksum="",
@@ -1284,6 +1298,7 @@ class TestPropertyBasedGoldenOutput:
         
         golden2 = GoldenOutput(
             signature_hash="test_hash",
+            signature={"batch_size": size},
             outputs={k: v.clone() for k, v in outputs.items()},
             workload_metrics={},
             checksum="",
@@ -1303,6 +1318,7 @@ class TestPropertyBasedGoldenOutput:
         
         golden1 = GoldenOutput(
             signature_hash="hash1",
+            signature={"batch_size": size},
             outputs=outputs1,
             workload_metrics={},
             checksum="",
@@ -1313,6 +1329,7 @@ class TestPropertyBasedGoldenOutput:
         
         golden2 = GoldenOutput(
             signature_hash="hash2",
+            signature={"batch_size": size},
             outputs=outputs2,
             workload_metrics={},
             checksum="",

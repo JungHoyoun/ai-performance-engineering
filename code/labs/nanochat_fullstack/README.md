@@ -6,6 +6,15 @@
 
 This is the full-stack nanochat tree (`labs/nanochat_fullstack`); decode microbenchmarks live separately in `labs/decode_optimization`.
 
+## AISP harness benchmark pair (baseline vs optimized)
+
+This repo integrates NanoChat with the AISP benchmark harness via a comparable baseline/optimized pair:
+
+```bash
+python -m cli.aisp bench run --targets labs/nanochat_fullstack:nanochat_inference
+python -m cli.aisp bench verify -t labs/nanochat_fullstack:nanochat_inference
+```
+
 This repo is a full-stack implementation of an LLM like ChatGPT in a single, clean, minimal, hackable, dependency-lite codebase. nanochat is designed to run on a single 8x Blackwell node (B200/GB200) via scripts like [speedrun.sh](speedrun.sh), that run the entire pipeline start to end. This includes tokenization, pretraining, finetuning, evaluation, inference, and web serving over a simple UI so that you can talk to your own LLM just like ChatGPT. nanochat will become the capstone project of the course LLM101n being developed by Eureka Labs.
 
 ## Talk to it

@@ -1,16 +1,16 @@
-"""baseline_moe_overlap.py - Shared-expert MoE computed sequentially (Ch15).
+"""optimized_moe_overlap_shared_expert.py - Stream-overlapped shared-expert MoE dispatch (Ch15).
 
-Pairs with: optimized_moe_overlap_shared_expert.py
+Pairs with: baseline_moe_overlap.py
 
-Semantic contract:
+Semantic contract (matches baseline):
 - Both variants compute the same tensor: `shared_expert(x) + routed_expert(x)`.
-- The routed expert is shared (identical) across expert ids so routing changes
-  do not change output.
+- The routed expert is shared (identical) across expert ids so routing/placement
+  changes do not change output.
 
-Baseline behavior:
-- Simulates an expert-parallel all-to-all by copying activations into a routed
-  buffer on the default stream.
-- Computes shared expert, then routed expert on the default stream (no overlap).
+Optimization:
+- Launch the "all-to-all" copy on a dedicated communication stream.
+- Launch the shared expert compute on a separate compute stream.
+- Join streams before routed expert dispatch so outputs match the baseline.
 """
 
 from __future__ import annotations
@@ -26,10 +26,10 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from ch15.verification_payload_mixin import VerificationPayloadMixin
-from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
-from core.optimization.moe_inference import ExpertMLP
-from core.optimization.shared_expert_dispatch import dispatch_shared_expert_active_experts
+from ch15.verification_payload_mixin import VerificationPayloadMixin  # noqa: E402
+from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata  # noqa: E402
+from core.optimization.moe_inference import ExpertMLP  # noqa: E402
+from core.optimization.shared_expert_dispatch import dispatch_shared_expert_active_experts  # noqa: E402
 
 
 def _pseudo_uniform_expert_ids(token_ids: torch.Tensor, num_experts: int) -> torch.Tensor:
@@ -38,8 +38,8 @@ def _pseudo_uniform_expert_ids(token_ids: torch.Tensor, num_experts: int) -> tor
     return ((token_ids * 1103515245 + 12345) % int(num_experts)).to(torch.int64)
 
 
-class BaselineMoeOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Baseline: sequential shared + routed expert compute."""
+class OptimizedMoeOverlapSharedExpertBenchmark(VerificationPayloadMixin, BaseBenchmark):
+    """Optimized: overlap shared expert compute with the routed all-to-all copy."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -70,6 +70,9 @@ class BaselineMoeOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._verify_probe: Optional[torch.Tensor] = None
         self._verify_meta: Optional[torch.Tensor] = None
 
+        self._comm_stream: Optional[torch.cuda.Stream] = None
+        self._shared_stream: Optional[torch.cuda.Stream] = None
+
     def setup(self) -> None:
         if not torch.cuda.is_available():
             raise RuntimeError("SKIPPED: CUDA required for MoE overlap benchmark")
@@ -85,6 +88,9 @@ class BaselineMoeOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.expert_ids = _pseudo_uniform_expert_ids(token_ids, self.num_experts).view(self.batch, self.seq)
         self._comm_flat = torch.empty(self.batch * self.seq, self.hidden_size, device=self.device, dtype=self.dtype)
         self._routed_out_flat = torch.empty(self.batch * self.seq, self.hidden_size, device=self.device, dtype=self.dtype)
+
+        self._comm_stream = torch.cuda.Stream(device=self.device)
+        self._shared_stream = torch.cuda.Stream(device=self.device)
 
         self._verify_probe = self.inputs[:1, :1, :256].detach().cpu()
         self._verify_meta = torch.zeros(self.num_experts, dtype=torch.int8)
@@ -103,16 +109,27 @@ class BaselineMoeOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark):
             or self.expert_ids is None
             or self._comm_flat is None
             or self._routed_out_flat is None
+            or self._comm_stream is None
+            or self._shared_stream is None
         ):
             raise RuntimeError("setup() must run before benchmark_fn()")
 
         flat = self.inputs.view(-1, self.hidden_size)
         expert_ids_flat = self.expert_ids.reshape(-1)
 
-        with self._nvtx_range("baseline_moe_overlap"):
+        with self._nvtx_range("optimized_moe_overlap_shared_expert"):
             with torch.no_grad():
-                shared_out = self.shared_expert(flat)
-                self._comm_flat.copy_(flat)
+                current = torch.cuda.current_stream(self.device)
+
+                with torch.cuda.stream(self._shared_stream):
+                    shared_out = self.shared_expert(flat)
+
+                with torch.cuda.stream(self._comm_stream):
+                    self._comm_flat.copy_(flat)
+
+                current.wait_stream(self._shared_stream)
+                current.wait_stream(self._comm_stream)
+
                 dispatch_shared_expert_active_experts(
                     self._comm_flat,
                     expert_ids_flat,
@@ -121,6 +138,7 @@ class BaselineMoeOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 )
                 combined = self._routed_out_flat + shared_out
                 self.output = combined.view(self.batch, self.seq, self.hidden_size)
+
         self._synchronize()
 
     def capture_verification_payload(self) -> None:
@@ -146,6 +164,11 @@ class BaselineMoeOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark):
             output_tolerance=(0.0, 0.0),
         )
 
+    def get_custom_streams(self):
+        if self._comm_stream is None or self._shared_stream is None:
+            return None
+        return [self._comm_stream, self._shared_stream]
+
     def teardown(self) -> None:
         self.shared_expert = None
         self.routed_expert = None
@@ -154,6 +177,8 @@ class BaselineMoeOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._comm_flat = None
         self._routed_out_flat = None
         self.output = None
+        self._comm_stream = None
+        self._shared_stream = None
         super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
@@ -169,4 +194,10 @@ class BaselineMoeOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
 
 def get_benchmark() -> BaseBenchmark:
-    return BaselineMoeOverlapBenchmark()
+    return OptimizedMoeOverlapSharedExpertBenchmark()
+
+
+if __name__ == "__main__":
+    from core.harness.benchmark_harness import benchmark_main
+
+    benchmark_main(get_benchmark)

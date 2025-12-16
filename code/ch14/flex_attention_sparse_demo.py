@@ -1,5 +1,5 @@
 """
-optimized_flexattention_sparse_demo.py - FlexAttention with Block Sparsity (Ch14)
+flex_attention_sparse_demo.py - FlexAttention with Block Sparsity (Ch14) (non-benchmark demo)
 
 WHAT: FlexAttention is PyTorch's flexible attention API that allows custom
 attention patterns via user-defined mask functions, compiled to efficient kernels.

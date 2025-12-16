@@ -140,6 +140,18 @@ DEMOS: Dict[str, DemoSpec] = {
         description="Chapter 18 V1 EngineCore polling-loop demo (non-benchmark).",
         launch_via=LaunchVia.PYTHON,
     ),
+    "ch17-moe-router-uniform": DemoSpec(
+        name="ch17-moe-router-uniform",
+        script_path=REPO_ROOT / "ch17" / "moe_router_uniform_demo.py",
+        description="Chapter 17 MoE uniform routing demo (non-benchmark).",
+        launch_via=LaunchVia.PYTHON,
+    ),
+    "ch17-moe-router-topology": DemoSpec(
+        name="ch17-moe-router-topology",
+        script_path=REPO_ROOT / "ch17" / "moe_router_topology_demo.py",
+        description="Chapter 17 MoE topology-aware routing demo (non-benchmark).",
+        launch_via=LaunchVia.PYTHON,
+    ),
 }
 
 

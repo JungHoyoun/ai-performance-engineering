@@ -1,4 +1,4 @@
-"""Integration regression test for ch20 optimized_multiple_all_techniques."""
+"""Integration regression test for the ch20 multi-technique benchmark."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, Benc
 from ch20.optimized_autotuning import OptimizedAutotuningBenchmark
 from ch20.optimized_end_to_end_bandwidth import OptimizedEndToEndBandwidthBenchmark
 from ch20.optimized_moe import OptimizedMoeBenchmark
-from ch20.optimized_multiple_all_techniques import OptimizedAllTechniquesBenchmark
+from ch20.optimized_multiple_unoptimized import OptimizedAllTechniquesBenchmark
 
 pytestmark.append(
     pytest.mark.skipif(
@@ -155,7 +155,7 @@ def test_inductor_config_restored_after_success(triton_cfg_guard):
     for attr in ("cudagraphs", "cudagraph_trees"):
         setattr(triton_cfg, attr, True)
 
-    benchmark = ShortMultipleAllTechniquesBenchmark()
+    benchmark = ShortEndToEndBandwidthBenchmark()
     benchmark.setup()
     benchmark.teardown()
 
@@ -166,20 +166,10 @@ def test_inductor_config_restored_after_success(triton_cfg_guard):
 def test_inductor_config_restored_after_failure(triton_cfg_guard):
     """If setup raises, cudagraph toggles must still be restored."""
     triton_cfg, original_values = triton_cfg_guard
-    benchmark = ShortMultipleAllTechniquesBenchmark()
-    original_compile = torch.compile
-
-    def exploding_compile(*args, **kwargs):
-        raise RuntimeError("intentional compile failure")
-
-    torch.compile = exploding_compile  # type: ignore[assignment]
-    try:
-        try:
-            benchmark.setup()
-        except RuntimeError:
-            pass
-    finally:
-        torch.compile = original_compile  # type: ignore[assignment]
+    benchmark = ShortEndToEndBandwidthBenchmark()
+    benchmark.hidden_dim = -1  # Force a real failure after cudagraph toggles are set.
+    with pytest.raises(Exception):
+        benchmark.setup()
 
     for attr, value in original_values.items():
         assert getattr(triton_cfg, attr) == value

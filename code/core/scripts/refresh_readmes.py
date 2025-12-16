@@ -592,7 +592,7 @@ ENTRIES["ch13"] = chapter_entry(
         ("`baseline_attention_standard.py`, `optimized_attention_standard.py`, `baseline_arithmetic_intensity.py`, `optimized_arithmetic_intensity.py`, `baseline_matmul_pytorch.py`, `optimized_matmul_pytorch.py`", "Attention and matmul microbenchmarks tuned purely within PyTorch."),
         ("`context_parallelism.py`, `fsdp_example.py`", "Context and FSDP sharding demos for scaling beyond a single GPU. (Tools; not benchmark targets.)"),
         ("`baseline_precisionfp8*.py`, `optimized_precisionfp8*.py`, `baseline_precisionmixed.py`, `optimized_precisionmixed.py`, `compiled_autograd.py`", "Precision-management suites covering Transformer Engine and compiled autograd recipes."),
-        ("`baseline_quantization.py`, `optimized_quantization.py`, `baseline_kv_cache_naive.py`, `optimized_kv_cache.py`", "Quantization and KV-cache pipelines for inference/training memory savings."),
+        ("`baseline_quantization.py`, `optimized_quantization.py`, `baseline_kv_cache_naive.py`, `optimized_kv_cache_naive.py`, `optimized_kv_cache_naive_pool.py`", "Quantization and KV-cache pipelines for inference/training memory savings."),
         ("`compare.py`, `compare_perf.py`, `requirements.txt`, `expectations_b200.json`, `workload_config.py`", "Harness entry, performance comparison helper, dependencies, and regression baselines."),
     ],
     validation=[
@@ -720,7 +720,7 @@ ENTRIES["ch17"] = chapter_entry(
         ("`baseline_dynamic_routing.py`, `optimized_dynamic_routing.py`, `dynamic_routing.py`, `early_rejection.py`", "Routing controllers that evolve from static heuristics to telemetry-driven admission and rejection policies."),
         ("`baseline_inference_full.py`, `optimized_inference_full.py`, `baseline_prefill_decode_disagg.py`, `optimized_prefill_decode_disagg.py`, `baseline_prefill_decode_disagg_multigpu.py`, `optimized_prefill_decode_disagg_multigpu.py`", "End-to-end inference flows modeling separate prefill and decode pools, both single-node and multi-GPU."),
         ("`baseline_pipeline_parallelism.py`, `optimized_pipeline_parallelism.py`", "Pipeline parallel workloads combining compute and KV-transfer scheduling."),
-        ("`baseline_moe_router_uniform.py`, `optimized_moe_router_topology.py`, `baseline_routing_static.py`, `optimized_routing_static.py`", "Router variants for MoE and static/dynamic sharding decisions."),
+        ("`moe_router_uniform_demo.py`, `moe_router_topology_demo.py`, `baseline_routing_static.py`, `optimized_routing_static.py`", "Router demos for MoE plus static/dynamic sharding benchmarks."),
         ("`baseline_memory.py`, `optimized_memory.py`, `blackwell_profiling_guide.py`", "Memory-bound case studies plus profiling guides tailored to routing workloads (use `aisp tools roofline` for roofline analysis)."),
         ("`compare.py`, `Makefile`, `expectations_b200.json`, `dynamo_config.yaml`", "Harness entry, build rules, expectation baselines, and Dynamo config knobs."),
     ],
