@@ -288,19 +288,27 @@ def audit_protection(code_root: Path, name: str, info: dict) -> dict:
 
 
 def check_harness_integration(code_root: Path) -> Dict[str, bool]:
-    """Check that protections are actually wired into the harness."""
+    """Check that protections are actually wired into the execution path."""
     harness_file = code_root / "core/harness/benchmark_harness.py"
     if not harness_file.exists():
         return {}
     
     content = harness_file.read_text()
+
+    # Quarantine is an orchestration concern (run_benchmarks.py) implemented via VerifyRunner.
+    verify_runner_file = code_root / "core/benchmark/verify_runner.py"
+    orchestration_file = code_root / "core/harness/run_benchmarks.py"
+    verify_runner_content = verify_runner_file.read_text() if verify_runner_file.exists() else ""
+    orchestration_content = orchestration_file.read_text() if orchestration_file.exists() else ""
+    quarantine_wired = bool(re.search(r"QuarantineManager\s*\(", verify_runner_content))
+    quarantine_used = bool(re.search(r"runner\.quarantine\.", orchestration_content))
     
     integrations = {
         "validity_checks_imported": bool(re.search(r"from.*validity_checks import", content)),
         "l2_cache_utils_imported": bool(re.search(r"from.*l2_cache_utils import", content) or 
                                          re.search(r"from.*l2_cache_utils", content)),
         "verify_runner_used": bool(re.search(r"VerifyRunner", content)),
-        "quarantine_manager_used": bool(re.search(r"QuarantineManager", content)),
+        "quarantine_manager_used": quarantine_wired and quarantine_used,
         "clear_l2_cache_called": bool(re.search(r"clear_l2_cache", content)),
         "gc_disabled_used": bool(re.search(r"gc_disabled", content)),
         "memory_tracker_used": bool(re.search(r"MemoryAllocationTracker|track_memory_allocations", content)),
@@ -390,4 +398,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-

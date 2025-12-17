@@ -200,6 +200,7 @@ def _execute_benchmarks(
     suite_timeout: Optional[int] = 14400,
     timeout_multiplier: float = 1.0,
     allow_invalid_environment: bool = False,
+    allow_virtualization: bool = False,
     reproducible: bool = False,
     cold_start: bool = False,
     iterations: Optional[int] = None,
@@ -313,6 +314,7 @@ def _execute_benchmarks(
             iterations=iterations,
             warmup=warmup,
             enforce_environment_validation=not allow_invalid_environment,
+            allow_virtualization=allow_virtualization,
             only_examples=only_examples,
             accept_regressions=accept_regressions,
             update_expectations=update_expectations,
@@ -376,7 +378,17 @@ if TYPER_AVAILABLE:
             "--allow-invalid-environment",
             help=(
                 "Allow running benchmarks even if validate_environment() reports errors. "
-                "Still emits warnings; results may be invalid. Intended for unit tests and diagnostics."
+                "Still emits warnings; results will be invalid. Intended only for diagnostics; "
+                "prefer --allow-virtualization if the only issue is running inside a VM."
+            ),
+            is_flag=True,
+        ),
+        allow_virtualization: bool = Option(
+            False,
+            "--allow-virtualization",
+            help=(
+                "Allow running in a virtualized environment (VM/hypervisor) by downgrading ONLY the "
+                "virtualization check to a loud warning. Results are still invalid; bare metal is required."
             ),
             is_flag=True,
         ),
@@ -460,6 +472,7 @@ if TYPER_AVAILABLE:
                 "suite_timeout": effective_timeout,
                 "verify_phase": verify_phase,
                 "allow_invalid_environment": allow_invalid_environment,
+                "allow_virtualization": allow_virtualization,
             }
             typer.echo(json.dumps(plan, indent=2))
             raise typer.Exit(code=0)
@@ -471,6 +484,7 @@ if TYPER_AVAILABLE:
             suite_timeout=effective_timeout,
             timeout_multiplier=timeout_multiplier,
             allow_invalid_environment=allow_invalid_environment,
+            allow_virtualization=allow_virtualization,
             reproducible=reproducible,
             cold_start=cold_start,
             iterations=iterations,

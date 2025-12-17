@@ -509,6 +509,7 @@ def validate_environment(
     *,
     device: Optional["torch.device"] = None,
     probe: Optional[EnvironmentProbe] = None,
+    allow_virtualization: bool = False,
 ) -> EnvironmentValidationResult:
     """Validate benchmark environment is suitable (fail-fast on known invalid states)."""
     probe = probe or EnvironmentProbe()
@@ -673,7 +674,22 @@ def validate_environment(
         is_virtualized = True
     details["virtualized"] = is_virtualized
     if is_virtualized:
-        errors.append("Virtualization detected (hypervisor present). Run benchmarks on bare metal for valid results.")
+        product_hint = f" (dmi_product_name={product_name!r})" if product_name else ""
+        message = (
+            "BARE METAL REQUIRED: Virtualization detected (hypervisor present). "
+            "This repo's benchmark results are not valid in virtualized environments "
+            "(Nsight tools like nsys/ncu may be unavailable or misleading)."
+            f"{product_hint}"
+        )
+        if allow_virtualization:
+            warnings_list.append(
+                f"{message} Continuing ONLY because allow_virtualization=True; do not trust results."
+            )
+        else:
+            errors.append(
+                f"{message} Run on bare metal for valid results. "
+                "If you must run in a VM for development only, pass --allow-virtualization."
+            )
 
     # torch.compile backend sanity (Compile category)
     try:

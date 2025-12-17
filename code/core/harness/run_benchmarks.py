@@ -2134,6 +2134,11 @@ def _merge_benchmark_config(
         "enforce_environment_validation",
         merged.enforce_environment_validation,
     )
+    merged.allow_virtualization = getattr(
+        base_config,
+        "allow_virtualization",
+        getattr(merged, "allow_virtualization", False),
+    )
 
     return merged
 
@@ -2148,6 +2153,7 @@ def _test_chapter_impl(
     iterations: Optional[int] = None,
     warmup: Optional[int] = None,
     enforce_environment_validation: bool = True,
+    allow_virtualization: bool = False,
     only_examples: Optional[List[str]] = None,
     accept_regressions: bool = False,
     update_expectations: bool = False,
@@ -2378,6 +2384,7 @@ def _test_chapter_impl(
         seed=42 if reproducible else None,  # Set seed for reproducibility
         deterministic=reproducible,  # Enable deterministic algorithms for reproducibility
         enforce_environment_validation=enforce_environment_validation,
+        allow_virtualization=allow_virtualization,
         ncu_metric_set=ncu_metric_set,
         profile_type=profile_type if enable_profiling else "none",
         launch_via=launch_via,
@@ -5507,6 +5514,7 @@ def test_chapter(
     iterations: Optional[int] = None,
     warmup: Optional[int] = None,
     enforce_environment_validation: bool = True,
+    allow_virtualization: bool = False,
     only_examples: Optional[List[str]] = None,
     accept_regressions: bool = False,
     update_expectations: bool = False,
@@ -5547,6 +5555,7 @@ def test_chapter(
         iterations=iterations,
         warmup=warmup,
         enforce_environment_validation=enforce_environment_validation,
+        allow_virtualization=allow_virtualization,
         graph_capture_ratio_threshold=graph_capture_ratio_threshold,
         graph_capture_memory_threshold_mb=graph_capture_memory_threshold_mb,
         only_examples=only_examples,

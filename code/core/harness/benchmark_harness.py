@@ -571,6 +571,16 @@ class BenchmarkConfig:
     would otherwise prevent exercising the harness logic.
     """
 
+    allow_virtualization: bool = field(default_factory=lambda: _get_default_value("allow_virtualization", False))
+    """Allow running benchmarks under virtualization (VM/hypervisor).
+
+    STRICT by default: virtualized environments are treated as invalid for benchmark
+    validity because profiling tools (nsys/ncu) and system-level controls can be
+    unavailable or misleading. When enabled, only the virtualization check is
+    downgraded to a loud warning; other environment errors remain fatal when
+    enforce_environment_validation=True.
+    """
+
     # Legacy timeout field (deprecated, use measurement_timeout_seconds)
     timeout_seconds: int = field(default_factory=lambda: _get_default_value("timeout_seconds", 180))
 
@@ -1976,6 +1986,27 @@ class BenchmarkHarness:
         # Make merged config visible to benchmarks, but prevent runtime mutation.
         # Benchmarks read this via get_config() / self._config.
         benchmark._config = ReadOnlyBenchmarkConfigView.from_config(config)  # type: ignore[attr-defined]
+
+        # Environment validity gate (loud warning on virtualization).
+        # Note: validate_environment() also runs inside the timed harness path; this early check ensures
+        # the message is visible even when using subprocess isolation.
+        from core.harness.validity_checks import validate_environment
+
+        env_result = validate_environment(
+            device=self.device,
+            probe=self._environment_probe,
+            allow_virtualization=bool(getattr(config, "allow_virtualization", False)),
+        )
+        if LOGGER_AVAILABLE:
+            for warning in env_result.warnings:
+                logger.warning("ENVIRONMENT WARNING: %s", warning)
+        if env_result.errors:
+            message = "ENVIRONMENT INVALID: " + " | ".join(env_result.errors)
+            enforce_env = bool(getattr(config, "enforce_environment_validation", True))
+            if enforce_env and _is_chapter_or_labs_benchmark(benchmark):
+                raise RuntimeError(message)
+            if LOGGER_AVAILABLE:
+                logger.warning(message)
         
         gpu_mem_logger: Optional[GpuMemoryLogger] = None
         if should_enable_gpu_memory_logging(getattr(config, "enable_gpu_memory_logging", False)):
@@ -3493,7 +3524,11 @@ class BenchmarkHarness:
         )
         
         # 0. Validate environment and log device enumeration
-        env_result = validate_environment(device=self.device, probe=self._environment_probe)
+        env_result = validate_environment(
+            device=self.device,
+            probe=self._environment_probe,
+            allow_virtualization=bool(getattr(config, "allow_virtualization", False)),
+        )
         for warning in env_result.warnings:
             import warnings as warn_module
             warn_module.warn(f"ENVIRONMENT WARNING: {warning}", RuntimeWarning)

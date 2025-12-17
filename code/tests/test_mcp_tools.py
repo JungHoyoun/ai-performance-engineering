@@ -251,7 +251,6 @@ TOOL_PARAMS: Dict[str, Dict[str, Any]] = {
         "iterations": 1,
         "warmup": 5,
         "timeout_seconds": 900,
-        "allow_invalid_environment": True,
     },
     "aisp_profile_torch": {"script": str(REPO_ROOT / "tests" / "fixtures" / "mcp_torch_profile_target.py")},
     "aisp_profile_hta": {"command": ["python", "-c", "print('hta')"]},

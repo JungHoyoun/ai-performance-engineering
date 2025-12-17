@@ -1179,6 +1179,14 @@ def tool_system_dependencies(params: Dict[str, Any]) -> Dict[str, Any]:
                 ),
                 "default": False,
             },
+            "allow_virtualization": {
+                "type": "boolean",
+                "description": (
+                    "Allow running benchmarks in a virtualized environment (VM/hypervisor) by downgrading ONLY the "
+                    "virtualization check to a loud warning. Results are still invalid; bare metal is required."
+                ),
+                "default": False,
+            },
         }),
         "required": ["targets"],
     },
@@ -1193,6 +1201,7 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
     iterations_param = params.get("iterations")
     warmup_param = params.get("warmup")
     allow_invalid_environment = bool(params.get("allow_invalid_environment", False))
+    allow_virtualization = bool(params.get("allow_virtualization", False))
 
     # Validate profile value
     valid_profiles = ["none", "minimal", "deep_dive", "roofline"]
@@ -1223,6 +1232,8 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
         args.extend(["--warmup", str(int(warmup_param))])
     if allow_invalid_environment:
         args.append("--allow-invalid-environment")
+    if allow_virtualization:
+        args.append("--allow-virtualization")
     for t in targets:
         args.extend(["-t", t])
     # Add --llm-analysis only if explicitly enabled (costs API credits)
@@ -1369,6 +1380,14 @@ def _benchmark_next_steps(result: Dict[str, Any]) -> List[Dict[str, Any]]:
                     ),
                     "default": False,
                 },
+                "allow_virtualization": {
+                    "type": "boolean",
+                    "description": (
+                        "Allow running benchmarks in a virtualized environment (VM/hypervisor) by downgrading ONLY the "
+                        "virtualization check to a loud warning. Results are still invalid; bare metal is required."
+                    ),
+                    "default": False,
+                },
             }
         ),
         "required": ["targets"],
@@ -1386,6 +1405,7 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
     iterations = params.get("iterations", 1)
     warmup = params.get("warmup", 5)
     allow_invalid_environment = bool(params.get("allow_invalid_environment", False))
+    allow_virtualization = bool(params.get("allow_virtualization", False))
     run_async = bool(params.get("async", False))
     timeout_param = params.get("timeout_seconds")
     timeout_seconds = None if timeout_param is None else int(timeout_param)
@@ -1402,6 +1422,7 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
             "iterations": iterations,
             "warmup": warmup,
             "allow_invalid_environment": allow_invalid_environment,
+            "allow_virtualization": allow_virtualization,
             # Explicitly disable LLM analysis; caller can run it separately if desired.
             "llm_analysis": False,
             "apply_patches": False,
