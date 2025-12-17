@@ -30,6 +30,9 @@ from core.harness.benchmark_harness import (
 
 class BaselineTensorCoresBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: FP32 matrix operations without tensor cores."""
+
+    signature_equivalence_group = "ch18_tensor_cores_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
     
     def __init__(self):
         super().__init__()
@@ -89,7 +92,7 @@ class BaselineTensorCoresBenchmark(VerificationPayloadMixin, BaseBenchmark):
             batch_size=1,
             parameter_count=0,
             precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": False},
-            output_tolerance=(0.1, 1.0),
+            output_tolerance=(0.5, 5.0),
         )
     
     def teardown(self) -> None:

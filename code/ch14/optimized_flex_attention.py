@@ -1,4 +1,4 @@
-"""optimized_flex_attention.py - Optimized with FlexAttention."""
+"""optimized_flex_attention.py - Optimized flex attention via fused SDPA."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 try:
     from torch.nn.attention import SDPBackend, sdpa_kernel
@@ -22,13 +21,7 @@ except ImportError:  # pragma: no cover - older PyTorch fallback
 from typing import Optional
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
-from core.harness.benchmark_harness import (  # noqa: E402
-    BaseBenchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
-    WorkloadMetadata,
-)
+from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata  # noqa: E402
 
 def _flash_sdp_context():
     """Prefer the new sdpa_kernel API; fall back to no-op if unavailable."""
@@ -37,59 +30,36 @@ def _flash_sdp_context():
     return sdpa_kernel([SDPBackend.FLASH_ATTENTION])
 
 
-class FlexAttentionBlock(nn.Module):
-    """MHA block backed by fused scaled_dot_product_attention."""
-
-    def __init__(self, embed_dim: int, num_heads: int, dtype: torch.dtype) -> None:
-        super().__init__()
-        self.embed_dim = embed_dim
-        self.num_heads = num_heads
-        self.head_dim = embed_dim // num_heads
-        assert self.head_dim * num_heads == embed_dim
-        self.qkv_proj = nn.Linear(embed_dim, 3 * embed_dim, bias=False, dtype=dtype)
-        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=False, dtype=dtype)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        batch, seq, _ = x.shape
-        qkv = self.qkv_proj(x)
-        q, k, v = qkv.chunk(3, dim=-1)
-        q = q.view(batch, seq, self.num_heads, self.head_dim).transpose(1, 2)
-        k = k.view(batch, seq, self.num_heads, self.head_dim).transpose(1, 2)
-        v = v.view(batch, seq, self.num_heads, self.head_dim).transpose(1, 2)
-        with _flash_sdp_context():
-            context = F.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=False)
-        context = context.transpose(1, 2).contiguous().view(batch, seq, self.embed_dim)
-        return self.out_proj(context)
-
-
 class OptimizedFlexAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Uses FlexAttention for flexible attention patterns."""
     
     def __init__(self):
         super().__init__()
-        self.model = None
-        self.embed_dim = 1024
         self.seq_len = 1024
+        self.num_heads = 16
+        self.head_dim = 64
+        self.embed_dim = self.num_heads * self.head_dim  # 1024
         self.batch = 1
         self.dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-        self.num_heads = 16
+        self.q = None
+        self.k = None
+        self.v = None
         self._last = 0.0
         self.repeat_passes = 1
         tokens = self.seq_len * self.num_heads * self.repeat_passes
         self._workload = WorkloadMetadata(
-            requests_per_iteration=float(self.batch),
+            requests_per_iteration=float(self.seq_len),
             tokens_per_iteration=float(tokens),
         )
         self.output = None
-        self._verify_input: Optional[torch.Tensor] = None
         self.parameter_count: int = 0
         self.register_workload_metadata(
-            requests_per_iteration=float(self.batch),
+            requests_per_iteration=float(self.seq_len),
             tokens_per_iteration=float(tokens),
         )
     
     def setup(self) -> None:
-        """Setup: Initialize FlexAttention model."""
+        """Setup: materialize query/key/value tensors (same workload as baseline)."""
         
         # Optimization: Enable cuDNN benchmarking for optimal kernel selection
         if torch.cuda.is_available():
@@ -98,23 +68,25 @@ class OptimizedFlexAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         torch.manual_seed(42)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(42)
-        block = FlexAttentionBlock(self.embed_dim, self.num_heads, self.dtype).to(self.device)
-        block = block.eval()
-        self.model = block
-        self.parameter_count = sum(p.numel() for p in self.model.parameters())
-
-        self.graph_input = torch.randn(
-            self.batch,
-            self.seq_len,
-            self.embed_dim,
-            device=self.device,
-            dtype=self.dtype,
-        )
-        self._verify_input = self.graph_input.detach().clone()
+        shape = (self.seq_len, self.num_heads, self.head_dim)
+        self.q = torch.randn(shape, device=self.device, dtype=self.dtype)
+        self.k = torch.randn(shape, device=self.device, dtype=self.dtype)
+        self.v = torch.randn(shape, device=self.device, dtype=self.dtype)
         for _ in range(3):
             with torch.no_grad():
-                _ = self.model(self.graph_input)
+                _ = self._attention(self.q, self.k, self.v)
         torch.cuda.synchronize(self.device)
+
+    def _attention(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+        q_bhsd = q.transpose(0, 1).unsqueeze(0)  # [1, H, S, D]
+        k_bhsd = k.transpose(0, 1).unsqueeze(0)
+        v_bhsd = v.transpose(0, 1).unsqueeze(0)
+        with _flash_sdp_context():
+            out = F.scaled_dot_product_attention(q_bhsd, k_bhsd, v_bhsd, dropout_p=0.0, is_causal=False)
+        out = out.transpose(1, 2).contiguous().view(1, self.seq_len, self.embed_dim)
+        if self.repeat_passes > 1:
+            out = out.repeat(1, 1, self.repeat_passes)
+        return out
     
     def benchmark_fn(self) -> None:
         """Benchmark: FlexAttention operations."""
@@ -128,21 +100,25 @@ class OptimizedFlexAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
 
         with nvtx_range("optimized_flex_attention", enable=enable_nvtx):
-            if self.model is None or self.graph_input is None:
-                raise RuntimeError("Model not initialized")
-            out = self.model(self.graph_input)
+            if self.q is None or self.k is None or self.v is None:
+                raise RuntimeError("Tensors not initialized")
+            out = self._attention(self.q, self.k, self.v)
             self._last = float(out.sum())
             self.output = out.detach().clone()
             self._synchronize()
-        if self._verify_input is None or self.output is None:
+        if self.q is None or self.k is None or self.v is None or self.output is None:
             raise RuntimeError("Verification input/output not initialized")
 
     def capture_verification_payload(self) -> None:
         self._set_verification_payload(
-            inputs={"input": self._verify_input},
+            inputs={
+                "q": self.q.detach(),
+                "k": self.k.detach(),
+                "v": self.v.detach(),
+            },
             output=self.output.detach().clone(),
-            batch_size=self._verify_input.shape[0],
-            parameter_count=self.parameter_count,
+            batch_size=1,
+            parameter_count=0,
             precision_flags={
                 "fp16": self.dtype == torch.float16,
                 "bf16": self.dtype == torch.bfloat16,
@@ -155,17 +131,17 @@ class OptimizedFlexAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        self.model = None
-        self.graph_input = None
-        self.graph_output = None
+        self.q = None
+        self.k = None
+        self.v = None
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
+            iterations=100,
+            warmup=10,
         )
     
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
@@ -183,8 +159,8 @@ class OptimizedFlexAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.model is None or self.graph_input is None:
-            return "Model not initialized"
+        if self.q is None or self.k is None or self.v is None:
+            return "Tensors not initialized"
         return None
 
 

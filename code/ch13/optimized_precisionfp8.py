@@ -54,6 +54,9 @@ def fake_fp8_cast(tensor: torch.Tensor) -> torch.Tensor:
 class OptimizedFP8Benchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized FP8 path using PyTorch AMP + fake FP8 activations."""
 
+    signature_equivalence_group = "ch13_precisionfp8_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
+
     def __init__(self):
         super().__init__()
         self.model: Optional[nn.Module] = None

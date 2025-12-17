@@ -1,9 +1,7 @@
-"""Optimized paged KV-cache benchmark with fused FP8 gating and NVMe-style offload.
+"""Optimized paged KV-cache benchmark with pinned staging + async H2D copies.
 
 - Uses pinned staging buffers and an async copy stream.
-- Backs cold pages by a memmap file to mimic NVMe/SSD offload.
 - Enables FP8 KV only when a fused FlashAttention path is available on B200/GB200.
-- Prefetches the next page to hide a portion of TTFT on long contexts.
 """
 
 from __future__ import annotations
@@ -32,16 +30,16 @@ def get_benchmark() -> PagedKVOffloadBenchmark:
         batch_size=2,
         num_heads=16,
         head_dim=128,
-        max_seq_len=16384,
+        max_seq_len=8192,
         page_tokens=512,
-        decode_tokens=96,
+        decode_tokens=64,
         use_pinned_stage=True,
         use_async_stream=True,
-        use_memmap=True,  # mimic NVMe/SSD backing
+        use_memmap=False,
         prefer_fp8=True,
-        require_fused_fp8=True,  # Only use FP8 KV when fused kernels are likely present
+        require_fused_fp8=False,
         fallback_dtype=torch.float16,
-        prefetch_next_page=True,
+        prefetch_next_page=False,
     )
     return PagedKVOffloadBenchmark(cfg, label="paged_kv_offload_optimized")
 

@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <math.h>
 
+#include "../core/common/headers/cuda_verify.cuh"
+
 #define CUDA_CHECK(call) \
     do { \
         cudaError_t status = (call); \
@@ -73,6 +75,15 @@ int main() {
     float avg_ms = ms / iterations;
     
     printf("Naive matmul (baseline): %.2f ms\n", avg_ms);
+
+#ifdef VERIFY
+    CUDA_CHECK(cudaMemcpy(h_C, d_C, bytes, cudaMemcpyDeviceToHost));
+    double checksum = 0.0;
+    for (int i = 0; i < N * N; ++i) {
+        checksum += static_cast<double>(h_C[i]);
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
     
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));
@@ -85,4 +96,3 @@ int main() {
     
     return 0;
 }
-

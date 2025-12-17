@@ -31,8 +31,9 @@ from ch15.verification_payload_mixin import VerificationPayloadMixin  # noqa: E4
 class SimpleLLM(nn.Module):
     """Simplified LLM for inference simulation."""
     
-    def __init__(self, hidden_dim=1024, num_layers=12):
+    def __init__(self, *, vocab_size: int = 10000, hidden_dim: int = 1024, num_layers: int = 12):
         super().__init__()
+        self.embed = nn.Embedding(vocab_size, hidden_dim)
         self.hidden_dim = hidden_dim
         self.layers = nn.ModuleList([
             nn.Linear(hidden_dim, hidden_dim)
@@ -41,8 +42,7 @@ class SimpleLLM(nn.Module):
     
     def prefill(self, prompt_tokens):
         """Prefill: Process full prompt (compute-bound)."""
-        x = torch.randn(prompt_tokens.size(0), prompt_tokens.size(1), self.hidden_dim,
-                       device=prompt_tokens.device, dtype=torch.bfloat16)
+        x = self.embed(prompt_tokens)
         for layer in self.layers:
             x = layer(x)
             x = torch.relu(x)
@@ -84,13 +84,11 @@ class BaselineInferenceMonolithicBenchmark(VerificationPayloadMixin, BaseBenchma
         """Setup: initialize model and data."""
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-        self.model = SimpleLLM(hidden_dim=1024, num_layers=12).to(self.device).to(torch.bfloat16).eval()
-        self.prompt = torch.randint(0, 10000, (1, 256), device=self.device)
-        
-        with torch.no_grad():
-            self.kv_cache = self.model.prefill(self.prompt)
-        torch.cuda.synchronize(self.device)
-        self._verify_prompt = self.prompt
+        self.model = SimpleLLM(vocab_size=10000, hidden_dim=1024, num_layers=12).to(self.device).to(torch.bfloat16).eval()
+        self.prompt = (torch.arange(self.prefill_seq, device=self.device, dtype=torch.int64) % 10000).unsqueeze(0)
+        self.kv_cache = None
+        self.output = None
+        self._verify_prompt = self.prompt.detach().clone()
 
     def benchmark_fn(self) -> Optional[dict]:
         if self.model is None or self.prompt is None:

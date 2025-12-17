@@ -101,6 +101,9 @@ class TinyTransformerBlock(nn.Module):
 class OptimizedRegionalCompileBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: compile only the MLP region, keep the rest eager."""
 
+    signature_equivalence_group = "ch13_regional_compile_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
+
     def __init__(self):
         super().__init__()
         # Larger workload to amortize compile overhead and show benefits
@@ -113,6 +116,9 @@ class OptimizedRegionalCompileBenchmark(VerificationPayloadMixin, BaseBenchmark)
 
         self.model: Optional[nn.Module] = None
         self.inputs: Dict[int, torch.Tensor] = {}
+        self.inputs_fp32: Dict[int, torch.Tensor] = {}
+        self._verify_x: Optional[torch.Tensor] = None
+        self._verify_output: Optional[torch.Tensor] = None
 
         max_tokens = self.batch_size * max(self.sequence_schedule) * self.hidden
         self._workload = WorkloadMetadata(
@@ -144,13 +150,15 @@ class OptimizedRegionalCompileBenchmark(VerificationPayloadMixin, BaseBenchmark)
         self.model.mlp.compile_mlp()
 
         for seq in self.sequence_schedule:
-            self.inputs[seq] = torch.randn(
+            x_fp32 = torch.randn(
                 self.batch_size,
                 seq,
                 self.hidden,
                 device=self.device,
-                dtype=torch.bfloat16,
+                dtype=torch.float32,
             )
+            self.inputs_fp32[seq] = x_fp32
+            self.inputs[seq] = x_fp32.to(dtype=torch.bfloat16)
         
         # Extensive warmup to ensure compilation is complete
         with torch.no_grad():
@@ -175,19 +183,24 @@ class OptimizedRegionalCompileBenchmark(VerificationPayloadMixin, BaseBenchmark)
 
         seq_len = self._next_sequence_length()
         x = self.inputs[seq_len]
+        x_fp32 = self.inputs_fp32[seq_len]
 
         with torch.no_grad(), self._nvtx_range("optimized_regional_compile"):
             self.output = self.model(x).detach().float().clone()
         self._synchronize()
         if self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
-        self._payload_x = x
+        if self._verify_x is None:
+            self._verify_x = x_fp32
+            self._verify_output = self.output.detach().float().clone()
 
     def capture_verification_payload(self) -> None:
-        x = self._payload_x
+        if self._verify_x is None or self._verify_output is None:
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
+        x = self._verify_x
         self._set_verification_payload(
             inputs={"input": x},
-            output=self.output.detach().float().clone(),
+            output=self._verify_output,
             batch_size=self.batch_size,
             precision_flags={
                 "fp16": False,
@@ -201,6 +214,7 @@ class OptimizedRegionalCompileBenchmark(VerificationPayloadMixin, BaseBenchmark)
     def teardown(self) -> None:
         self.model = None
         self.inputs.clear()
+        self.inputs_fp32.clear()
         super().teardown()
 
     def get_config(self) -> BenchmarkConfig:

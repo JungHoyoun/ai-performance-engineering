@@ -520,6 +520,10 @@ def coerce_input_signature(sig: Union[InputSignature, Dict[str, Any]]) -> InputS
         ValueError: When required fields are missing/invalid.
     """
     if isinstance(sig, InputSignature):
+        # Normalize dtype strings so signatures compare consistently across
+        # in-process vs subprocess execution (the subprocess path serializes to
+        # dict and runs through _normalize_dtype_str()).
+        sig.dtypes = {k: _normalize_dtype_str(v) for k, v in sig.dtypes.items()}
         errors = sig.validate(strict=True)
         if errors:
             raise ValueError(f"Invalid InputSignature: {errors[0]}")

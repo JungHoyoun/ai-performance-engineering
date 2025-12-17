@@ -31,6 +31,9 @@ logger = get_logger(__name__)
 class OptimizedKVFP8Compressed(VerificationPayloadMixin, BaseBenchmark):
     """Optimized FP8 compressed KV cache."""
 
+    signature_equivalence_group = "labs_kv_standard_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
+
     def __init__(
         self,
         batch_size: int = 8,
@@ -208,7 +211,11 @@ class OptimizedKVFP8Compressed(VerificationPayloadMixin, BaseBenchmark):
             "compression_ratio": 2.0 / self.bytes_per_element,
         }
 
-        view = self.kv_cache[:1, :1, :, :, : min(1, self.kv_cache.shape[4]), : min(8, self.kv_cache.shape[5])]
+        # Verification output: dequantize the first token of layer 0 so we compare against the BF16 baseline.
+        k, v = self.get_kv(layer_idx=0, batch_idx=0)
+        k0 = k[:, :1, : min(8, k.shape[-1])]
+        v0 = v[:, :1, : min(8, v.shape[-1])]
+        view = torch.stack([k0, v0], dim=0).unsqueeze(0).unsqueeze(0)
         self.output = view.detach().float().clone()
 
     def capture_verification_payload(self) -> None:

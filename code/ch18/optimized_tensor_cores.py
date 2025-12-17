@@ -31,6 +31,9 @@ from core.harness.benchmark_harness import (
 
 class OptimizedTensorCoresBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Tensor core accelerated matrix operations."""
+
+    signature_equivalence_group = "ch18_tensor_cores_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
     
     def __init__(self):
         super().__init__()
@@ -57,11 +60,9 @@ class OptimizedTensorCoresBenchmark(VerificationPayloadMixin, BaseBenchmark):
         torch.manual_seed(42)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(42)
-        # Optimization: Tensor cores accelerate FP16/BF16 matrix operations
-        # Tensor cores provide high throughput for mixed-precision operations
-        # This uses FP16/BF16 to leverage tensor core acceleration
-        self.A = torch.randn(self.size, self.size, device=self.device, dtype=self.dtype)
-        self.B = torch.randn(self.size, self.size, device=self.device, dtype=self.dtype)
+        # Keep verification inputs FP32 to match the baseline signature; compute path casts to FP16/BF16.
+        self.A = torch.randn(self.size, self.size, device=self.device, dtype=torch.float32)
+        self.B = torch.randn(self.size, self.size, device=self.device, dtype=torch.float32)
         self.output_buffer = torch.empty((self.size, self.size), device=self.device, dtype=self.dtype)
         self._synchronize()
         self.register_workload_metadata(
@@ -76,7 +77,9 @@ class OptimizedTensorCoresBenchmark(VerificationPayloadMixin, BaseBenchmark):
         with self._nvtx_range("optimized_tensor_cores"):
             if self.output_buffer is None:
                 raise RuntimeError("Output buffer not initialized")
-            torch.matmul(self.A, self.B, out=self.output_buffer)
+            a_tc = self.A.to(self.dtype)
+            b_tc = self.B.to(self.dtype)
+            torch.matmul(a_tc, b_tc, out=self.output_buffer)
             self.output = self.output_buffer
         if self.output is None or self.A is None or self.B is None:
             raise RuntimeError("benchmark_fn() must produce output")
@@ -84,7 +87,7 @@ class OptimizedTensorCoresBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"A": self.A, "B": self.B},
-            output=self.output,
+            output=self.output.float(),
             batch_size=1,
             parameter_count=0,
             precision_flags={

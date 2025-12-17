@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+import random
+
 import torch
 import torch.nn as nn
 
@@ -42,6 +44,7 @@ class BaselineInferenceFullBenchmark(VerificationPayloadMixin, BaseBenchmark):
         )
         self.output = None
         self.parameter_count: int = 0
+        self.identity_start_layer = 6
         self._verification_payload = None
         self.register_workload_metadata(
             requests_per_iteration=float(self.batch_size),
@@ -52,12 +55,21 @@ class BaselineInferenceFullBenchmark(VerificationPayloadMixin, BaseBenchmark):
         torch.backends.cudnn.benchmark = True
         torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+        random.seed(42)
 
         self.model = FullDepthModel(self.hidden_dim, self.num_layers).to(self.device)
         if self.device.type == "cuda":
             self.model = self.model.half()
         self.model.eval()
         self.parameter_count = sum(p.numel() for p in self.model.parameters())
+
+        with torch.no_grad():
+            dtype = next(self.model.parameters()).dtype
+            eye = torch.eye(self.hidden_dim, device=self.device, dtype=dtype)
+            for layer in self.model.layers[self.identity_start_layer :]:
+                layer.weight.copy_(eye)
+                layer.bias.zero_()
 
         input_dtype = next(self.model.parameters()).dtype
         self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=input_dtype)

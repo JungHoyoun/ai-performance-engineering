@@ -23,6 +23,8 @@
 #include <vector>
 #include <numeric>
 
+#include "../core/common/headers/cuda_verify.cuh"
+
 namespace cg = cooperative_groups;
 
 #define CUDA_CHECK(call)                                                       \
@@ -36,8 +38,8 @@ namespace cg = cooperative_groups;
     } while (0)
 
 constexpr int BLOCK_SIZE = 256;
-constexpr int CLUSTER_SIZE = 8;  // Larger cluster for more DSMEM benefit
-constexpr int ELEMENTS_PER_BLOCK = 8192;  // More elements per block
+constexpr int CLUSTER_SIZE = 4;
+constexpr int ELEMENTS_PER_BLOCK = 4096;
 constexpr int WARPS_PER_BLOCK = BLOCK_SIZE / 32;
 
 //============================================================================
@@ -203,7 +205,7 @@ int main() {
     printf("Cluster launch: SUPPORTED\n");
     
     // Problem size
-    const int N = 64 * 1024 * 1024;  // 64M elements
+    const int N = 16 * 1024 * 1024;  // Match baseline workload (16M elements)
     const int elements_per_cluster = ELEMENTS_PER_BLOCK * CLUSTER_SIZE;
     const int num_clusters = (N + elements_per_cluster - 1) / elements_per_cluster;
     const int num_blocks = num_clusters * CLUSTER_SIZE;
@@ -281,8 +283,11 @@ int main() {
     printf("\nOptimizations:\n");
     printf("  - Warp specialization (only warp 0 does cluster work)\n");
     printf("  - Vectorized float4 loads\n");
-    printf("  - 8-CTA cluster for maximum DSMEM benefit\n");
+    printf("  - 4-CTA cluster\n");
     printf("  - No atomics (single writer per cluster)\n");
+
+    const float verify_checksum = total;
+    VERIFY_PRINT_CHECKSUM(verify_checksum);
     
     // Cleanup
     CUDA_CHECK(cudaEventDestroy(start));

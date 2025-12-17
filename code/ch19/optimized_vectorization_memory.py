@@ -41,10 +41,14 @@ class OptimizedVectorizationMemoryBenchmark(VerificationPayloadMixin, BaseBenchm
     - Perfect for memory-bound workloads
     """
 
+    signature_equivalence_group = "ch19_vectorization_memory_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
+
     def __init__(self):
         super().__init__()
         self.output = None
         self.tensor: Optional[torch.Tensor] = None
+        self._compute_dtype = torch.float16
         # MATCH BASELINE: same N and repeats for fair comparison
         self.repeats = 32
         self.N = 8_192_000
@@ -61,21 +65,21 @@ class OptimizedVectorizationMemoryBenchmark(VerificationPayloadMixin, BaseBenchm
     def setup(self) -> None:
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-        # KEY OPTIMIZATION: FP16 instead of FP32
-        # Same tensor size, half the memory = 2x bandwidth potential
-        self.tensor = torch.randn(self.N, device=self.device, dtype=torch.float16)
+        # Keep verification inputs FP32 for signature matching; compute path casts to FP16.
+        # Jitter check perturbs this tensor, so benchmark_fn must source compute inputs from it.
+        self.tensor = torch.randn(self.N, device=self.device, dtype=torch.float32)
         torch.cuda.synchronize(self.device)
 
     def benchmark_fn(self) -> None:
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
         with nvtx_range("optimized_vectorization", enable=enable_nvtx):
-            t = self.tensor
+            t = self.tensor.to(self._compute_dtype)
             # SAME OPERATIONS as baseline: repeated (t * 1.0001) + 0.0001
             # But operating on FP16 data = 2x memory throughput
             for _ in range(self.repeats):
                 t = (t * 1.0001) + 0.0001
-            self.output = t.detach()
+            self.output = t.detach().float()
             torch.cuda.synchronize(self.device)
         if self.tensor is None or self.output is None:
             raise RuntimeError("benchmark_fn() must produce output")

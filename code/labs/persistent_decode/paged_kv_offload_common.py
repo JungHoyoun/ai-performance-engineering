@@ -45,41 +45,25 @@ def _supports_fp8_kv() -> bool:
 
 
 def _supports_fused_fp8_attention() -> bool:
-    """Heuristic: Blackwell/Grace-Blackwell GPUs (SM 10.x or 12.x) + flash/TE SDP."""
+    """Return True if this runtime can execute FP8 SDPA for (q, k, v).
+
+    PyTorch builds vary in FP8 kernel availability; rely on a minimal runtime
+    probe rather than GPU CC heuristics to avoid hard failures like:
+    "No available kernel. Aborting execution."
+    """
     if not torch.cuda.is_available():
         return False
-    cc_major, _ = torch.cuda.get_device_capability()
-    if cc_major >= 10:
+    fp8_dtype = getattr(torch, "float8_e4m3fn", None)
+    if fp8_dtype is None:
+        return False
+    try:
+        q = torch.randn((1, 1, 16, 64), device="cuda", dtype=torch.float16).to(fp8_dtype)
+        ctx = prefer_sdpa_backends() if prefer_sdpa_backends is not None else nullcontext()
+        with ctx:
+            _ = F.scaled_dot_product_attention(q, q, q)
         return True
-    # For completeness, honor Transformer Engine SDPA when available on older GPUs.
-    try:
-        from torch.nn.attention import sdpa_kernel as _sdpa_kernel, SDPBackend as _SDPBackend
-
-        available = getattr(_sdpa_kernel, "available_backends", lambda: [])()
-        te_backend = getattr(_SDPBackend, "TRANSFORMER_ENGINE", None)
-        if available and te_backend is not None:
-            return te_backend in available
     except Exception:
-        pass
-    return False
-
-
-def _randn_safe(*shape: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
-    """
-    Generate random numbers; fail fast if the target dtype lacks a normal kernel.
-    """
-    try:
-        return torch.randn(*shape, device=device, dtype=dtype)
-    except (RuntimeError, NotImplementedError) as exc:
-        msg = str(exc).lower()
-        float8_e4m3 = getattr(torch, "float8_e4m3fn", None)
-        float8_e5m2 = getattr(torch, "float8_e5m2fn", None)
-        is_float8 = dtype in (float8_e4m3, float8_e5m2)
-        if is_float8 and ("not implemented" in msg or "normal_kernel" in msg):
-            raise RuntimeError(
-                f"FP8 normal kernel unavailable for dtype {dtype}; aborting benchmark."
-            ) from exc
-        raise
+        return False
 
 
 def _np_dtype_for(torch_dtype: torch.dtype) -> np.dtype:
@@ -129,6 +113,7 @@ class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.prefetch_staging: Optional[torch.Tensor] = None
         self.prefetched_range: Optional[Tuple[int, int]] = None
         self.copy_stream: Optional[torch.cuda.Stream] = None
+        self.q: Optional[torch.Tensor] = None
 
         self.host_cache: Optional[torch.Tensor] = None
         self.host_memmap: Optional[np.memmap] = None
@@ -144,22 +129,29 @@ class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def _select_runtime_dtype(self) -> torch.dtype:
         if self.cfg.prefer_fp8 and _supports_fp8_kv():
             if not _supports_fused_fp8_attention():
-                raise RuntimeError("SKIPPED: FP8 requested but fused attention backend is unavailable.")
-            self._fp8_reason = "Using FP8 KV: fused FlashAttention path detected."
+                self._fp8_reason = (
+                    "FP8 requested but FP8 SDPA kernel unavailable; "
+                    f"falling back to {self.cfg.fallback_dtype}."
+                )
+                return self.cfg.fallback_dtype
+            self._fp8_reason = "Using FP8 KV: FP8 SDPA kernel available."
             return torch.float8_e4m3fn  # type: ignore[attr-defined]
         return self.cfg.fallback_dtype
 
     def _init_host_cache(self, shape: Tuple[int, ...]) -> None:
+        generator = torch.Generator().manual_seed(42)
         if self.cfg.use_memmap:
             np_dtype = _np_dtype_for(self.runtime_dtype)
             tmp_dir = Path(tempfile.mkdtemp(prefix="paged_kv_cache_"))
             self._memmap_path = tmp_dir / "kv_cache.bin"
             self.host_memmap = np.memmap(self._memmap_path, mode="w+", dtype=np_dtype, shape=shape)
-            self.host_memmap[:] = np.random.randn(*shape).astype(np_dtype)
+            host = torch.randn(shape, dtype=torch.float16, generator=generator).numpy().astype(np_dtype, copy=False)
+            self.host_memmap[:] = host
         else:
             self.host_cache = torch.randn(
                 shape,
                 dtype=torch.float16,
+                generator=generator,
                 pin_memory=self.cfg.use_pinned_stage,
             )
 
@@ -257,6 +249,25 @@ class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._bytes_per_iteration = float(bytes_per_page)
         self.register_workload_metadata(bytes_per_iteration=self._bytes_per_iteration)
 
+        # Precompute a deterministic query tensor in the runtime dtype.
+        # Some PyTorch builds lack RNG kernels for FP8; generate in FP16 and cast.
+        q_dtype = self.runtime_dtype
+        fp8_e4m3 = getattr(torch, "float8_e4m3fn", None)
+        fp8_e5m2 = getattr(torch, "float8_e5m2fn", None)
+        needs_cast = q_dtype in (fp8_e4m3, fp8_e5m2)
+        gen_dtype = torch.float16 if needs_cast else q_dtype
+        q = torch.randn(
+            self.cfg.batch_size,
+            self.cfg.num_heads,
+            self.cfg.decode_tokens,
+            self.cfg.head_dim,
+            device=self.device,
+            dtype=gen_dtype,
+        )
+        if needs_cast:
+            q = q.to(dtype=q_dtype)
+        self.q = q
+
     # -------------------- Benchmark --------------------
 
     def _maybe_use_prefetch(self, start: int) -> Optional[Tuple[torch.Tensor, int]]:
@@ -277,14 +288,9 @@ class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._copy_to_device(staged, slice_len)
 
         # Simple attention step that will pick flash/mathematics based on dtype/backend.
-        q = _randn_safe(
-            self.cfg.batch_size,
-            self.cfg.num_heads,
-            self.cfg.decode_tokens,
-            self.cfg.head_dim,
-            device=self.device,
-            dtype=self.runtime_dtype,
-        )
+        q = self.q
+        if q is None:
+            raise RuntimeError("Query tensor not initialized")
         k = self.hot_k[..., :slice_len, :]
         v = self.hot_v[..., :slice_len, :]
         ctx = prefer_sdpa_backends() if prefer_sdpa_backends is not None else nullcontext()
@@ -335,6 +341,7 @@ class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def teardown(self) -> None:
         self.hot_k = None
         self.hot_v = None
+        self.q = None
         self.staging = None
         self.prefetch_staging = None
         self.copy_stream = None

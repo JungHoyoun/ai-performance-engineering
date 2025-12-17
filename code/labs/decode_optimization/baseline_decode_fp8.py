@@ -32,7 +32,10 @@ def get_benchmark() -> DecodeBenchmark:
         iterations=12,
         warmup=15,
     )
-    return attach_benchmark_metadata(DecodeBenchmark(cfg), __file__)
+    bench = attach_benchmark_metadata(DecodeBenchmark(cfg), __file__)
+    bench.signature_equivalence_group = "labs_decode_fp8_precision"
+    bench.signature_equivalence_ignore_fields = ("precision_flags",)
+    return bench
 
 
 if __name__ == "__main__":

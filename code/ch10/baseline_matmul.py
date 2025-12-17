@@ -18,6 +18,9 @@ from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 class BaselineMatmulBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: FP32 matmul with serialized tiling and no tensor cores."""
 
+    signature_equivalence_group = "ch10_matmul_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
+
     def __init__(self):
         super().__init__()
         self.A: torch.Tensor | None = None

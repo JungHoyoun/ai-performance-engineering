@@ -8,7 +8,7 @@ for better resource utilization.
 Key pattern:
   1. All warps perform block-level reduction with vectorized float4 loads
   2. Only warp 0 handles cluster communication via DSMEM
-  3. Larger cluster (8 CTAs) for more DSMEM benefit
+  3. 4-CTA cluster (matches baseline workload)
 
 Optimizations:
   - Vectorized float4 loads for 4x bandwidth efficiency
@@ -46,9 +46,9 @@ class OptimizedDSMEMWarpSpecializedBenchmark(CudaBinaryBenchmark):
             workload_params={
                 "batch_size": 1024,
                 "dtype": "float32",
-                "N": 64 * 1024 * 1024,
-                "cluster_size": 8,
-                "block_elems": 8192,
+                "N": 16 * 1024 * 1024,
+                "cluster_size": 4,
+                "block_elems": 4096,
             },
         )
         self.register_workload_metadata(bytes_per_iteration=1024 * 1024)
@@ -64,11 +64,9 @@ class OptimizedDSMEMWarpSpecializedBenchmark(CudaBinaryBenchmark):
     def get_input_signature(self) -> dict:
         """Signature for warp-specialized DSMEM reduction."""
         return simple_signature(
-            batch_size=1024,
+            batch_size=1,
             dtype="float32",
-            N=64 * 1024 * 1024,
-            cluster_size=8,
-            block_elems=8192,
+            N=16 * 1024 * 1024,
         ).to_dict()
 
     def get_output_tolerance(self) -> tuple[float, float]:

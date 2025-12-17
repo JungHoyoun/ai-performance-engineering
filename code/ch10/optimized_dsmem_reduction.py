@@ -45,11 +45,9 @@ class OptimizedDSMEMReductionBenchmark(CudaBinaryBenchmark):
     def get_input_signature(self) -> dict:
         """Signature for DSMEM cluster reduction."""
         return simple_signature(
-            batch_size=1024,
+            batch_size=1,
             dtype="float32",
             N=16 * 1024 * 1024,
-            cluster_size=4,
-            block_elems=4096,
         ).to_dict()
 
     def get_output_tolerance(self) -> tuple[float, float]:

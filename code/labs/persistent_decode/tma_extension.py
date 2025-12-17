@@ -44,26 +44,26 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
 namespace {
 
-using namespace cuda::experimental;
-
 __global__ void tma_copy_kernel(const float* __restrict__ src,
                                 float* __restrict__ dst,
                                 int n) {
     extern __shared__ float smem[];
-    pipeline<cuda::thread_scope_thread> pipe = make_pipeline();
+    cuda::pipeline<cuda::thread_scope_thread> pipe = cuda::make_pipeline();
 
-    // Stage async copies into shared memory.
-    for (int idx = threadIdx.x; idx < n; idx += blockDim.x) {
+    const int global_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const bool in_bounds = global_idx < n;
+
+    if (in_bounds) {
         pipe.producer_acquire();
-        cuda::memcpy_async(smem + idx, src + idx, sizeof(float), pipe);
+        cuda::memcpy_async(&smem[threadIdx.x], &src[global_idx], sizeof(float), pipe);
         pipe.producer_commit();
+        pipe.consumer_wait();
     }
-
-    // Drain and write back.
-    pipe.consumer_wait();
     __syncthreads();
-    for (int idx = threadIdx.x; idx < n; idx += blockDim.x) {
-        dst[idx] = smem[idx];
+
+    if (in_bounds) {
+        dst[global_idx] = smem[threadIdx.x];
+        pipe.consumer_release();
     }
 }
 

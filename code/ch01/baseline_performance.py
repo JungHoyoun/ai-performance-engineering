@@ -44,9 +44,13 @@ def resolve_device() -> torch.device:
 def _should_use_compile(device: torch.device) -> bool:
     """Decide whether to torch.compile the model.
     
-    torch.compile is currently unstable on Blackwell (sm_100) for this
-    benchmark and has been causing subprocess segfaults. Keep it disabled
-    on CUDA to prefer eager for stability.
+    This chapter's performance examples focus on batch fusion and precision.
+    For this small MLP, torch.compile often adds overhead that can dominate the
+    steady-state step time, and it would introduce an extra "compiler vs eager"
+    axis into the baseline/optimized comparison.
+
+    Keep it in eager mode by default; re-enable only when the chapter intends
+    to teach torch.compile-specific behavior.
     """
     if device.type != "cuda":
         return False
@@ -113,8 +117,8 @@ class BaselinePerformanceBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._verify_output = None  # Will be set at end of benchmark_fn()
         
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=1e-3)
-        # Warm up: run a few iterations so any torch.compile graph capture or
-        # kernel autotuning occurs before the harness starts timing.
+        # Warm up: run a few iterations so kernel autotuning/caches are populated
+        # before the harness starts timing (and to amortize compile overhead if enabled).
         for _ in range(3):
             self.optimizer.zero_grad(set_to_none=True)
             logits = self.model(self.microbatches[0])

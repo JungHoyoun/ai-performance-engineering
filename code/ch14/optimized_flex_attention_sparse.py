@@ -127,7 +127,7 @@ class SlidingWindowCausalAttention(nn.Module):
         if key not in self._block_mask_cache:
             window = self.window_size
             def mask_fn(b, h, q_idx, kv_idx):
-                return (q_idx >= kv_idx) and (q_idx - kv_idx <= window)
+                return (q_idx >= kv_idx) & ((q_idx - kv_idx) <= window)
             
             self._block_mask_cache[key] = create_block_mask(
                 mask_fn,

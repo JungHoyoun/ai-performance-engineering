@@ -2350,40 +2350,14 @@ class BenchmarkHarness:
                                 logger.debug(f"Stripped non-JSON prefix from subprocess output: {prefix[:200]}")
                         stdout = stdout[json_start:]
                     
-                    # Strip any non-JSON suffix (e.g., torch exit cleanup logging)
-                    # Find the matching closing brace for the JSON object
-                    if stdout.startswith('{'):
-                        brace_count = 0
-                        json_end = -1
-                        in_string = False
-                        escape_next = False
-                        for i, c in enumerate(stdout):
-                            if escape_next:
-                                escape_next = False
-                                continue
-                            if c == '\\' and in_string:
-                                escape_next = True
-                                continue
-                            if c == '"' and not escape_next:
-                                in_string = not in_string
-                                continue
-                            if in_string:
-                                continue
-                            if c == '{':
-                                brace_count += 1
-                            elif c == '}':
-                                brace_count -= 1
-                                if brace_count == 0:
-                                    json_end = i + 1
-                                    break
-                        if json_end > 0 and json_end < len(stdout):
-                            suffix = stdout[json_end:].strip()
-                            if suffix:
-                                if LOGGER_AVAILABLE:
-                                    logger.debug(f"Stripped non-JSON suffix from subprocess output: {suffix[:200]}")
-                            stdout = stdout[:json_end]
-                    
-                    result_dict = json.loads(stdout)
+                    # Parse the first JSON object and ignore any trailing noise.
+                    # Prefer a real JSON parser over brace counting to avoid false
+                    # truncation when strings contain braces/escapes.
+                    decoder = json.JSONDecoder()
+                    result_dict, json_end = decoder.raw_decode(stdout)
+                    suffix = stdout[json_end:].strip()
+                    if suffix and LOGGER_AVAILABLE:
+                        logger.debug(f"Stripped non-JSON suffix from subprocess output: {suffix[:200]}")
                     if result_dict.get("success") and result_dict.get("result_json"):
                         # Deserialize Pydantic BenchmarkResult from JSON
                         result_json_str = result_dict["result_json"]
@@ -2793,18 +2767,19 @@ class BenchmarkHarness:
                     if torch.cuda.is_available():
                         torch.cuda.init()
                         try:
-                            target_device = None
+                            device_index = None
                             if isinstance(self.device, torch.device) and self.device.type == "cuda":
-                                target_device = self.device
-                            if target_device is None:
-                                target_device = torch.device(torch.cuda.current_device())
-                            torch.cuda.set_device(target_device)
+                                device_index = self.device.index
+                            if device_index is None:
+                                device_index = torch.cuda.current_device()
+                            torch.cuda.set_device(device_index)
+                            target_device = torch.device("cuda", device_index)
                             # Tiny ops to bind the primary context and initialize cuBLAS handles
                             torch.empty(1, device=target_device).add_(1)
                             torch.ones((1, 1), device=target_device).matmul(
                                 torch.ones((1, 1), device=target_device)
                             )
-                            torch.cuda.synchronize(target_device)
+                            torch.cuda.synchronize(device_index)
                         except Exception as exc:
                             # Best-effort context warm-up; continue even if it fails, but do not swallow silently.
                             if LOGGER_AVAILABLE:

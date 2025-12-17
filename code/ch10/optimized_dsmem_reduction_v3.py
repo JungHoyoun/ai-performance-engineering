@@ -52,7 +52,6 @@ class OptimizedDSMEMReductionV3Benchmark(CudaBinaryBenchmark):
             batch_size=1,
             dtype="float32",
             N=16 * 1024 * 1024,
-            block_elems=4096,
         ).to_dict()
 
     def get_output_tolerance(self) -> tuple[float, float]:

@@ -42,7 +42,8 @@ class OptimizedNativeTmaPrefillDecodeBenchmark(VerificationPayloadMixin, BaseBen
         self.prefill_chunk_elems = 128 * 128
         self.cfg = NativeTmaBurstConfig()
         self._prio_low, self._prio_high = get_stream_priorities()
-        self.prefill_streams = [torch.cuda.Stream(priority=self._prio_low) for _ in range(self.cfg.max_in_flight)]
+        # Keep custom stream count <= 2 to satisfy the harness StreamAuditor.
+        self.prefill_streams = [torch.cuda.Stream(priority=self._prio_low)]
         self.decode_stream = torch.cuda.Stream(priority=self._prio_high)
         self.register_workload_metadata(tokens_per_iteration=float(self.batch * self.seq_len))
         self.decode_graph = torch.cuda.CUDAGraph()

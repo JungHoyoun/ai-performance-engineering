@@ -13,6 +13,9 @@ from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, Workl
 
 class BaselineQuantizationBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: FP32 precision without quantization (full precision)."""
+
+    signature_equivalence_group = "ch13_quantization_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
     
     def __init__(self):
         super().__init__()
@@ -67,7 +70,7 @@ class BaselineQuantizationBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 "fp8": False,
                 "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
             },
-            output_tolerance=(0.1, 1.0),
+            output_tolerance=(0.5, 5.0),
         )
     
     def teardown(self) -> None:

@@ -80,6 +80,9 @@ class OptimizedModelCompiledBenchmark(VerificationPayloadMixin, BaseBenchmark):
     2. Memory layout optimization
     3. Inductor-based code generation
     """
+
+    signature_equivalence_group = "ch14_model_eager_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
     
     def __init__(self):
         super().__init__()
@@ -166,7 +169,7 @@ class OptimizedModelCompiledBenchmark(VerificationPayloadMixin, BaseBenchmark):
         dtype = self._payload_dtype
         self._set_verification_payload(
             inputs={"input_ids": self.input_ids},
-            output=self.output,
+            output=self.output.float(),
             batch_size=self.batch_size,
             parameter_count=self.parameter_count,
             precision_flags={

@@ -34,16 +34,22 @@ class OptimizedTensorCoreBenchmark(VerificationPayloadMixin, BaseBenchmark):
     - Single fused matmul operation instead of tiled approach
     - TF32 enabled for compute acceleration
     """
+
+    signature_equivalence_group = "ch10_matmul_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
     
     def __init__(self):
         super().__init__()
         self.A = None
         self.B = None
+        self.A_tc = None
+        self.B_tc = None
         self.C = None
         self.n = 8192  # Match baseline workload signature
         self.tile_k = 128  # Match baseline for equivalent workload
         self.dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-        self.register_workload_metadata(bytes_per_iteration=float(self.n * self.n * 2 * 3))
+        # Workload metadata must match baseline (same logical FP32 workload).
+        self.register_workload_metadata(bytes_per_iteration=float(self.n * self.n * 4 * 3))
     
     def setup(self) -> None:
         """Setup: initialize matrices with same workload as baseline."""
@@ -53,36 +59,38 @@ class OptimizedTensorCoreBenchmark(VerificationPayloadMixin, BaseBenchmark):
             enable_tf32()
         
         torch.manual_seed(42)
-        # Create FP32 matrices (same as baseline), then cast for optimized computation
-        A_fp32 = torch.randn(self.n, self.n, device=self.device, dtype=torch.float32)
-        B_fp32 = torch.randn(self.n, self.n, device=self.device, dtype=torch.float32)
-        
-        # Optimization: Cast to BF16 for tensor core acceleration
-        self.A = A_fp32.to(self.dtype)
-        self.B = B_fp32.to(self.dtype)
-        self.C = torch.zeros(self.n, self.n, device=self.device, dtype=self.dtype)
+        # Keep FP32 inputs for signature/workload equivalence with baseline.
+        self.A = torch.randn(self.n, self.n, device=self.device, dtype=torch.float32)
+        self.B = torch.randn(self.n, self.n, device=self.device, dtype=torch.float32)
+
+        # Optimization: Pre-cast outside the timed region for tensor core acceleration.
+        self.A_tc = self.A.to(self.dtype)
+        self.B_tc = self.B.to(self.dtype)
+        self.C = torch.empty(self.n, self.n, device=self.device, dtype=self.dtype)
         
         # Warmup to ensure cuBLAS kernels are loaded
         for _ in range(3):
             with torch.no_grad():
-                _ = torch.matmul(self.A, self.B)
+                torch.matmul(self.A_tc, self.B_tc, out=self.C)
         self._synchronize()
     
     def benchmark_fn(self) -> None:
         """Optimized: Single fused BF16 matmul using tensor cores."""
-        if self.A is None or self.B is None:
+        if self.A_tc is None or self.B_tc is None or self.C is None:
             raise RuntimeError("Matrices not initialized")
         
         with self._nvtx_range("matmul_tensor_core_optimized"):
             with torch.no_grad():
                 # Single fused matmul - replaces 64 tiled addmm operations
                 # BF16 enables tensor core acceleration on Ampere+ GPUs
-                self.C = torch.matmul(self.A, self.B)
+                torch.matmul(self.A_tc, self.B_tc, out=self.C)
         self._synchronize()
         if self.C is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
 
     def capture_verification_payload(self) -> None:
+        if self.A is None or self.B is None:
+            raise RuntimeError("FP32 inputs not initialized for verification payload")
         self._set_verification_payload(
             inputs={"A": self.A, "B": self.B},
             output=self.C.detach().clone().float(),
@@ -101,6 +109,8 @@ class OptimizedTensorCoreBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Cleanup."""
         self.A = None
         self.B = None
+        self.A_tc = None
+        self.B_tc = None
         self.C = None
         super().teardown()
     

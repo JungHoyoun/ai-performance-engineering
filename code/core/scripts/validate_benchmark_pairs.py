@@ -3,6 +3,9 @@
 
 This script discovers all baseline_*.py and optimized_*.py pairs and verifies
 that their input signatures match, ensuring fair performance comparisons.
+For VerificationPayloadMixin-backed benchmarks, it will execute setup() and a
+single benchmark_fn() as needed to populate the verification payload before
+extracting a validated InputSignature.
 
 Usage:
     # Validate all pairs
@@ -26,6 +29,15 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+from core.benchmark.verification import (
+    InputSignature,
+    SignatureEquivalenceSpec,
+    coerce_input_signature,
+    get_signature_equivalence_spec,
+    signature_workload_dict,
+)
+from core.discovery import discover_all_chapters, discover_benchmarks
 
 
 # =============================================================================
@@ -145,18 +157,66 @@ def load_benchmark_class(file_path: Path) -> Optional[Any]:
             del sys.modules["benchmark_module"]
 
 
-def get_input_signature_safe(benchmark: Any) -> Tuple[Optional[Dict], Optional[str]]:
-    """Safely get input signature from a benchmark instance."""
-    if not hasattr(benchmark, "get_input_signature"):
-        return None, "Method not implemented"
-    
+def _run_signature_capture_path(benchmark: Any) -> None:
+    """Populate a VerificationPayload-backed signature by executing the benchmark once."""
+    if not hasattr(benchmark, "setup") or not callable(getattr(benchmark, "setup")):
+        raise RuntimeError("Benchmark is missing setup(); cannot capture verification payload for signature")
+    if not hasattr(benchmark, "benchmark_fn") or not callable(getattr(benchmark, "benchmark_fn")):
+        raise RuntimeError("Benchmark is missing benchmark_fn(); cannot capture verification payload for signature")
+    if not hasattr(benchmark, "capture_verification_payload") or not callable(
+        getattr(benchmark, "capture_verification_payload")
+    ):
+        raise RuntimeError(
+            "Benchmark is missing capture_verification_payload(); cannot capture verification payload for signature"
+        )
+
+    benchmark.setup()
+    # Some benchmarks can capture verification payload immediately after setup.
     try:
-        sig = benchmark.get_input_signature()
-        if sig is None:
+        benchmark.capture_verification_payload()
+        return
+    except RuntimeError:
+        pass
+
+    benchmark.benchmark_fn()
+    benchmark.capture_verification_payload()
+
+
+def get_input_signature_safe(benchmark: Any) -> Tuple[Optional[InputSignature], Optional[str]]:
+    """Safely get a validated InputSignature from a benchmark instance.
+
+    For payload-backed benchmarks (VerificationPayloadMixin), this executes:
+    setup() + benchmark_fn() + capture_verification_payload() as needed.
+    """
+    if not hasattr(benchmark, "get_input_signature") or not callable(getattr(benchmark, "get_input_signature")):
+        return None, "Method not implemented"
+
+    attempted_execution_path = False
+    try:
+        sig_raw = benchmark.get_input_signature()
+        if sig_raw is None:
             return None, "Method returned None"
-        return sig, None
-    except Exception as e:
-        return None, str(e)
+        return coerce_input_signature(sig_raw), None
+    except RuntimeError:
+        # Most commonly: payload-backed benchmarks before capture_verification_payload().
+        try:
+            attempted_execution_path = True
+            _run_signature_capture_path(benchmark)
+            sig_raw = benchmark.get_input_signature()
+            if sig_raw is None:
+                return None, "Method returned None after capture_verification_payload()"
+            return coerce_input_signature(sig_raw), None
+        except Exception as exc:
+            return None, f"{type(exc).__name__}: {exc}"
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+    finally:
+        if attempted_execution_path and hasattr(benchmark, "teardown") and callable(getattr(benchmark, "teardown")):
+            try:
+                benchmark.teardown()
+            except Exception:
+                # Best-effort cleanup; surface original validation error.
+                pass
 
 
 # =============================================================================
@@ -170,59 +230,26 @@ def discover_benchmark_pairs(root_dir: Path, chapter: Optional[str] = None) -> D
         Dict mapping (chapter, example_name) to {baseline: path, optimized: path}
     """
     pairs: Dict[Tuple[str, str], Dict[str, Path]] = defaultdict(dict)
-    
-    # Determine search directories
+
     if chapter:
-        if chapter.startswith("labs/"):
-            search_dirs = [root_dir / chapter]
-        else:
-            search_dirs = [root_dir / chapter]
+        chapter_dir = root_dir / chapter
+        if not chapter_dir.exists():
+            raise FileNotFoundError(f"Chapter directory not found: {chapter_dir}")
+        chapter_dirs = [chapter_dir]
     else:
-        search_dirs = [
-            d for d in root_dir.iterdir()
-            if d.is_dir() and (d.name.startswith("ch") or d.name == "labs")
-        ]
-        labs_dir = root_dir / "labs"
-        if labs_dir.exists():
-            search_dirs.extend(d for d in labs_dir.iterdir() if d.is_dir())
-    
-    for search_dir in search_dirs:
-        if not search_dir.exists():
-            continue
-        
-        # Get chapter name
-        relative = search_dir.relative_to(root_dir)
-        chapter_name = str(relative)
-        
-        # Find all baseline and optimized files
-        baseline_files = list(search_dir.glob("baseline_*.py"))
-        optimized_files = list(search_dir.glob("optimized_*.py"))
-        
-        # Also check subdirectories
-        baseline_files.extend(search_dir.glob("**/baseline_*.py"))
-        optimized_files.extend(search_dir.glob("**/optimized_*.py"))
-        
-        # Extract example names and build pairs
-        baseline_by_name = {}
-        for f in baseline_files:
-            # Example: baseline_attention.py -> attention
-            name = f.stem.replace("baseline_", "")
-            baseline_by_name[name] = f
-        
-        optimized_by_name = {}
-        for f in optimized_files:
-            # Example: optimized_attention.py -> attention
-            name = f.stem.replace("optimized_", "")
-            optimized_by_name[name] = f
-        
-        # Match pairs
-        all_names = set(baseline_by_name.keys()) | set(optimized_by_name.keys())
-        for name in all_names:
-            if name in baseline_by_name:
-                pairs[(chapter_name, name)]["baseline"] = baseline_by_name[name]
-            if name in optimized_by_name:
-                pairs[(chapter_name, name)]["optimized"] = optimized_by_name[name]
-    
+        chapter_dirs = discover_all_chapters(root_dir)
+
+    for chapter_dir in chapter_dirs:
+        chapter_name = str(chapter_dir.relative_to(root_dir))
+        discovered = discover_benchmarks(chapter_dir, validate=False, warn_missing=False)
+        for baseline_path, optimized_paths, _example_name in discovered:
+            for optimized_path in optimized_paths:
+                # Align with harness pairing: baseline_<name>.py matches optimized_<name>.py and
+                # optimized_<name>_*.py variants; the pair key is derived from the optimized stem.
+                key = optimized_path.stem.replace("optimized_", "", 1)
+                pairs[(chapter_name, key)]["baseline"] = baseline_path
+                pairs[(chapter_name, key)]["optimized"] = optimized_path
+
     return {f"{ch}:{name}": paths for (ch, name), paths in pairs.items()}
 
 
@@ -264,6 +291,12 @@ def compare_signatures(
     return match, mismatches, baseline_only, optimized_only
 
 
+def _format_equivalence_spec(spec: Optional[SignatureEquivalenceSpec]) -> Optional[Dict[str, Any]]:
+    if spec is None:
+        return None
+    return {"group": spec.group, "ignore_fields": list(spec.ignore_fields)}
+
+
 # =============================================================================
 # Validation
 # =============================================================================
@@ -301,7 +334,10 @@ def validate_pair(
     result.optimized_has_signature = optimized_sig is not None
     
     if baseline_sig is None and optimized_sig is None:
-        result.error = f"Neither benchmark has get_input_signature"
+        result.error = (
+            "Failed to extract input signatures for both benchmarks. "
+            f"baseline_error={baseline_err!r}, optimized_error={optimized_err!r}"
+        )
         return result
     
     if baseline_sig is None:
@@ -312,16 +348,37 @@ def validate_pair(
         result.error = f"Optimized missing signature: {optimized_err}"
         return result
     
-    # Compare signatures
+    # Compare signature-equivalence specs (must match for comparable pairs)
+    try:
+        baseline_equiv = get_signature_equivalence_spec(baseline_benchmark)
+        optimized_equiv = get_signature_equivalence_spec(optimized_benchmark)
+    except Exception as exc:
+        result.error = f"Failed to read signature equivalence metadata: {type(exc).__name__}: {exc}"
+        return result
+
+    baseline_workload = signature_workload_dict(baseline_sig, equivalence=baseline_equiv)
+    optimized_workload = signature_workload_dict(optimized_sig, equivalence=optimized_equiv)
+
+    # Compare workload dicts (with any allowed ignore_fields removed)
     match, mismatches, baseline_only, optimized_only = compare_signatures(
-        baseline_sig, optimized_sig
+        baseline_workload, optimized_workload
     )
+
+    equiv_match = baseline_equiv == optimized_equiv
+    if not equiv_match:
+        mismatches.append(
+            SignatureMismatch(
+                key="signature_equivalence",
+                baseline_value=_format_equivalence_spec(baseline_equiv),
+                optimized_value=_format_equivalence_spec(optimized_equiv),
+            )
+        )
     
-    result.signatures_match = match
+    result.signatures_match = match and equiv_match
     result.mismatches = mismatches
     result.baseline_only_keys = baseline_only
     result.optimized_only_keys = optimized_only
-    result.valid = match
+    result.valid = result.signatures_match
     
     return result
 
@@ -489,10 +546,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
-
-
-
-
-
-

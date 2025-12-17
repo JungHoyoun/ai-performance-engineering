@@ -55,6 +55,9 @@ class SimpleModel(nn.Module):
 
 class BaselinePrecisionFP8Benchmark(VerificationPayloadMixin, BaseBenchmark):
     """FP32 precision - full precision training."""
+
+    signature_equivalence_group = "ch13_precisionfp8_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
     
     def __init__(self):
         super().__init__()

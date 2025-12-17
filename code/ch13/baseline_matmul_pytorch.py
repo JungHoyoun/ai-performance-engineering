@@ -39,6 +39,9 @@ def resolve_device() -> torch.device:
 
 class BaselineMatmulPyTorchBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """PyTorch matmul baseline - sequential unfused operations."""
+
+    signature_equivalence_group = "ch13_matmul_pytorch_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
     
     def __init__(self):
         super().__init__()

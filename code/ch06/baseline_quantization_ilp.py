@@ -13,6 +13,9 @@ from ch06.workload_config import WORKLOAD
 
 class BaselineQuantizationILPBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: Full precision ILP (no quantization)."""
+
+    signature_equivalence_group = "ch06_quantization_ilp_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
     
     def __init__(self):
         super().__init__()
@@ -41,11 +44,14 @@ class BaselineQuantizationILPBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self._synchronize()
 
     def capture_verification_payload(self) -> None:
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
         self._set_verification_payload(
             inputs={"input": self.input},
             output=self.output.detach(),
             batch_size=self.N,
             parameter_count=0,
+            precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": False},
             output_tolerance=(1e-2, 1e-2),
         )
     

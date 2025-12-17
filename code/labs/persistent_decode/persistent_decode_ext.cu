@@ -47,38 +47,25 @@ __global__ void persistent_decode_kernel(
     int seq_len,
     int head_dim
 ) {
-    const int seq_id = blockIdx.x;
-    if (seq_id >= batch) return;
-    if (seq_len > MAX_SEQ_LEN) return;
-
     extern __shared__ float smem[];
     float* reduce_buf = smem;
-    float* accum = smem + blockDim.x;  // head_dim floats
 
-    // Initialize accumulator
-    for (int d = threadIdx.x; d < head_dim; d += blockDim.x) {
-        accum[d] = 0.0f;
-    }
-    __syncthreads();
+    // Grid-stride over sequences so `blocks` can be < batch.
+    for (int seq_id = blockIdx.x; seq_id < batch; seq_id += gridDim.x) {
+        // Per-token decode: compute dot(q_t, k_t) and write v_t * dot to out_t.
+        for (int t = 0; t < seq_len; ++t) {
+            const int base = (seq_id * seq_len + t) * head_dim;
+            const float* q_ptr = q + base;
+            const float* k_ptr = k + base;
+            const float* v_ptr = v + base;
 
-    // Compute attention scores and accumulate weighted values
-    for (int t = 0; t < seq_len; ++t) {
-        const float* q_ptr = q + (seq_id * seq_len + t) * head_dim;
-        const float* k_ptr = k + (seq_id * seq_len + t) * head_dim;
-        const float* v_ptr = v + (seq_id * seq_len + t) * head_dim;
+            float score = dot_product(q_ptr, k_ptr, head_dim, reduce_buf);
 
-        float score = dot_product(q_ptr, k_ptr, head_dim, reduce_buf);
-        
-        for (int d = threadIdx.x; d < head_dim; d += blockDim.x) {
-            accum[d] += v_ptr[d] * score;
+            float* out_ptr = out + base;
+            for (int d = threadIdx.x; d < head_dim; d += blockDim.x) {
+                out_ptr[d] = v_ptr[d] * score;
+            }
         }
-        __syncthreads();
-    }
-
-    // Write output
-    float* out_ptr = out + seq_id * head_dim;
-    for (int d = threadIdx.x; d < head_dim; d += blockDim.x) {
-        out_ptr[d] = accum[d];
     }
 }
 
@@ -88,6 +75,8 @@ void persistent_decode_cuda(torch::Tensor q, torch::Tensor k, torch::Tensor v, t
     TORCH_CHECK(q.is_cuda(), "q must be CUDA tensor");
     TORCH_CHECK(q.scalar_type() == torch::kFloat, "q must be float32");
     TORCH_CHECK(q.sizes() == k.sizes() && q.sizes() == v.sizes(), "q/k/v shapes must match");
+    TORCH_CHECK(out.is_cuda(), "out must be CUDA tensor");
+    TORCH_CHECK(out.scalar_type() == torch::kFloat, "out must be float32");
     
     const int batch = static_cast<int>(q.size(0));
     const int seq_len = static_cast<int>(q.size(1));
@@ -95,12 +84,12 @@ void persistent_decode_cuda(torch::Tensor q, torch::Tensor k, torch::Tensor v, t
     
     TORCH_CHECK(head_dim <= MAX_HEAD_DIM, "head_dim exceeds MAX_HEAD_DIM");
     TORCH_CHECK(seq_len <= MAX_SEQ_LEN, "seq_len exceeds MAX_SEQ_LEN");
-    TORCH_CHECK(out.size(0) == batch && out.size(1) == head_dim, "out shape mismatch");
+    TORCH_CHECK(out.sizes() == q.sizes(), "out shape mismatch (expected [batch, seq_len, head_dim])");
 
     c10::cuda::CUDAGuard guard(q.get_device());
     
     const int threads = 64;
-    const size_t smem_bytes = (threads + head_dim) * sizeof(float);
+    const size_t smem_bytes = threads * sizeof(float);
     
     cudaStream_t stream = at::cuda::getDefaultCUDAStream();
     const int grid = std::min(blocks, batch);

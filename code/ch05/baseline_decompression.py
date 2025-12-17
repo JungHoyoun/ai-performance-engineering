@@ -1,13 +1,12 @@
 """baseline_decompression.py - CPU-bound decompression baseline.
 
-Expands a small buffer compressed with zlib entirely on the CPU. Serves as a
-baseline for the GPU-oriented nvCOMP-style path.
+This benchmark uses a toy run-length encoding (RLE) format to simulate
+CPU-side decompression of a compressed batch.
 """
 
 from __future__ import annotations
 
 import sys
-import zlib
 from pathlib import Path
 from typing import Optional
 
@@ -25,36 +24,52 @@ from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E40
 class CPUDecompressionBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def __init__(self) -> None:
         super().__init__()
-        self.compressed: Optional[bytes] = None
+        self.counts: Optional[torch.Tensor] = None
+        self.counts_i64: Optional[torch.Tensor] = None
+        self.values: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
         self._workload = WorkloadMetadata(bytes_per_iteration=0.0)
 
     def setup(self) -> None:
-        payload = torch.randn(1024 * 1024, dtype=torch.float32).numpy().tobytes()
-        self.compressed = zlib.compress(payload, level=6)
+        torch.manual_seed(42)
+        total_len = 1024 * 1024
+        run_len = 256
+        if total_len % run_len != 0:
+            raise RuntimeError("total_len must be divisible by run_len for this benchmark")
+        num_runs = total_len // run_len
+        self.counts = torch.full((num_runs,), run_len, dtype=torch.int32)
+        self.counts_i64 = self.counts.to(torch.int64)
+        self.values = torch.randn((num_runs,), dtype=torch.float32)
+        self.output = None
 
     def benchmark_fn(self) -> Optional[dict]:
-        if self.compressed is None:
-            raise RuntimeError("SKIPPED: no compressed payload available")
+        if self.counts_i64 is None or self.values is None:
+            raise RuntimeError("SKIPPED: missing encoded RLE buffers")
 
         enable_nvtx = get_nvtx_enabled(self.get_config())
         start = self._record_start()
         with nvtx_range("cpu_decompress", enable=enable_nvtx):
-            decompressed = zlib.decompress(self.compressed)
+            decompressed = torch.repeat_interleave(self.values, self.counts_i64)
         latency_ms = self._record_stop(start)
-        # Convert decompressed bytes to tensor for verification
-        import numpy as np
-        self.output = torch.from_numpy(np.frombuffer(decompressed, dtype=np.float32).copy())
-        compressed_tensor = torch.tensor(list(self.compressed), dtype=torch.uint8)
-        self._payload_compressed_tensor = compressed_tensor
-        return {"latency_ms": latency_ms, "compressed_bytes": len(self.compressed)}
+        self.output = decompressed.detach().clone()
+        self._payload_counts = self.counts
+        self._payload_values = self.values
+        return {"latency_ms": latency_ms, "decompressed_len": int(decompressed.numel())}
 
     def capture_verification_payload(self) -> None:
-        compressed_tensor = self._payload_compressed_tensor
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        counts = self._payload_counts
+        values = self._payload_values
+        if counts is None or values is None:
+            raise RuntimeError("benchmark_fn() must stash inputs for verification")
         self._set_verification_payload(
-            inputs={"compressed": compressed_tensor},
-            output=self.output.detach().clone(),
-            batch_size=self.output.shape[0],
+            inputs={
+                "counts": counts.detach().clone(),
+                "values": values.detach().clone(),
+            },
+            output=self.output[:4096].detach().clone(),
+            batch_size=1,
             parameter_count=0,
             precision_flags={
                 "fp16": False,
@@ -62,7 +77,7 @@ class CPUDecompressionBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 "fp8": False,
                 "tf32": False,
             },
-            output_tolerance=(0.1, 1.0),
+            output_tolerance=(0.0, 0.0),
         )
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:

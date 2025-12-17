@@ -44,6 +44,9 @@ def optimized_matmul(A: torch.Tensor, B: torch.Tensor, bias: torch.Tensor) -> to
 
 class OptimizedMatmulCUTLASSBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """CUTLASS matmul optimization - compiled GEMM."""
+
+    signature_equivalence_group = "ch13_matmul_pytorch_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
     
     def __init__(self):
         super().__init__()
@@ -51,6 +54,9 @@ class OptimizedMatmulCUTLASSBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.B = None
         self.C = None
         self.bias = None
+        self.A_fp32 = None
+        self.B_fp32 = None
+        self.bias_fp32 = None
         self.compiled_matmul = None
         # Match baseline dimensions for fair comparison
         self.m = 4096
@@ -62,7 +68,7 @@ class OptimizedMatmulCUTLASSBenchmark(VerificationPayloadMixin, BaseBenchmark):
             tokens_per_iteration=float(tokens),
         )
         # Register workload metadata at init time for compliance check
-        bytes_per_iter = (self.m * self.k + self.k * self.n + self.m * self.n * 2) * 2  # fp16
+        bytes_per_iter = (self.m * self.k + self.k * self.n + self.m * self.n * 2) * 4
         self.register_workload_metadata(
             requests_per_iteration=1.0,
             tokens_per_iteration=float(tokens),
@@ -81,10 +87,15 @@ class OptimizedMatmulCUTLASSBenchmark(VerificationPayloadMixin, BaseBenchmark):
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
         
-        self.A = torch.randn(self.m, self.k, device=self.device, dtype=torch.float16)
-        self.B = torch.randn(self.k, self.n, device=self.device, dtype=torch.float16)
+        self.A_fp32 = torch.randn(self.m, self.k, device=self.device, dtype=torch.float32)
+        self.B_fp32 = torch.randn(self.k, self.n, device=self.device, dtype=torch.float32)
+        self.bias_fp32 = torch.randn(self.m, self.n, device=self.device, dtype=torch.float32)
+
+        # Compute path uses FP16, but verification uses the FP32 tensors above.
+        self.A = self.A_fp32.to(dtype=torch.float16)
+        self.B = self.B_fp32.to(dtype=torch.float16)
+        self.bias = self.bias_fp32.to(dtype=torch.float16)
         self.C = torch.empty(self.m, self.n, device=self.device, dtype=torch.float16)
-        self.bias = torch.randn(self.m, self.n, device=self.device, dtype=torch.float16)
         
         # Compile matmul function for CUTLASS optimization
         self.compiled_matmul = compile_callable(
@@ -105,8 +116,10 @@ class OptimizedMatmulCUTLASSBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._synchronize()
 
     def capture_verification_payload(self) -> None:
+        if self.A_fp32 is None or self.B_fp32 is None or self.bias_fp32 is None:
+            raise RuntimeError("FP32 verification tensors not initialized")
         self._set_verification_payload(
-            inputs={"A": self.A, "B": self.B, "bias": self.bias},
+            inputs={"A": self.A_fp32, "B": self.B_fp32, "bias": self.bias_fp32},
             output=self.C.float().detach().clone(),
             batch_size=self.m,
             parameter_count=0,

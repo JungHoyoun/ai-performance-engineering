@@ -46,7 +46,7 @@ class GraphedKVTransferBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.chunk_size = 256
         self.num_chunks = 32
         self.pipeline_depth = 4
-        self.dtype = torch.bfloat16
+        self.dtype = torch.float16
         self.input_chunks: Optional[torch.Tensor] = None
         self.weight: Optional[torch.Tensor] = None
         self.workspace: Optional[torch.Tensor] = None

@@ -14,12 +14,16 @@ from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, Workl
 
 class OptimizedQuantizationBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: FP16 quantization for faster inference with reduced memory."""
+
+    signature_equivalence_group = "ch13_quantization_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
     
     def __init__(self):
         super().__init__()
         self.model = None
         self.quantized_model = None
         self.data = None
+        self.data_fp32 = None
         self.N = 65536
         tokens = self.N * 256
         self._workload = WorkloadMetadata(
@@ -49,7 +53,8 @@ class OptimizedQuantizationBenchmark(VerificationPayloadMixin, BaseBenchmark):
         
         self.model.eval()
         self.quantized_model = self.model.to(torch.float16)
-        self.data = torch.randn(self.N, 256, device=self.device, dtype=torch.float16)
+        self.data_fp32 = torch.randn(self.N, 256, device=self.device, dtype=torch.float32)
+        self.data = self.data_fp32.to(dtype=torch.float16)
         self._synchronize()
     
     def benchmark_fn(self) -> None:
@@ -63,8 +68,10 @@ class OptimizedQuantizationBenchmark(VerificationPayloadMixin, BaseBenchmark):
             raise RuntimeError("benchmark_fn() must produce output for verification")
 
     def capture_verification_payload(self) -> None:
+        if self.data_fp32 is None:
+            raise RuntimeError("FP32 verification input not initialized")
         self._set_verification_payload(
-            inputs={"input": self.data},
+            inputs={"input": self.data_fp32},
             output=self.output.detach().float().clone(),
             batch_size=self.data.shape[0],
             precision_flags={

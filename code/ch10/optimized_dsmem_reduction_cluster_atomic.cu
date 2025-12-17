@@ -20,6 +20,8 @@
 #include <vector>
 #include <numeric>
 
+#include "../core/common/headers/cuda_verify.cuh"
+
 namespace cg = cooperative_groups;
 
 #define CUDA_CHECK(call)                                                       \
@@ -268,6 +270,9 @@ int main() {
     printf("  Time: %.3f ms\n", ms / iterations);
     printf("  Sum: %.0f (expected: %d) - %s\n", total, N,
            (abs(total - N) < 1000) ? "PASS" : "FAIL");
+
+    const float verify_checksum = total;
+    VERIFY_PRINT_CHECKSUM(verify_checksum);
     
     // Cleanup
     CUDA_CHECK(cudaEventDestroy(start));

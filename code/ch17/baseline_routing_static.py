@@ -37,7 +37,8 @@ class BaselineRoutingStaticBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.batch_size = 16
         self.hidden_dim = 2048
         self.num_layers = 24
-        self.requests_per_iteration = 10
+        self.requests_per_iteration = 512
+        self.num_routes = 1024
         tokens = self.batch_size * self.hidden_dim * self.requests_per_iteration
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.requests_per_iteration),
@@ -45,6 +46,7 @@ class BaselineRoutingStaticBenchmark(VerificationPayloadMixin, BaseBenchmark):
         )
         self.output: Optional[torch.Tensor] = None
         self._verify_input: Optional[torch.Tensor] = None
+        self.route_scores: Optional[torch.Tensor] = None
         self.parameter_count: int = 0
         self._verification_payload = None
         self.register_workload_metadata(
@@ -70,6 +72,14 @@ class BaselineRoutingStaticBenchmark(VerificationPayloadMixin, BaseBenchmark):
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
         self._verify_input = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=dtype)
+        # Static router still pays routing overhead (naive per-request argmax).
+        self.route_scores = torch.zeros(
+            self.requests_per_iteration,
+            self.num_routes,
+            device=self.device,
+            dtype=dtype,
+        )
+        self.route_scores[:, 0] = 1.0  # always select "large"
         self._synchronize()
 
     def benchmark_fn(self) -> None:
@@ -77,8 +87,11 @@ class BaselineRoutingStaticBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
         with self._nvtx_range("routing"):
             with torch.no_grad():
-                for _ in range(self.requests_per_iteration):
-                    _ = self.model(self.inputs)
+                if self.route_scores is None:
+                    raise RuntimeError("Routing scores not initialized")
+                for idx in range(self.requests_per_iteration):
+                    # Naive routing: per-request argmax (launch-heavy).
+                    _ = torch.argmax(self.route_scores[idx])
             if self._verify_input is not None:
                 with torch.no_grad():
                     self.output = self.model(self._verify_input).detach().float().clone()

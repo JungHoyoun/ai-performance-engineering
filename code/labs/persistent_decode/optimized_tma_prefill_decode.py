@@ -287,7 +287,9 @@ class OptimizedTmaPrefillDecodeBenchmark(VerificationPayloadMixin, BaseBenchmark
         self.prefill_chunk_elems = 128 * 128
         self.cfg = TmaBurstConfig()
         self._prio_low, self._prio_high = get_stream_priorities()
-        self.prefill_streams = [torch.cuda.Stream(priority=self._prio_low) for _ in range(self.cfg.max_in_flight)]
+        # Keep custom stream count <= 2 to satisfy the harness StreamAuditor.
+        # (multi-stream >2 triggers a timing violation to prevent under-timing exploits).
+        self.prefill_streams = [torch.cuda.Stream(priority=self._prio_low)]
         self.decode_stream = torch.cuda.Stream(priority=self._prio_high)
         self.decode_graph = torch.cuda.CUDAGraph()
         self.full_graph: torch.cuda.CUDAGraph | None = None

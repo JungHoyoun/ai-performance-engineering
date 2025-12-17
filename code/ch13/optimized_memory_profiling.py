@@ -33,12 +33,17 @@ class OptimizedModel(nn.Module):
 
 class OptimizedMemoryProfilingBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized memory profiling - uses gradient checkpointing + CUDA graphs."""
+
+    signature_equivalence_group = "ch13_memory_profiling_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
     
     def __init__(self):
         super().__init__()
         self.model: Optional[OptimizedModel] = None
         self.inputs: Optional[torch.Tensor] = None
         self.targets: Optional[torch.Tensor] = None
+        self.inputs_fp32: Optional[torch.Tensor] = None
+        self.targets_fp32: Optional[torch.Tensor] = None
         self.criterion: Optional[nn.Module] = None
         self.peak_memory_mb = 0.0
         self.batch_size = 32
@@ -68,8 +73,10 @@ class OptimizedMemoryProfilingBenchmark(VerificationPayloadMixin, BaseBenchmark)
         
         self.model = OptimizedModel(hidden_dim=self.hidden_dim).to(self.device, dtype=torch.bfloat16)
         self.model.train()
-        self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.bfloat16)
-        self.targets = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.bfloat16)
+        self.inputs_fp32 = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
+        self.targets_fp32 = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
+        self.inputs = self.inputs_fp32.to(dtype=torch.bfloat16)
+        self.targets = self.targets_fp32.to(dtype=torch.bfloat16)
         self.criterion = nn.MSELoss()
         
         _ = self.model(self.inputs)
@@ -118,8 +125,10 @@ class OptimizedMemoryProfilingBenchmark(VerificationPayloadMixin, BaseBenchmark)
             raise RuntimeError("benchmark_fn() must produce output for verification")
 
     def capture_verification_payload(self) -> None:
+        if self.inputs_fp32 is None or self.targets_fp32 is None:
+            raise RuntimeError("FP32 verification tensors not initialized")
         self._set_verification_payload(
-            inputs={"input": self.inputs, "targets": self.targets},
+            inputs={"input": self.inputs_fp32, "targets": self.targets_fp32},
             output=self.output.detach().float().clone(),
             batch_size=self.inputs.shape[0],
             precision_flags={

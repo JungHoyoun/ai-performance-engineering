@@ -1,7 +1,7 @@
 """optimized_decompression.py - GPU-assisted decompression stand-in.
 
-Simulates nvCOMP-style GPU decompression by inflating a toy run-length encoded
-buffer on the GPU. Falls back to SKIPPED when CUDA is unavailable.
+Decodes the same toy RLE format as `baseline_decompression.py`, but performs the
+repeat expansion on the GPU to model offloading decompression work.
 """
 
 from __future__ import annotations
@@ -21,57 +21,65 @@ from core.harness.benchmark_harness import BaseBenchmark, WorkloadMetadata  # no
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 
 
-def _encode_rle(length: int = 1024, value: int = 7) -> torch.Tensor:
-    """Create a trivial RLE buffer: [run_length, value] pairs."""
-    runs = torch.tensor([[length, value]], dtype=torch.int32)
-    return runs
-
-
 class GPUDecompressionBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def __init__(self) -> None:
         super().__init__()
-        self.encoded: Optional[torch.Tensor] = None
+        self.counts: Optional[torch.Tensor] = None
+        self.counts_i64: Optional[torch.Tensor] = None
+        self.values: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
         self._workload = WorkloadMetadata(bytes_per_iteration=0.0)
 
     def setup(self) -> None:
         if not torch.cuda.is_available():
             raise RuntimeError("SKIPPED: CUDA required for GPU decompression demo")
-        self.encoded = _encode_rle().to(self.device)
+        torch.manual_seed(42)
+        total_len = 1024 * 1024
+        run_len = 256
+        if total_len % run_len != 0:
+            raise RuntimeError("total_len must be divisible by run_len for this benchmark")
+        num_runs = total_len // run_len
+        counts = torch.full((num_runs,), run_len, dtype=torch.int32)
+        values = torch.randn((num_runs,), dtype=torch.float32)
+        self.counts = counts.to(self.device)
+        self.counts_i64 = self.counts.to(torch.int64)
+        self.values = values.to(self.device)
         torch.cuda.synchronize(self.device)
 
-    def _decode_rle(self, runs: torch.Tensor) -> torch.Tensor:
-        counts = runs[:, 0].to(torch.int64)
-        values = runs[:, 1].to(torch.float32)
-        expanded = torch.repeat_interleave(values, counts)
-        return expanded
-
     def benchmark_fn(self) -> Optional[dict]:
-        if self.encoded is None:
-            raise RuntimeError("SKIPPED: no encoded buffer available")
+        if self.counts_i64 is None or self.values is None:
+            raise RuntimeError("SKIPPED: missing encoded RLE buffers")
 
         enable_nvtx = get_nvtx_enabled(self.get_config())
         start = self._record_start()
         with nvtx_range("gpu_decompress_rle", enable=enable_nvtx):
-            out = self._decode_rle(self.encoded)
+            out = torch.repeat_interleave(self.values, self.counts_i64)
         torch.cuda.synchronize(self.device)
         latency_ms = self._record_stop(start)
         self.output = out.detach().clone()
-        return {"latency_ms": latency_ms, "output_len": int(out.numel())}
+        self._payload_counts = self.counts
+        self._payload_values = self.values
+        return {"latency_ms": latency_ms, "decompressed_len": int(out.numel())}
 
     def capture_verification_payload(self) -> None:
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        counts = self._payload_counts
+        values = self._payload_values
+        if counts is None or values is None:
+            raise RuntimeError("benchmark_fn() must stash inputs for verification")
         self._set_verification_payload(
-            inputs={"encoded": self.encoded},
-            output=self.output,
-            batch_size=self.output.shape[0],
+            inputs={"counts": counts.detach().clone(), "values": values.detach().clone()},
+            output=self.output[:4096].detach().clone(),
+            batch_size=1,
             parameter_count=0,
             precision_flags={
                 "fp16": False,
                 "bf16": False,
                 "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+                "tf32": False,
             },
-            output_tolerance=(0.1, 1.0),
+            output_tolerance=(0.0, 0.0),
         )
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:

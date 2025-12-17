@@ -146,7 +146,12 @@ class OptimizedMemoryDoubleBufferingBenchmark(VerificationPayloadMixin, BaseBenc
             batch_size=self.batch_size,
             parameter_count=sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0,
             output_tolerance=(0.1, 1.0),
-            precision_flags={"fp16": True, "bf16": False, "fp8": False, "tf32": False},
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
         )
 
     

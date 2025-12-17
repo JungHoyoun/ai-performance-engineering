@@ -33,17 +33,21 @@ class OptimizedModel(nn.Module):
         self.fc3 = nn.Linear(hidden_dim * 4, hidden_dim)
     
     def forward(self, x):
-        # Optimization: Use GELU which has fused implementations
-        x = F.gelu(self.fc1(x))  # Fused linear+activation
-        x = F.gelu(self.fc2(x))  # Fused linear+activation
+        # Keep math identical to the baseline so verification is meaningful.
+        x = self.fc1(x)
+        x = torch.relu(x)
+        x = self.fc2(x)
+        x = torch.relu(x)
         x = self.fc3(x)
-        # Optimization: Use layer_norm instead of manual norm
-        x = F.layer_norm(x, x.shape[-1:])
+        x = x / x.norm(dim=-1, keepdim=True).clamp(min=1e-8)
         return x
 
 
 class OptimizedAllTechniquesBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: BF16 + fused ops + no redundant compute."""
+
+    signature_equivalence_group = "ch20_multiple_unoptimized_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
     
     def __init__(self):
         super().__init__()
@@ -61,17 +65,20 @@ class OptimizedAllTechniquesBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def setup(self) -> None:
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         
         # Optimization 1: BF16 for tensor cores
         dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
         self.model = OptimizedModel(hidden_dim=self.hidden_dim).to(self.device, dtype=dtype).eval()
-        self.x = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=dtype)
+        self.x = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
         self.output = None
         
         # Warmup
         for _ in range(10):
             with torch.no_grad():
-                _ = self.model(self.x)
+                x = self.x.to(dtype=next(self.model.parameters()).dtype)
+                _ = self.model(x)
         self._synchronize()
 
     def benchmark_fn(self) -> None:
@@ -79,7 +86,8 @@ class OptimizedAllTechniquesBenchmark(VerificationPayloadMixin, BaseBenchmark):
         with self._nvtx_range("multiple_techniques_optimized"):
             with torch.no_grad():
                 # Optimization: Single forward pass (no redundant compute)
-                self.output = self.model(self.x)
+                x = self.x.to(dtype=next(self.model.parameters()).dtype)
+                self.output = self.model(x)
                 _ = self.output.sum()  # Force materialization
             self._synchronize()
 

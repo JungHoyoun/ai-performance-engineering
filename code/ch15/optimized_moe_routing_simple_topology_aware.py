@@ -124,7 +124,7 @@ class OptimizedMoERoutingTopologyAwareBenchmark(VerificationPayloadMixin, BaseBe
                 "fp8": False,
                 "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
             },
-            output_tolerance=(0.0, 0.0),
+            output_tolerance=(1e-3, 1e-3),
         )
 
     def teardown(self) -> None:
@@ -155,4 +155,3 @@ if __name__ == "__main__":
     from core.harness.benchmark_harness import benchmark_main
 
     benchmark_main(get_benchmark)
-

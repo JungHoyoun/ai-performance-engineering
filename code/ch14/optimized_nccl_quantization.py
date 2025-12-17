@@ -54,7 +54,7 @@ class OptimizedNcclQuantizationBenchmark(VerificationPayloadMixin, BaseBenchmark
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
-        self.tensor = torch.randn(self.num_chunks, self.chunk_len, device=self.device, dtype=torch.bfloat16)
+        self.tensor = torch.randn(self.num_chunks, self.chunk_len, device=self.device, dtype=torch.float32)
         torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
@@ -106,8 +106,8 @@ class OptimizedNcclQuantizationBenchmark(VerificationPayloadMixin, BaseBenchmark
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
+            iterations=100,
+            warmup=10,
         )
     
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:

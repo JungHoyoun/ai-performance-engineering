@@ -35,12 +35,17 @@ class SimpleModel(nn.Module):
 
 class OptimizedPrecisionMixedBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Mixed precision - uses autocast and torch.compile."""
+
+    signature_equivalence_group = "ch13_precisionmixed_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
     
     def __init__(self):
         super().__init__()
         self.model = None
         self.inputs = None
         self.targets = None
+        self.inputs_fp32 = None
+        self.targets_fp32 = None
         self.optimizer = None
         self.criterion = None
         self.batch_size = 512
@@ -75,9 +80,11 @@ class OptimizedPrecisionMixedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device).train()
         self.parameter_count = sum(p.numel() for p in self.model.parameters())
         
-        self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.bfloat16)
-        self.targets = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.bfloat16)
-        self._verify_input = self.inputs.detach().clone()
+        self.inputs_fp32 = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
+        self.targets_fp32 = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
+        self.inputs = self.inputs_fp32.to(dtype=torch.bfloat16)
+        self.targets = self.targets_fp32.to(dtype=torch.bfloat16)
+        self._verify_input = self.inputs_fp32.detach().clone()
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01)
         self.criterion = nn.MSELoss()
         
@@ -111,9 +118,11 @@ class OptimizedPrecisionMixedBenchmark(VerificationPayloadMixin, BaseBenchmark):
             raise RuntimeError("Verification input/output not initialized")
 
     def capture_verification_payload(self) -> None:
+        if self._verify_input is None:
+            raise RuntimeError("Verification input not initialized")
         self._set_verification_payload(
             inputs={"input": self._verify_input},
-            output=self.output.detach().clone(),
+            output=self.output.detach().float().clone(),
             batch_size=self._verify_input.shape[0],
             parameter_count=self.parameter_count,
             precision_flags={

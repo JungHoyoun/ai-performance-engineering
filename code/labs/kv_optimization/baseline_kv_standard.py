@@ -31,6 +31,9 @@ class BaselineKVStandard(VerificationPayloadMixin, BaseBenchmark):
     Goal: memory - This benchmark measures memory usage for KV cache.
     """
 
+    signature_equivalence_group = "labs_kv_standard_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
+
     def __init__(
         self,
         batch_size: int = 8,

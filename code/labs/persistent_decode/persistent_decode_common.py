@@ -120,8 +120,8 @@ def build_inputs(
     dtype = torch.float32 if quant == "fp32" else torch.float16
 
     q = torch.randn(batch, seq_len, head_dim, device=device, dtype=dtype, generator=generator)
-    k = torch.randn_like(q, generator=generator)
-    v = torch.randn_like(q, generator=generator)
+    k = torch.randn(batch, seq_len, head_dim, device=device, dtype=dtype, generator=generator)
+    v = torch.randn(batch, seq_len, head_dim, device=device, dtype=dtype, generator=generator)
 
     if quant == "int4":
         q = _fake_int4(q)

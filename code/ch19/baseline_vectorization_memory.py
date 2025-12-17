@@ -26,6 +26,9 @@ from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E40
 class VectorizationBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: naive elementwise ops without vectorization."""
 
+    signature_equivalence_group = "ch19_vectorization_memory_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
+
     def __init__(self):
         super().__init__()
         self.output = None

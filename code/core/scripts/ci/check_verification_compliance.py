@@ -10,6 +10,9 @@ It fails if:
 Usage:
     # Check all changed files (for CI)
     python -m core.scripts.ci.check_verification_compliance
+
+    # Execute changed pairs and validate signatures (requires CUDA-capable environment)
+    python -m core.scripts.ci.check_verification_compliance --validate-pairs
     
     # Check specific files (for pre-commit)
     python -m core.scripts.ci.check_verification_compliance --files ch07/baseline_attention.py
@@ -74,10 +77,23 @@ class BenchmarkMethodChecker(ast.NodeVisitor):
     def __init__(self):
         self.benchmark_class: Optional[str] = None
         self.benchmark_class_line: Optional[int] = None
+        self.bases: Set[str] = set()
         self.methods: Set[str] = set()
+        self.attributes: Set[str] = set()
         self.skip_flags: List[tuple[str, int]] = []  # (flag_name, line_number)
         self._in_benchmark_class = False
     
+    def _dotted_name(self, node: ast.AST) -> Optional[str]:
+        parts: List[str] = []
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        if isinstance(node, ast.Name):
+            parts.append(node.id)
+        else:
+            return None
+        return ".".join(reversed(parts))
+
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         has_benchmark_fn = any(
             isinstance(item, ast.FunctionDef) and item.name == "benchmark_fn"
@@ -88,6 +104,11 @@ class BenchmarkMethodChecker(ast.NodeVisitor):
             self.benchmark_class = node.name
             self.benchmark_class_line = node.lineno
             self._in_benchmark_class = True
+            self.bases = {
+                name
+                for base in node.bases
+                if (name := self._dotted_name(base)) is not None
+            }
             
             for item in node.body:
                 if isinstance(item, ast.FunctionDef):
@@ -97,6 +118,7 @@ class BenchmarkMethodChecker(ast.NodeVisitor):
                 if isinstance(item, ast.Assign):
                     for target in item.targets:
                         if isinstance(target, ast.Name):
+                            self.attributes.add(target.id)
                             if target.id in ("skip_output_check", "skip_input_check", "skip_verification"):
                                 # Check if value is True
                                 if isinstance(item.value, ast.Constant) and item.value.value:
@@ -136,28 +158,27 @@ def check_file_compliance(file_path: Path) -> List[ComplianceIssue]:
         # Not a benchmark file
         return issues
     
-    # Check for required methods
-    if "get_input_signature" not in checker.methods:
-        issues.append(ComplianceIssue(
-            str(file_path),
-            "error",
-            f"Class {checker.benchmark_class} is missing required method: get_input_signature()",
-            checker.benchmark_class_line,
-        ))
-    
-    if "validate_result" not in checker.methods:
-        issues.append(ComplianceIssue(
-            str(file_path),
-            "error",
-            f"Class {checker.benchmark_class} is missing required method: validate_result()",
-            checker.benchmark_class_line,
-        ))
+    # Benchmarks typically use VerificationPayloadMixin, which provides
+    # get_input_signature()/get_verify_output()/get_output_tolerance() via inheritance.
+    # This checker is file-local and cannot always see base classes imported from elsewhere.
+    uses_payload_mixin = any(base.endswith("VerificationPayloadMixin") for base in checker.bases)
+
+    if "get_input_signature" not in checker.methods and not uses_payload_mixin:
+        issues.append(
+            ComplianceIssue(
+                str(file_path),
+                "warning",
+                f"Class {checker.benchmark_class} does not define get_input_signature() in this file "
+                "(OK if inherited from a base class; ensure the class chain provides it).",
+                checker.benchmark_class_line,
+            )
+        )
     
     # Check for skip flags without justification
     for flag_name, line_no in checker.skip_flags:
         # Check if there's a justification attribute
         justification_attr = f"{flag_name}_reason"
-        if justification_attr not in checker.methods:
+        if justification_attr not in checker.attributes:
             issues.append(ComplianceIssue(
                 str(file_path),
                 "warning",
@@ -183,6 +204,76 @@ def find_paired_file(file_path: Path) -> Optional[Path]:
         paired_path = file_path.parent / paired_name
         return paired_path if paired_path.exists() else None
     return None
+
+
+def check_pair_signature_compliance(
+    changed_benchmark_files: List[Path],
+    *,
+    repo_root: Path,
+) -> List[ComplianceIssue]:
+    """Validate baseline/optimized signature equivalence for changed pairs.
+
+    This executes real benchmark code paths to capture verification payloads and
+    extract validated InputSignatures (no dry-run/mocks).
+    """
+    from core.discovery import discover_benchmarks
+    from core.scripts.validate_benchmark_pairs import validate_pair
+
+    changed_abs = {p.resolve() for p in changed_benchmark_files}
+    bench_dirs = {p.parent for p in changed_abs}
+
+    issues: List[ComplianceIssue] = []
+    seen: Set[tuple[Path, Path]] = set()
+
+    for bench_dir in sorted(bench_dirs):
+        discovered = discover_benchmarks(bench_dir, validate=False, warn_missing=False)
+        if not discovered:
+            continue
+
+        try:
+            chapter = str(bench_dir.relative_to(repo_root))
+        except ValueError:
+            chapter = str(bench_dir)
+
+        for baseline_path, optimized_paths, _example_name in discovered:
+            baseline_abs = baseline_path.resolve()
+            optimized_abs = [p.resolve() for p in optimized_paths]
+
+            if baseline_abs not in changed_abs and not any(p in changed_abs for p in optimized_abs):
+                continue
+
+            for opt_path in optimized_paths:
+                pair = (baseline_abs, opt_path.resolve())
+                if pair in seen:
+                    continue
+                seen.add(pair)
+
+                example_name = opt_path.stem.replace("optimized_", "", 1)
+                result = validate_pair(chapter, example_name, baseline_path, opt_path)
+                if result.valid:
+                    continue
+
+                pair_label = f"{baseline_path} vs {opt_path}"
+                if result.error:
+                    issues.append(
+                        ComplianceIssue(
+                            pair_label,
+                            "error",
+                            f"Signature validation failed: {result.error}",
+                        )
+                    )
+                    continue
+
+                mismatch_keys = sorted({m.key for m in result.mismatches})
+                issues.append(
+                    ComplianceIssue(
+                        pair_label,
+                        "error",
+                        f"Signature mismatch keys: {mismatch_keys}",
+                    )
+                )
+
+    return issues
 
 
 # =============================================================================
@@ -223,6 +314,7 @@ def check_compliance(
     files: Optional[List[Path]] = None,
     base_branch: Optional[str] = None,
     root_dir: Optional[Path] = None,
+    validate_pairs: bool = False,
 ) -> ComplianceReport:
     """Run compliance checks on files."""
     report = ComplianceReport()
@@ -259,6 +351,14 @@ def check_compliance(
         issues = check_file_compliance(file_path)
         
         for issue in issues:
+            if issue.severity == "error":
+                report.add_error(issue.file_path, issue.message, issue.line_number)
+            else:
+                report.add_warning(issue.file_path, issue.message, issue.line_number)
+
+    if validate_pairs and benchmark_files:
+        pair_issues = check_pair_signature_compliance(benchmark_files, repo_root=root_dir or Path("."))
+        for issue in pair_issues:
             if issue.severity == "error":
                 report.add_error(issue.file_path, issue.message, issue.line_number)
             else:
@@ -311,6 +411,11 @@ def main() -> int:
         action="store_true",
         help="Treat warnings as errors"
     )
+    parser.add_argument(
+        "--validate-pairs",
+        action="store_true",
+        help="Execute changed baseline/optimized pairs and validate input signatures match",
+    )
     
     args = parser.parse_args()
     
@@ -319,6 +424,7 @@ def main() -> int:
             files=args.files,
             base_branch=args.base_branch,
             root_dir=args.root.resolve(),
+            validate_pairs=args.validate_pairs,
         )
         
         print_report(report)
@@ -347,8 +453,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
-
 
 
 

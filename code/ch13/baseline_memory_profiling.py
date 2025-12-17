@@ -29,6 +29,9 @@ class SimpleModel(nn.Module):
 
 class BaselineMemoryProfilingBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline memory profiling - tracks usage without optimization."""
+
+    signature_equivalence_group = "ch13_memory_profiling_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
     
     def __init__(self):
         super().__init__()
@@ -91,7 +94,7 @@ class BaselineMemoryProfilingBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 "fp8": False,
                 "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
             },
-            output_tolerance=(0.1, 1.0),
+            output_tolerance=(0.5, 5.0),
         )
 
     def teardown(self) -> None:

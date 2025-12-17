@@ -44,6 +44,9 @@ class UnoptimizedModel(nn.Module):
 
 class BaselineMultipleUnoptimizedBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: Multiple anti-patterns (FP32, unfused ops, redundant compute)."""
+
+    signature_equivalence_group = "ch20_multiple_unoptimized_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
     
     def __init__(self):
         super().__init__()
@@ -59,6 +62,8 @@ class BaselineMultipleUnoptimizedBenchmark(VerificationPayloadMixin, BaseBenchma
         )
     
     def setup(self) -> None:
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         # FP32 - no tensor core acceleration
         self.model = UnoptimizedModel(hidden_dim=self.hidden_dim).to(self.device).float().eval()
         self.x = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)

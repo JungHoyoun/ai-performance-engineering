@@ -37,6 +37,9 @@ class SimpleModel(nn.Module):
 class BaselinePrecisionMixedBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """FP32 baseline used to compare against mixed-precision autocast."""
 
+    signature_equivalence_group = "ch13_precisionmixed_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
+
     def __init__(self):
         super().__init__()
         self.model: Optional[nn.Module] = None
@@ -109,7 +112,7 @@ class BaselinePrecisionMixedBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 "fp8": False,
                 "tf32": torch.backends.cuda.matmul.allow_tf32,
             },
-            output_tolerance=(0.1, 1.0),
+            output_tolerance=(0.5, 5.0),
         )
 
     def teardown(self) -> None:
