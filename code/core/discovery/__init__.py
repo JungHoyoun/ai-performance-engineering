@@ -34,11 +34,21 @@ def _has_get_benchmark(file_path: Path) -> bool:
     
     Does a simple text search without importing the module.
     """
+    import ast
+
     try:
-        source = file_path.read_text()
-        return "def get_benchmark" in source
-    except Exception:
-        return False
+        source = file_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise RuntimeError(f"Failed to read benchmark file {file_path}: {exc}") from exc
+    try:
+        tree = ast.parse(source, filename=str(file_path))
+    except SyntaxError as exc:
+        raise SyntaxError(f"Syntax error in benchmark file {file_path}: {exc}") from exc
+
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "get_benchmark":
+            return True
+    return False
 
 
 def validate_benchmark_file(file_path: Path, warn: bool = True) -> bool:
@@ -245,8 +255,8 @@ def normalize_chapter_token(
 
 def discover_benchmarks(
     chapter_dir: Path,
-    validate: bool = False,
-    warn_missing: bool = False,
+    validate: bool = True,
+    warn_missing: bool = True,
 ) -> List[Tuple[Path, List[Path], str]]:
     """Discover benchmark modules by looking for baseline_*.py files with matching optimized_*.py.
     

@@ -6,5 +6,11 @@ repo_root = Path(__file__).parent.parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from labs.moe_optimization_journey.level2_fp8 import Level2FP8, get_benchmark
+from labs.moe_optimization_journey.level2_fp8 import Level2FP8
+
+
+def get_benchmark() -> Level2FP8:
+    return Level2FP8()
+
+
 __all__ = ["Level2FP8", "get_benchmark"]

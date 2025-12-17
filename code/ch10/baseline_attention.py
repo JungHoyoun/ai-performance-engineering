@@ -42,18 +42,18 @@ class BaselineAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def setup(self) -> None:
         torch.manual_seed(42)
         
-        # Create Q, K, V tensors in FP32 (no tensor cores)
+        # Create Q, K, V tensors in FP16 so baseline/optimized compare the same precision.
         self.query = torch.randn(
             self.batch_size, self.num_heads, self.seq_len, self.head_dim,
-            device=self.device, dtype=torch.float32
+            device=self.device, dtype=torch.float16
         )
         self.key = torch.randn(
             self.batch_size, self.num_heads, self.seq_len, self.head_dim,
-            device=self.device, dtype=torch.float32
+            device=self.device, dtype=torch.float16
         )
         self.value = torch.randn(
             self.batch_size, self.num_heads, self.seq_len, self.head_dim,
-            device=self.device, dtype=torch.float32
+            device=self.device, dtype=torch.float16
         )
         
         self._synchronize()
@@ -85,7 +85,8 @@ class BaselineAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 attn_scores = attn_scores * self.scale
                 
                 # Softmax over last dimension (materializes full attention matrix)
-                attn_weights = torch.softmax(attn_scores, dim=-1)
+                # Compute softmax in FP32 for numerical stability, then cast back to FP16.
+                attn_weights = torch.softmax(attn_scores.float(), dim=-1).to(dtype=self.query.dtype)
                 
                 # Attention @ V -> output
                 self.output = torch.matmul(attn_weights, self.value)
@@ -100,16 +101,16 @@ class BaselineAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 "key": self.key,
                 "value": self.value,
             },
-            output=self.output.detach().clone(),
+            output=self.output.detach().float().clone(),
             batch_size=self.batch_size,
             parameter_count=0,
             precision_flags={
-                "fp16": False,
+                "fp16": True,
                 "bf16": False,
                 "fp8": False,
                 "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
             },
-            output_tolerance=(0.1, 1.0),
+            output_tolerance=(5e-2, 5e-2),
         )
 
     def teardown(self) -> None:

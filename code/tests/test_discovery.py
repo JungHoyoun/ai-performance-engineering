@@ -19,6 +19,8 @@ from core.discovery import (
     discover_benchmark_pairs,
 )
 
+_DUMMY_BENCH_SOURCE = "def get_benchmark():\n    return None\n"
+
 
 class TestPythonBenchmarkDiscovery:
     """Test discovery of Python benchmark pairs."""
@@ -31,11 +33,11 @@ class TestPythonBenchmarkDiscovery:
         
         # Create baseline file
         baseline_file = chapter_dir / "baseline_attention.py"
-        baseline_file.write_text("# baseline")
+        baseline_file.write_text(_DUMMY_BENCH_SOURCE)
         
         # Create optimized file
         optimized_file = chapter_dir / "optimized_attention.py"
-        optimized_file.write_text("# optimized")
+        optimized_file.write_text(_DUMMY_BENCH_SOURCE)
         
         pairs = discover_benchmarks(chapter_dir)
         
@@ -52,13 +54,13 @@ class TestPythonBenchmarkDiscovery:
         chapter_dir.mkdir()
         
         baseline_file = chapter_dir / "baseline_moe.py"
-        baseline_file.write_text("# baseline")
+        baseline_file.write_text(_DUMMY_BENCH_SOURCE)
         
         optimized1 = chapter_dir / "optimized_moe_sparse.py"
-        optimized1.write_text("# optimized1")
+        optimized1.write_text(_DUMMY_BENCH_SOURCE)
         
         optimized2 = chapter_dir / "optimized_moe_dense.py"
-        optimized2.write_text("# optimized2")
+        optimized2.write_text(_DUMMY_BENCH_SOURCE)
         
         pairs = discover_benchmarks(chapter_dir)
 
@@ -78,7 +80,7 @@ class TestPythonBenchmarkDiscovery:
         
         # Only optimized file, no baseline
         optimized_file = chapter_dir / "optimized_attention.py"
-        optimized_file.write_text("# optimized")
+        optimized_file.write_text(_DUMMY_BENCH_SOURCE)
         
         pairs = discover_benchmarks(chapter_dir)
         
@@ -91,7 +93,7 @@ class TestPythonBenchmarkDiscovery:
         
         # Only baseline file, no optimized
         baseline_file = chapter_dir / "baseline_attention.py"
-        baseline_file.write_text("# baseline")
+        baseline_file.write_text(_DUMMY_BENCH_SOURCE)
         
         pairs = discover_benchmarks(chapter_dir)
         
@@ -103,10 +105,10 @@ class TestPythonBenchmarkDiscovery:
         chapter_dir.mkdir()
         
         baseline_file = chapter_dir / "baseline_speculative_decoding.py"
-        baseline_file.write_text("# baseline")
+        baseline_file.write_text(_DUMMY_BENCH_SOURCE)
         
         optimized_file = chapter_dir / "optimized_speculative_decoding.py"
-        optimized_file.write_text("# optimized")
+        optimized_file.write_text(_DUMMY_BENCH_SOURCE)
         
         pairs = discover_benchmarks(chapter_dir)
         
@@ -258,17 +260,17 @@ class TestBenchmarkPairDiscovery:
         ch01.mkdir()
         
         baseline1 = ch01 / "baseline_test.py"
-        baseline1.write_text("# baseline")
+        baseline1.write_text(_DUMMY_BENCH_SOURCE)
         optimized1 = ch01 / "optimized_test.py"
-        optimized1.write_text("# optimized")
+        optimized1.write_text(_DUMMY_BENCH_SOURCE)
         
         ch02 = tmp_path / "ch02"
         ch02.mkdir()
         
         baseline2 = ch02 / "baseline_test.py"
-        baseline2.write_text("# baseline")
+        baseline2.write_text(_DUMMY_BENCH_SOURCE)
         optimized2 = ch02 / "optimized_test.py"
-        optimized2.write_text("# optimized")
+        optimized2.write_text(_DUMMY_BENCH_SOURCE)
         
         pairs = discover_benchmark_pairs(tmp_path, chapter="all")
         
@@ -280,17 +282,17 @@ class TestBenchmarkPairDiscovery:
         ch01.mkdir()
         
         baseline1 = ch01 / "baseline_test.py"
-        baseline1.write_text("# baseline")
+        baseline1.write_text(_DUMMY_BENCH_SOURCE)
         optimized1 = ch01 / "optimized_test.py"
-        optimized1.write_text("# optimized")
+        optimized1.write_text(_DUMMY_BENCH_SOURCE)
         
         ch02 = tmp_path / "ch02"
         ch02.mkdir()
         
         baseline2 = ch02 / "baseline_test.py"
-        baseline2.write_text("# baseline")
+        baseline2.write_text(_DUMMY_BENCH_SOURCE)
         optimized2 = ch02 / "optimized_test.py"
-        optimized2.write_text("# optimized")
+        optimized2.write_text(_DUMMY_BENCH_SOURCE)
         
         pairs = discover_benchmark_pairs(tmp_path, chapter="ch01")
         
@@ -303,9 +305,9 @@ class TestBenchmarkPairDiscovery:
         ch01.mkdir()
         
         baseline1 = ch01 / "baseline_test.py"
-        baseline1.write_text("# baseline")
+        baseline1.write_text(_DUMMY_BENCH_SOURCE)
         optimized1 = ch01 / "optimized_test.py"
-        optimized1.write_text("# optimized")
+        optimized1.write_text(_DUMMY_BENCH_SOURCE)
         
         # Test with number only
         pairs1 = discover_benchmark_pairs(tmp_path, chapter="1")

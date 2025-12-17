@@ -65,7 +65,7 @@ class BaselineGEMMILPBenchmark(VerificationPayloadMixin, BaseBenchmark):
             output=self.output.detach(),
             batch_size=self.N,
             parameter_count=0,
-            output_tolerance=(1e-2, 1e-2),
+            output_tolerance=(1e-4, 1e-4),
         )
     
     def teardown(self) -> None:

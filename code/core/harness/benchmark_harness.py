@@ -1674,6 +1674,13 @@ class BenchmarkHarness:
         stderr = ""
         elapsed = 0.0
         timeout_limit = config.get_effective_timeout("measurement")
+        if timeout_limit is None:
+            raise ValueError(
+                "Torchrun execution requires a finite timeout; set BenchmarkConfig.measurement_timeout_seconds."
+            )
+        if not isinstance(timeout_limit, (int, float)) or timeout_limit <= 0:
+            raise ValueError(f"Invalid torchrun measurement timeout: {timeout_limit!r}")
+        timeout_limit = float(timeout_limit)
 
         try:
             process = subprocess.Popen(
@@ -2284,8 +2291,19 @@ class BenchmarkHarness:
             errors.append("isolated_runner.py not found - falling back to threading")
             return self._benchmark_with_threading(benchmark, config)
         
-        # Use measurement_timeout_seconds (or fallback to timeout_seconds for backward compatibility)
-        measurement_timeout = getattr(config, 'measurement_timeout_seconds', config.timeout_seconds)
+        # Use measurement_timeout_seconds (or fallback to timeout_seconds for backward compatibility).
+        # Fail fast if no timeout is configured to avoid indefinite hangs.
+        measurement_timeout = getattr(config, "measurement_timeout_seconds", None)
+        if measurement_timeout is None:
+            measurement_timeout = getattr(config, "timeout_seconds", None)
+        if measurement_timeout is None:
+            raise ValueError(
+                "Subprocess execution requires a finite timeout; set BenchmarkConfig.measurement_timeout_seconds "
+                "(or legacy timeout_seconds)."
+            )
+        if not isinstance(measurement_timeout, (int, float)) or measurement_timeout <= 0:
+            raise ValueError(f"Invalid measurement timeout: {measurement_timeout!r}")
+        measurement_timeout = float(measurement_timeout)
         start_time = time.time()
         
         try:
@@ -2787,9 +2805,10 @@ class BenchmarkHarness:
                                 torch.ones((1, 1), device=target_device)
                             )
                             torch.cuda.synchronize(target_device)
-                        except Exception:
-                            # Best-effort context warm-up; continue even if it fails
-                            pass
+                        except Exception as exc:
+                            # Best-effort context warm-up; continue even if it fails, but do not swallow silently.
+                            if LOGGER_AVAILABLE:
+                                logger.warning("CUDA context warm-up failed (continuing): %s", exc)
 
                     # Apply per-target CLI overrides (e.g., backend selection) before setup.
                     self._apply_target_overrides(benchmark, config)
@@ -2802,7 +2821,9 @@ class BenchmarkHarness:
                         _clear_compile_cache()
 
                     # Setup - this may include CUDA extension compilation OR torch.compile()
-                    # IMPORTANT: Setup can hang, so we need actual timeout enforcement
+                    # Setup can hang. In thread-mode we cannot safely preempt a hung setup() without risking
+                    # teardown races, so executor-level measurement timeouts are the only hard stop; the
+                    # setup_timeout_seconds gate is enforced post-hoc once setup returns.
                     import time
                     setup_start_time = time.time()
                     setup_timeout = config.get_effective_timeout('setup')
@@ -2815,56 +2836,33 @@ class BenchmarkHarness:
 
                     def _run_setup_with_detection():
                         start_stage('setup')
-                        if getattr(config, "detect_setup_precomputation", True):
-                            precompute_ok, precompute_err = check_setup_precomputation(_collect_outputs_for_hash, benchmark.setup)
-                            if not precompute_ok:
-                                finish_stage('setup', status='error')
-                                raise RuntimeError(precompute_err or "Setup pre-computation detected")
-                        else:
-                            benchmark.setup()
+                        try:
+                            if getattr(config, "detect_setup_precomputation", True):
+                                precompute_ok, precompute_err = check_setup_precomputation(
+                                    _collect_outputs_for_hash,
+                                    benchmark.setup,
+                                )
+                                if not precompute_ok:
+                                    raise RuntimeError(precompute_err or "Setup pre-computation detected")
+                            else:
+                                benchmark.setup()
+                        except Exception:
+                            finish_stage('setup', status='error')
+                            raise
                         finish_stage('setup')
                     
+                    _run_setup_with_detection()
+                    setup_time = time.time() - setup_start_time
+
                     if setup_timeout is not None:
-                        # Setup has explicit timeout - enforce it with threading timeout
-                        setup_complete = threading.Event()
-                        setup_error: List[Optional[Exception]] = [None]
-                        
-                        def run_setup():
-                            try:
-                                _init_cuda_for_worker_thread()
-                                _run_setup_with_detection()
-                                setup_complete.set()
-                            except Exception as e:
-                                setup_error[0] = e
-                                setup_complete.set()
-                        
-                        setup_thread = threading.Thread(target=run_setup, daemon=True)
-                        setup_thread.start()
-                        setup_thread.join(timeout=setup_timeout)
-                        
-                        if not setup_complete.is_set():
-                            # Setup timed out
-                            setup_time = time.time() - setup_start_time
+                        # Thread-mode cannot safely preempt a hung setup() without risking teardown races.
+                        # Instead, treat setup_timeout_seconds as a post-hoc gate and fail fast once setup returns.
+                        if setup_time > setup_timeout:
                             finish_stage('setup', status='timeout')
                             timeout_error = TimeoutError(
                                 f"Setup exceeded timeout of {setup_timeout}s (ran for {setup_time:.1f}s)"
                             )
                             errors.append(str(timeout_error))
-                            # Best-effort cleanup to avoid lingering CUDA work from timed-out setup
-                            try:
-                                benchmark.teardown()
-                                teardown_called.set()
-                            except Exception:
-                                pass
-                            try:
-                                if torch.cuda.is_available():
-                                    torch.cuda.synchronize(self.device)
-                            except Exception:
-                                pass
-                            setup_thread.join(timeout=1.0)
-                            if setup_thread.is_alive():
-                                errors.append("Setup thread still running after timeout; GPU work may still be executing.")
-                            # Create timeout result
                             timeout_result_storage[0] = self._create_timeout_result(
                                 stage="setup",
                                 duration=setup_time,
@@ -2874,69 +2872,34 @@ class BenchmarkHarness:
                                 config=config,
                                 watchdog=stage_watchdog,
                             )
-                            return  # Exit early, timeout_result will be checked outside
-                        
-                        if setup_error[0]:
-                            raise setup_error[0]
-                        
-                        setup_time = time.time() - setup_start_time
+                            return
                         if setup_time > setup_timeout * 0.8:  # Warn if setup takes >80% of timeout
                             logger.warning(f"Setup took {setup_time:.1f}s (near timeout limit of {setup_timeout}s)")
                     else:
-                        # No explicit setup timeout - just run it
-                        _run_setup_with_detection()
-                        setup_time = time.time() - setup_start_time
-                        # Warn if setup is suspiciously long (even without timeout)
+                        # Warn if setup is suspiciously long (even without an explicit setup timeout).
                         measurement_timeout = config.get_effective_timeout('measurement')
-                        if measurement_timeout and setup_time > measurement_timeout * 0.5:
+                        if measurement_timeout is not None and setup_time > measurement_timeout * 0.5:
                             logger.warning(f"Setup took {setup_time:.1f}s (consider setting setup_timeout_seconds)")
                     
                     # Warmup with timeout enforcement
                     warmup_timeout = config.get_effective_timeout('warmup')
-                    if warmup_timeout is not None and config.warmup > 0:
+                    if config.warmup > 0:
                         warmup_start_time = time.time()
-                        warmup_complete = threading.Event()
-                        warmup_error: List[Optional[Exception]] = [None]
-                        
-                        def run_warmup():
-                            try:
-                                _init_cuda_for_worker_thread()
-                                start_stage('warmup')
-                                self._warmup(benchmark.benchmark_fn, config.warmup, config)
-                                finish_stage('warmup')
-                                warmup_complete.set()
-                            except Exception as e:
-                                warmup_error[0] = e
-                                finish_stage('warmup', status='error')
-                                warmup_complete.set()
-                        
-                        warmup_thread = threading.Thread(target=run_warmup, daemon=True)
-                        warmup_thread.start()
-                        warmup_thread.join(timeout=warmup_timeout)
-                        
-                        if not warmup_complete.is_set():
-                            # Warmup timed out
-                            warmup_time = time.time() - warmup_start_time
+                        start_stage('warmup')
+                        try:
+                            self._warmup(benchmark.benchmark_fn, config.warmup, config)
+                        except Exception:
+                            finish_stage('warmup', status='error')
+                            raise
+                        warmup_time = time.time() - warmup_start_time
+                        if warmup_timeout is not None and warmup_time > warmup_timeout:
+                            # Thread-mode cannot safely preempt a hung warmup() without risking teardown races.
+                            # Treat warmup_timeout_seconds as a post-hoc gate and fail fast once warmup returns.
                             finish_stage('warmup', status='timeout')
                             timeout_error = TimeoutError(
                                 f"Warmup exceeded timeout of {warmup_timeout}s (ran for {warmup_time:.1f}s)"
                             )
                             errors.append(str(timeout_error))
-                            # Best-effort cleanup to avoid lingering CUDA work from timed-out warmup
-                            try:
-                                benchmark.teardown()
-                                teardown_called.set()
-                            except Exception:
-                                pass
-                            try:
-                                if torch.cuda.is_available():
-                                    torch.cuda.synchronize(self.device)
-                            except Exception:
-                                pass
-                            warmup_thread.join(timeout=1.0)
-                            if warmup_thread.is_alive():
-                                errors.append("Warmup thread still running after timeout; GPU work may still be executing.")
-                            # Create timeout result
                             timeout_result_storage[0] = self._create_timeout_result(
                                 stage="warmup",
                                 duration=warmup_time,
@@ -2946,18 +2909,10 @@ class BenchmarkHarness:
                                 config=config,
                                 watchdog=stage_watchdog,
                             )
-                            return  # Exit early, timeout_result will be checked outside
-                        
-                        if warmup_error[0]:
-                            raise warmup_error[0]
+                            return
+                        finish_stage('warmup')
                     else:
-                        # No warmup timeout - just run it
-                        if config.warmup > 0:
-                            start_stage('warmup')
-                            self._warmup(benchmark.benchmark_fn, config.warmup, config)
-                            finish_stage('warmup')
-                        else:
-                            mark_stage('warmup', 'skipped')
+                        mark_stage('warmup', 'skipped')
                     
                     # Memory tracking: Use context manager to track peak memory during benchmark execution
                     start_stage('measurement')
@@ -2974,76 +2929,46 @@ class BenchmarkHarness:
                                     from core.profiling.profiling_runner import run_profiling_orchestration
                                     import time
                                     profiling_start_time = time.time()
-                                    
-                                    # Run profiling with timeout enforcement
-                                    if profiling_timeout is not None:
-                                        profiling_complete = threading.Event()
-                                        profiling_result: List[Optional[Dict[str, Any]]] = [None]
-                                        profiling_error: List[Optional[Exception]] = [None]
-                                        
-                                        def run_profiling():
-                                            try:
-                                                _init_cuda_for_worker_thread()
-                                                # Wrap _benchmark_without_profiling to match expected signature
-                                                def timing_wrapper(fn: Callable, cfg: BenchmarkConfig) -> List[float]:
-                                                    times, _ = self._benchmark_without_profiling(fn, cfg)
-                                                    return times
-                                                
-                                                result = run_profiling_orchestration(
-                                                    benchmark, config,
-                                                    timing_fn=timing_wrapper,
-                                                    output_dir=Path(config.profiling_output_dir) if config.profiling_output_dir else None
-                                                )
-                                                profiling_result[0] = result
-                                                profiling_complete.set()
-                                            except Exception as e:
-                                                profiling_error[0] = e
-                                                profiling_complete.set()
-                                        
-                                        profiling_thread = threading.Thread(target=run_profiling, daemon=True)
-                                        profiling_thread.start()
-                                        profiling_thread.join(timeout=profiling_timeout)
-                                        
-                                        if not profiling_complete.is_set():
-                                            # Profiling timed out
-                                            profiling_time = time.time() - profiling_start_time
-                                            timeout_error = TimeoutError(
-                                                f"Profiling exceeded timeout of {profiling_timeout}s (ran for {profiling_time:.1f}s)"
-                                            )
-                                            errors.append(str(timeout_error))
-                                            finish_stage('profiling', status='timeout')
-                                            # Create timeout result
-                                            timeout_result_storage[0] = self._create_timeout_result(
-                                                stage="profiling",
-                                                duration=profiling_time,
-                                                limit=profiling_timeout,
-                                                errors=errors,
-                                                benchmark_name=benchmark_name,
-                                                config=config,
-                                                watchdog=stage_watchdog,
-                                            )
-                                            return  # Exit early, timeout_result will be checked outside
-                                        
-                                        if profiling_error[0]:
-                                            finish_stage('profiling', status='error')
-                                            raise profiling_error[0]
-                                        
-                                        prof_result = profiling_result[0]
-                                        if stage_watchdog['profiling']['status'] == 'running':
-                                            finish_stage('profiling')
-                                    else:
-                                        # No profiling timeout - just run it
-                                        # Wrap _benchmark_without_profiling to match expected signature
-                                        def timing_wrapper_no_timeout(fn: Callable, cfg: BenchmarkConfig) -> List[float]:
-                                            times, _ = self._benchmark_without_profiling(fn, cfg)
-                                            return times
-                                        
+
+                                    # Wrap _benchmark_without_profiling to match expected signature
+                                    def timing_wrapper(fn: Callable, cfg: BenchmarkConfig) -> List[float]:
+                                        times, _ = self._benchmark_without_profiling(fn, cfg)
+                                        return times
+
+                                    try:
                                         prof_result = run_profiling_orchestration(
-                                            benchmark, config,
-                                            timing_fn=timing_wrapper_no_timeout,
-                                            output_dir=Path(config.profiling_output_dir) if config.profiling_output_dir else None
+                                            benchmark,
+                                            config,
+                                            timing_fn=timing_wrapper,
+                                            output_dir=Path(config.profiling_output_dir)
+                                            if config.profiling_output_dir
+                                            else None,
                                         )
-                                        finish_stage('profiling')
+                                    except Exception:
+                                        finish_stage('profiling', status='error')
+                                        raise
+
+                                    profiling_time = time.time() - profiling_start_time
+                                    if profiling_timeout is not None and profiling_time > profiling_timeout:
+                                        # Thread-mode cannot safely preempt a hung profiler run without risking teardown
+                                        # races. Treat profiling_timeout_seconds as a post-hoc gate once profiling returns.
+                                        timeout_error = TimeoutError(
+                                            f"Profiling exceeded timeout of {profiling_timeout}s (ran for {profiling_time:.1f}s)"
+                                        )
+                                        errors.append(str(timeout_error))
+                                        finish_stage('profiling', status='timeout')
+                                        timeout_result_storage[0] = self._create_timeout_result(
+                                            stage="profiling",
+                                            duration=profiling_time,
+                                            limit=profiling_timeout,
+                                            errors=errors,
+                                            benchmark_name=benchmark_name,
+                                            config=config,
+                                            watchdog=stage_watchdog,
+                                        )
+                                        return
+
+                                    finish_stage('profiling')
                                     
                                     if prof_result:
                                         times_ms = prof_result.get("times_ms", [])
@@ -3146,10 +3071,21 @@ class BenchmarkHarness:
         
         # ALWAYS run with timeout (required, default 15 seconds). Thread-mode benchmarks execute
         # inside a managed executor so we can recycle workers if a benchmark hangs.
-        measurement_timeout = getattr(config, 'measurement_timeout_seconds', config.timeout_seconds)
+        measurement_timeout = getattr(config, "measurement_timeout_seconds", None)
+        if measurement_timeout is None:
+            measurement_timeout = getattr(config, "timeout_seconds", None)
+        if measurement_timeout is None:
+            raise ValueError(
+                "Thread execution requires a finite timeout; set BenchmarkConfig.measurement_timeout_seconds "
+                "(or legacy timeout_seconds)."
+            )
+        if not isinstance(measurement_timeout, (int, float)) or measurement_timeout <= 0:
+            raise ValueError(f"Invalid measurement timeout: {measurement_timeout!r}")
+        measurement_timeout = float(measurement_timeout)
         thread_start_time = time.time()
         self._ensure_thread_executor()
         future = self._thread_executor.submit(run_benchmark_internal)
+        timeout_result: Optional[PydanticBenchmarkResult] = None
         try:
             future.result(timeout=measurement_timeout)
             elapsed_time = time.time() - thread_start_time
@@ -3157,65 +3093,65 @@ class BenchmarkHarness:
             elapsed_time = time.time() - thread_start_time
             future.cancel()
             finish_stage('measurement', status='timeout')
-            
+
             if timeout_result_storage[0] is not None:
-                self._reset_thread_executor()
-                return timeout_result_storage[0]
-            
-            logger.error("=" * 80)
-            logger.error("TIMEOUT: Benchmark execution exceeded timeout limit")
-            logger.error("=" * 80)
-            logger.error(f"   Benchmark: {benchmark_name}")
-            logger.error(f"   Stage: measurement (benchmark iterations)")
-            logger.error(f"   Timeout limit: {measurement_timeout} seconds")
-            logger.error(f"   Elapsed time: {elapsed_time:.2f} seconds")
-            logger.error(f"   Config: iterations={config.iterations}, warmup={config.warmup}")
-            logger.error(f"   Status: Benchmark did not complete within timeout period")
-            logger.error("")
-            logger.error("   Possible causes:")
-            logger.error("   - Benchmark is too slow for current timeout")
-            logger.error("   - Benchmark is hanging or deadlocked")
-            logger.error("   - CUDA kernel is hung (cannot be interrupted from Python)")
-            logger.error("   - GPU is under heavy load from other processes")
-            logger.error("")
-            logger.error("   Suggested actions:")
-            logger.error(f"   - Increase timeout: config.measurement_timeout_seconds = {measurement_timeout * 2}")
-            logger.error(f"   - Use timeout multiplier: config.timeout_multiplier = 2.0")
-            logger.error("   - Check for GPU resource contention")
-            logger.error("   - Review benchmark code for potential deadlocks")
-            logger.error("   - Use subprocess mode (more reliable): config.use_subprocess = True")
-            logger.error("")
-            logger.error("   WARNING: Threading timeout cannot force-stop hung CUDA kernels.")
-            logger.error("=" * 80)
-            
-            timeout_error_msg = (
-                f"TIMEOUT: Benchmark measurement stage exceeded timeout of {measurement_timeout} seconds "
-                f"(ran for {elapsed_time:.2f}s). "
-                f"Consider increasing measurement_timeout_seconds or using timeout_multiplier. "
-                f"Thread-mode cannot force-stop hung CUDA kernels - consider subprocess mode for stricter isolation."
-            )
-            errors.append(timeout_error_msg)
-            times_ms = cast(List[float], [])
-            
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.reset_peak_memory_stats()
-            gc.collect()
-            gc.collect()
-            
-            timeout_result = self._create_timeout_result(
-                stage="measurement",
-                duration=elapsed_time,
-                limit=measurement_timeout,
-                errors=errors,
-                benchmark_name=benchmark_name,
-                config=config,
-                watchdog=stage_watchdog,
-            )
-            self._reset_thread_executor()
-            return timeout_result
+                timeout_result = timeout_result_storage[0]
+            else:
+                logger.error("=" * 80)
+                logger.error("TIMEOUT: Benchmark execution exceeded timeout limit")
+                logger.error("=" * 80)
+                logger.error(f"   Benchmark: {benchmark_name}")
+                logger.error(f"   Stage: measurement (benchmark iterations)")
+                logger.error(f"   Timeout limit: {measurement_timeout} seconds")
+                logger.error(f"   Elapsed time: {elapsed_time:.2f} seconds")
+                logger.error(f"   Config: iterations={config.iterations}, warmup={config.warmup}")
+                logger.error(f"   Status: Benchmark did not complete within timeout period")
+                logger.error("")
+                logger.error("   Possible causes:")
+                logger.error("   - Benchmark is too slow for current timeout")
+                logger.error("   - Benchmark is hanging or deadlocked")
+                logger.error("   - CUDA kernel is hung (cannot be interrupted from Python)")
+                logger.error("   - GPU is under heavy load from other processes")
+                logger.error("")
+                logger.error("   Suggested actions:")
+                logger.error(f"   - Increase timeout: config.measurement_timeout_seconds = {measurement_timeout * 2}")
+                logger.error(f"   - Use timeout multiplier: config.timeout_multiplier = 2.0")
+                logger.error("   - Check for GPU resource contention")
+                logger.error("   - Review benchmark code for potential deadlocks")
+                logger.error("   - Use subprocess mode (more reliable): config.use_subprocess = True")
+                logger.error("")
+                logger.error("   WARNING: Threading timeout cannot force-stop hung CUDA kernels.")
+                logger.error("=" * 80)
+                
+                timeout_error_msg = (
+                    f"TIMEOUT: Benchmark measurement stage exceeded timeout of {measurement_timeout} seconds "
+                    f"(ran for {elapsed_time:.2f}s). "
+                    f"Consider increasing measurement_timeout_seconds or using timeout_multiplier. "
+                    f"Thread-mode cannot force-stop hung CUDA kernels - consider subprocess mode for stricter isolation."
+                )
+                errors.append(timeout_error_msg)
+                times_ms = cast(List[float], [])
+                
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.reset_peak_memory_stats()
+                gc.collect()
+                gc.collect()
+                
+                timeout_result = self._create_timeout_result(
+                    stage="measurement",
+                    duration=elapsed_time,
+                    limit=measurement_timeout,
+                    errors=errors,
+                    benchmark_name=benchmark_name,
+                    config=config,
+                    watchdog=stage_watchdog,
+                )
         finally:
             self._reset_thread_executor()
+
+        if timeout_result is not None:
+            return timeout_result
         
         # Check if a timeout occurred in setup/warmup/profiling stages
         if timeout_result_storage[0] is not None:

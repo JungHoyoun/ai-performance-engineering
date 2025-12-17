@@ -1,14 +1,11 @@
-"""baseline_performance.py - Baseline performance benchmark (goodput measurement).
-
-Implements BaseBenchmark for harness integration.
-"""
+"""optimized_performance_fp16.py - FP16-only performance benchmark (no batch fusion)."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional
 
-# Add repo root to path for imports
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
@@ -20,123 +17,76 @@ try:
 except ImportError:
     pass
 
-from core.utils.compile_utils import compile_model  # Local helper applies TF32 + torch.compile defaults.
-
-from typing import Optional
-
-from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from core.benchmark.verification_mixin import VerificationPayloadMixin
+from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from ch01.workload_config import WORKLOAD
 
 
-def resolve_device() -> torch.device:
-    """Return a usable device, falling back to CPU if CUDA is unavailable or unsupported."""
-    if not torch.cuda.is_available():
-        return torch.device("cpu")
-    try:
-        torch.zeros(1, device="cuda")
-        return torch.device("cuda")
-    except Exception as exc:
-        print(f"WARNING: CUDA unavailable or unsupported ({exc}); falling back to CPU.")
-        return torch.device("cpu")
+class OptimizedPerformanceFP16Benchmark(VerificationPayloadMixin, BaseBenchmark):
+    """FP16-only optimization: use tensor cores without changing batch fusion strategy."""
 
-
-def _should_use_compile(device: torch.device) -> bool:
-    """Decide whether to torch.compile the model.
-    
-    torch.compile is currently unstable on Blackwell (sm_100) for this
-    benchmark and has been causing subprocess segfaults. Keep it disabled
-    on CUDA to prefer eager for stability.
-    """
-    if device.type != "cuda":
-        return False
-    return False
-
-
-class BaselinePerformanceBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Benchmark implementation following BaseBenchmark."""
-    
     def __init__(self):
         super().__init__()
-        self.device = resolve_device()
-        self.model = None
-        self.data = None
-        self.target = None
-        self.optimizer = None
         self.workload = WORKLOAD
         self.batch_size = self.workload.microbatch_size
         self.num_microbatches = self.workload.performance_microbatches
         self.fusion = 4
+
+        self.model = None
         self.microbatches = None
         self.targets = None
+        self.optimizer = None
         self._verify_input = None
         self._verify_output = None
         self.parameter_count = 0
+
         samples = float(self.batch_size * self.num_microbatches)
         self.register_workload_metadata(samples_per_iteration=samples)
-    
+
     def setup(self) -> None:
-        """Setup: initialize model, fixed inputs, and verification output."""
-        # Seed FIRST for deterministic verification
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-        
+
         self.model = torch.nn.Sequential(
             torch.nn.Linear(256, 256),
             torch.nn.ReLU(),
             torch.nn.Linear(256, 10),
         )
-        
-        if _should_use_compile(self.device):
-            self.model = compile_model(
-                self.model.to(self.device),
-                mode="reduce-overhead",
-                fullgraph=False,
-                dynamic=False,
-            )
+
+        if self.device.type == "cuda":
+            self.model = self.model.half()
+            dtype = torch.float16
         else:
-            self.model = self.model.to(self.device)
-        
-        self.model.eval()
+            dtype = torch.float32
+        self.model = self.model.to(self.device).eval()
         self.parameter_count = sum(p.numel() for p in self.model.parameters())
+
         self.microbatches = [
-            torch.randn(self.batch_size, 256, device=self.device)
+            torch.randn(self.batch_size, 256, device=self.device, dtype=dtype).contiguous()
             for _ in range(self.num_microbatches)
         ]
         self.targets = [
             torch.randint(0, 10, (self.batch_size,), device=self.device)
             for _ in range(self.num_microbatches)
         ]
-        
-        # Create FIXED verification input - output will be captured at END of benchmark_fn()
-        self._verify_input = self.microbatches[0].clone()
-        self._verify_output = None  # Will be set at end of benchmark_fn()
-        
+
+        # Match baseline input signature: verification inputs are FP32.
+        self._verify_input = self.microbatches[0].float().clone()
+        self._verify_output = None
+
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=1e-3)
-        # Warm up: run a few iterations so any torch.compile graph capture or
-        # kernel autotuning occurs before the harness starts timing.
         for _ in range(3):
             self.optimizer.zero_grad(set_to_none=True)
             logits = self.model(self.microbatches[0])
             loss = torch.nn.functional.cross_entropy(logits, self.targets[0])
             loss.backward()
             self.optimizer.step()
-        if self.device.type == "cuda":
-            torch.cuda.synchronize()
+        self._synchronize()
         self.optimizer.zero_grad(set_to_none=True)
-    
+
     def benchmark_fn(self) -> None:
-        """Function to benchmark."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from core.profiling.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("baseline_performance", enable=enable_nvtx):
+        assert self.model is not None and self.microbatches is not None and self.targets is not None
+        with self._nvtx_range("optimized_performance_fp16"):
             total = len(self.microbatches)
             for start in range(0, total, self.fusion):
                 group_data = self.microbatches[start : start + self.fusion]
@@ -148,14 +98,17 @@ class BaselinePerformanceBenchmark(VerificationPayloadMixin, BaseBenchmark):
                     loss = torch.nn.functional.cross_entropy(logits, target)
                     (loss / group_size).backward()
                 self.optimizer.step()
-        if self.device.type == "cuda":
-            torch.cuda.synchronize()
+        self._synchronize()
 
     def capture_verification_payload(self) -> None:
         if self.model is None or self._verify_input is None:
             raise RuntimeError("setup() and benchmark_fn() must run before capture_verification_payload()")
         with torch.no_grad():
-            self._verify_output = self.model(self._verify_input).detach().clone()
+            verify_input = self._verify_input
+            model_params = list(self.model.parameters())
+            if model_params:
+                verify_input = verify_input.to(dtype=model_params[0].dtype, device=self.device)
+            self._verify_output = self.model(verify_input).float().clone()
         self._set_verification_payload(
             inputs={"verify_input": self._verify_input},
             output=self._verify_output,
@@ -164,54 +117,44 @@ class BaselinePerformanceBenchmark(VerificationPayloadMixin, BaseBenchmark):
             output_tolerance=(0.5, 0.5),
         )
 
-    
     def teardown(self) -> None:
-        """Cleanup."""
         del self.model, self.microbatches, self.targets, self.optimizer
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark-specific config."""
-        return BenchmarkConfig(
-            iterations=5,
-            warmup=10,
-        )
-    
+        return BenchmarkConfig(iterations=5, warmup=10)
+
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return domain-specific metrics using standardized helper."""
         from core.benchmark.metrics import compute_environment_metrics
+
         return compute_environment_metrics(
-            gpu_count=getattr(self, 'gpu_count', 1),
-            gpu_memory_gb=getattr(self, 'gpu_memory_gb', 80.0),
+            gpu_count=getattr(self, "gpu_count", 1),
+            gpu_memory_gb=getattr(self, "gpu_memory_gb", 80.0),
         )
 
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
-        if self.model is None:
-            return "Model not initialized"
-        if not self.microbatches:
-            return "Data not initialized"
-        # Use the first microbatch as a validation probe so we avoid allocating
-        # an additional tensor up front.
+        if self.model is None or not self.microbatches:
+            return "Model or data not initialized"
         probe = self.microbatches[0]
         try:
             with torch.no_grad():
                 test_output = self.model(probe)
                 if test_output.shape[0] != probe.shape[0]:
-                    return f"Output shape mismatch: expected batch_size={probe.shape[0]}, got {test_output.shape[0]}"
+                    return f"Output batch size mismatch: expected {probe.shape[0]}, got {test_output.shape[0]}"
                 if test_output.shape[1] != 10:
                     return f"Output shape mismatch: expected num_classes=10, got {test_output.shape[1]}"
-        except Exception as e:
-            return f"Model forward pass failed: {e}"
+        except Exception as exc:
+            return f"Model forward pass failed: {exc}"
         return None
 
 
 def get_benchmark() -> BaseBenchmark:
-    """Factory function for harness discovery."""
-    return BaselinePerformanceBenchmark()
+    return OptimizedPerformanceFP16Benchmark()
 
 
 if __name__ == "__main__":
     from core.harness.benchmark_harness import benchmark_main
+
     benchmark_main(get_benchmark)
+

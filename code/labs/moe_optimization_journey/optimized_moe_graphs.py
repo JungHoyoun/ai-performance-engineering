@@ -6,5 +6,11 @@ repo_root = Path(__file__).parent.parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from labs.moe_optimization_journey.level4_graphs import Level4Graphs, get_benchmark
+from labs.moe_optimization_journey.level4_graphs import Level4Graphs
+
+
+def get_benchmark() -> Level4Graphs:
+    return Level4Graphs()
+
+
 __all__ = ["Level4Graphs", "get_benchmark"]

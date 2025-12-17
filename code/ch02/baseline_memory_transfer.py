@@ -46,11 +46,25 @@ class BaselineMemoryTransferBenchmark(VerificationPayloadMixin, BaseBenchmark):
         with self._nvtx_range("memory_transfer_baseline"):
             self.device_data.copy_(self.host_data, non_blocking=False)
 
-        self.output = self.device_data[:1000].detach()
-
     def capture_verification_payload(self) -> None:
-        if self.output is None:
+        if self.device_data is None:
             raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
+        # Verification: compute a deterministic digest over ALL transferred elements (post-timing).
+        self._synchronize()
+        data_bits = self.device_data.view(torch.int32)
+        block_elems = 1_000_000
+        numel = int(data_bits.numel())
+        if numel <= 0:
+            raise RuntimeError("device_data must be non-empty for verification")
+        if numel % block_elems == 0:
+            digest = data_bits.view(-1, block_elems).sum(dim=1, dtype=torch.int64)
+        else:
+            blocks = []
+            for start in range(0, numel, block_elems):
+                end = min(start + block_elems, numel)
+                blocks.append(data_bits[start:end].sum(dtype=torch.int64))
+            digest = torch.stack(blocks)
+        self.output = digest.detach().clone()
         self._set_verification_payload(
             inputs={"host_data": self.host_data},
             output=self.output.detach().clone(),
@@ -62,7 +76,7 @@ class BaselineMemoryTransferBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 "fp8": False,
                 "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
             },
-            output_tolerance=(1e-4, 1e-4),
+            output_tolerance=(0.0, 0.0),
         )
     
     def teardown(self) -> None:

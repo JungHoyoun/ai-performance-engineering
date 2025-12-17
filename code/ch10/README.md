@@ -39,3 +39,4 @@ python -m cli.aisp bench run --targets ch10 --profile minimal
 ## Notes
 - `cufile_gds_example.py` demonstrates integrating GPUDirect Storage into tensor-core pipelines for IO-heavy training loops.
 - `requirements_cufile.txt` holds the optional `cufile` wheel; install it only on hosts with GPUDirect Storage enabled.
+- Several baselines have multiple `optimized_<name>_*.py` variants; the discovery system treats these as additional benchmark targets (e.g., `dsmem_reduction_v3`) so you can compare multiple optimization strategies against the same baseline.

@@ -81,6 +81,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -97,14 +98,19 @@ CODE_ROOT = Path(__file__).resolve().parent.parent
 
 _handler_instance = None
 _analyzer_instance = None
+_handler_lock = threading.Lock()
+_analyzer_lock = threading.Lock()
 
 
 def _get_handler():
     """Lazy load the shared PerfCore facade to avoid import overhead."""
     global _handler_instance
     if _handler_instance is None:
-        from core.perf_core import get_core
-        _handler_instance = get_core()
+        with _handler_lock:
+            if _handler_instance is None:
+                from core.perf_core import get_core
+
+                _handler_instance = get_core()
     return _handler_instance
 
 
@@ -112,11 +118,14 @@ def _get_analyzer():
     """Shared analyzer for CLI/UI without HTTP handler."""
     global _analyzer_instance
     if _analyzer_instance is None:
-        from core.analysis.performance_analyzer import (
-            PerformanceAnalyzer,
-            load_benchmark_data,
-        )
-        _analyzer_instance = PerformanceAnalyzer(load_benchmark_data)
+        with _analyzer_lock:
+            if _analyzer_instance is None:
+                from core.analysis.performance_analyzer import (
+                    PerformanceAnalyzer,
+                    load_benchmark_data,
+                )
+
+                _analyzer_instance = PerformanceAnalyzer(load_benchmark_data)
     return _analyzer_instance
 
 

@@ -794,10 +794,61 @@ def _normalize_result(result: Any) -> Any:
 _JOB_EXECUTOR = ThreadPoolExecutor(max_workers=int(os.environ.get("AISP_MCP_JOB_WORKERS", "4") or "4"))
 _JOB_STORE: Dict[str, Dict[str, Any]] = {}
 _JOB_LOCK = threading.Lock()
+_JOB_TTL_SECONDS = int(os.environ.get("AISP_MCP_JOB_TTL_SECONDS", "3600") or "3600")
+_JOB_MAX_ENTRIES = int(os.environ.get("AISP_MCP_JOB_MAX_ENTRIES", "1000") or "1000")
+_JOB_CLEANUP_INTERVAL_SECONDS = float(os.environ.get("AISP_MCP_JOB_CLEANUP_INTERVAL_SECONDS", "30") or "30")
+_JOB_LAST_CLEANUP_TS = 0.0
+
+
+def _cleanup_job_store(now: Optional[float] = None) -> None:
+    """Evict old job records to keep long-running MCP sessions bounded."""
+    global _JOB_LAST_CLEANUP_TS
+    now = time.time() if now is None else now
+    if now - _JOB_LAST_CLEANUP_TS < _JOB_CLEANUP_INTERVAL_SECONDS:
+        return
+    with _JOB_LOCK:
+        if now - _JOB_LAST_CLEANUP_TS < _JOB_CLEANUP_INTERVAL_SECONDS:
+            return
+        _JOB_LAST_CLEANUP_TS = now
+
+        # Evict completed/errored jobs older than TTL.
+        expired: List[str] = []
+        for job_id, record in list(_JOB_STORE.items()):
+            status = record.get("status")
+            if status == "running":
+                continue
+            ts = record.get("finished_at") or record.get("submitted_at") or 0.0
+            try:
+                age = now - float(ts)
+            except (TypeError, ValueError):
+                age = 0.0
+            if age > _JOB_TTL_SECONDS:
+                expired.append(job_id)
+        for job_id in expired:
+            _JOB_STORE.pop(job_id, None)
+
+        # Enforce max entries by evicting oldest completed jobs first.
+        if len(_JOB_STORE) <= _JOB_MAX_ENTRIES:
+            return
+        completed: List[Tuple[float, str]] = []
+        for job_id, record in _JOB_STORE.items():
+            status = record.get("status")
+            if status == "running":
+                continue
+            ts = record.get("finished_at") or record.get("submitted_at") or 0.0
+            try:
+                completed.append((float(ts), job_id))
+            except (TypeError, ValueError):
+                completed.append((0.0, job_id))
+        completed.sort(key=lambda item: item[0])
+        while len(_JOB_STORE) > _JOB_MAX_ENTRIES and completed:
+            _, job_id = completed.pop(0)
+            _JOB_STORE.pop(job_id, None)
 
 
 def _queue_job(tool_name: str, runner: Callable[[], Any], arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Run a task in the background and return a ticket for polling."""
+    _cleanup_job_store()
     job_id = f"{tool_name}-{uuid.uuid4().hex[:10]}"
     submitted_at = time.time()
     record: Dict[str, Any] = {
@@ -808,6 +859,11 @@ def _queue_job(tool_name: str, runner: Callable[[], Any], arguments: Optional[Di
         "arguments": _sanitize_arguments(arguments),
     }
     with _JOB_LOCK:
+        if len(_JOB_STORE) >= _JOB_MAX_ENTRIES:
+            raise RuntimeError(
+                f"Job queue is full ({len(_JOB_STORE)} >= {_JOB_MAX_ENTRIES}). "
+                "Poll existing jobs with aisp_job_status or increase AISP_MCP_JOB_MAX_ENTRIES."
+            )
         _JOB_STORE[job_id] = record
 
     def _runner():
@@ -4301,6 +4357,7 @@ def tool_job_status(params: Dict[str, Any]) -> Dict[str, Any]:
     job_id = params.get("job_id")
     if not job_id:
         return make_error("job_id is required", include_context, context_level)
+    _cleanup_job_store()
     with _JOB_LOCK:
         record = _JOB_STORE.get(job_id)
     if not record:
@@ -4835,7 +4892,7 @@ class MCPServer:
         self.version = "2.0.0"
         # Track pending requests to help with debugging and prevent duplicate processing
         self._pending_requests: Dict[Any, Dict[str, Any]] = {}
-        self._request_lock = threading.Lock()
+        self._request_lock = threading.RLock()
         # Track request timestamps to detect stale requests
         self._request_timeouts: Dict[Any, float] = {}
         self._timeout_seconds = 300.0  # 5 minutes default timeout

@@ -6,9 +6,14 @@ repo_root = Path(__file__).parent.parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from labs.moe_optimization_journey.level2_streams import Level2Streams, get_benchmark
-__all__ = ["Level2Streams", "get_benchmark"]
+from labs.moe_optimization_journey.level2_streams import Level2Streams
 
+
+def get_benchmark() -> Level2Streams:
+    return Level2Streams()
+
+
+__all__ = ["Level2Streams", "get_benchmark"]
 
 
 

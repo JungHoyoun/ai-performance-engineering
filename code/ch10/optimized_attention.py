@@ -110,7 +110,7 @@ class OptimizedAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 "fp8": False,
                 "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
             },
-            output_tolerance=(0.5, 5.0),
+            output_tolerance=(5e-2, 5e-2),
         )
 
     def teardown(self) -> None:

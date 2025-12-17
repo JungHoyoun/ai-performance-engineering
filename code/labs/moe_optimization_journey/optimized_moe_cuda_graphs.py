@@ -4,10 +4,14 @@
 Optimization: Capture forward pass in CUDA graph for zero launch overhead.
 Expected speedup: ~1.3-2x over Level 4
 """
-from labs.moe_optimization_journey.level6_full_stack import Level6FullStack, get_benchmark
+from labs.moe_optimization_journey.level6_full_stack import Level6FullStack
+
+
+def get_benchmark() -> Level6FullStack:
+    return Level6FullStack()
+
 
 __all__ = ["Level6FullStack", "get_benchmark"]
-
 
 
 

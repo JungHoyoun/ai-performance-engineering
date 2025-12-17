@@ -6,9 +6,14 @@ repo_root = Path(__file__).parent.parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from labs.moe_optimization_journey.level2_permuted import Level2Permuted, get_benchmark
-__all__ = ["Level2Permuted", "get_benchmark"]
+from labs.moe_optimization_journey.level2_permuted import Level2Permuted
 
+
+def get_benchmark() -> Level2Permuted:
+    return Level2Permuted()
+
+
+__all__ = ["Level2Permuted", "get_benchmark"]
 
 
 

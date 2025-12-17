@@ -185,8 +185,8 @@ def extract_from_pytorch_trace(trace_path: Path) -> Dict[str, float]:
             if cuda_kernels > 0:
                 metrics["pytorch_cuda_kernels"] = float(cuda_kernels)
                 
-    except (json.JSONDecodeError, OSError, KeyError, TypeError):
-        pass  # Profile file corrupt or unexpected format
+    except (json.JSONDecodeError, OSError, KeyError, TypeError) as exc:
+        logger.debug("Failed to parse profiler trace %s: %s", trace_path, exc)
     
     return metrics
 
@@ -378,9 +378,12 @@ def _capture_metric(metrics: Dict[str, float], key: str, value: Optional[float])
         return
     if key in METRIC_DIRECTIONS:
         try:
-            metrics[key] = float(value)
+            value_f = float(value)
         except (TypeError, ValueError):
-            pass
+            return
+        if not math.isfinite(value_f):
+            return
+        metrics[key] = value_f
 
 
 def _capture_payload(metrics: Dict[str, float], prefix: str, payload: Optional[Dict[str, Any]]) -> None:
@@ -392,7 +395,9 @@ def _capture_payload(metrics: Dict[str, float], prefix: str, payload: Optional[D
             continue
         value = payload.get(field)
         if isinstance(value, (int, float)):
-            metrics[metric_key] = float(value)
+            value_f = float(value)
+            if math.isfinite(value_f):
+                metrics[metric_key] = value_f
 
 
 def _capture_custom_metrics(metrics: Dict[str, float], prefix: str, payload: Optional[Dict[str, Any]]) -> None:
@@ -403,7 +408,26 @@ def _capture_custom_metrics(metrics: Dict[str, float], prefix: str, payload: Opt
         if metric_key not in METRIC_DIRECTIONS:
             continue
         if isinstance(value, (int, float)):
-            metrics[metric_key] = float(value)
+            value_f = float(value)
+            if math.isfinite(value_f):
+                metrics[metric_key] = value_f
+
+
+def _coerce_finite_float(value: Any) -> Optional[float]:
+    try:
+        value_f = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value_f):
+        return None
+    return value_f
+
+
+def _coerce_positive_float(value: Any) -> Optional[float]:
+    value_f = _coerce_finite_float(value)
+    if value_f is None or value_f <= 0:
+        return None
+    return value_f
 
 
 def collect_expectation_metrics(result_entry: Dict[str, Any]) -> Tuple[Dict[str, float], Optional[Dict[str, Any]]]:
@@ -424,20 +448,15 @@ def collect_expectation_metrics(result_entry: Dict[str, Any]) -> Tuple[Dict[str,
         if best_opt:
             optimized_memory = best_opt.get("memory_mb")
             _capture_metric(metrics, "best_optimized_memory_mb", optimized_memory)
-            if baseline_memory and optimized_memory and optimized_memory > 0:
-                try:
-                    baseline_mem_f = float(baseline_memory)
-                    optimized_mem_f = float(optimized_memory)
-                except (TypeError, ValueError):
-                    baseline_mem_f = 0.0
-                    optimized_mem_f = 0.0
-                if baseline_mem_f > 0 and optimized_mem_f > 0:
-                    _capture_metric(metrics, "best_memory_savings_ratio", baseline_mem_f / optimized_mem_f)
-                    _capture_metric(
-                        metrics,
-                        "best_memory_savings_pct",
-                        ((baseline_mem_f - optimized_mem_f) / baseline_mem_f) * 100.0,
-                    )
+            baseline_mem_f = _coerce_positive_float(baseline_memory)
+            optimized_mem_f = _coerce_positive_float(optimized_memory)
+            if baseline_mem_f is not None and optimized_mem_f is not None:
+                _capture_metric(metrics, "best_memory_savings_ratio", baseline_mem_f / optimized_mem_f)
+                _capture_metric(
+                    metrics,
+                    "best_memory_savings_pct",
+                    ((baseline_mem_f - optimized_mem_f) / baseline_mem_f) * 100.0,
+                )
         return metrics, best_opt
 
     # Capture baseline metrics
@@ -463,17 +482,24 @@ def collect_expectation_metrics(result_entry: Dict[str, Any]) -> Tuple[Dict[str,
         _capture_custom_metrics(metrics, "best_optimized_custom", best_opt.get("custom_metrics"))
 
         # Derive speedup from timing values (not from stored value)
-        if baseline_time and optimized_time and optimized_time > 0:
-            derived_speedup = compute_speedup(baseline_time, optimized_time)
-            _capture_metric(metrics, "best_speedup", derived_speedup)
-            _capture_metric(metrics, "best_optimized_speedup", derived_speedup)
+        baseline_time_f = _coerce_positive_float(baseline_time)
+        optimized_time_f = _coerce_positive_float(optimized_time)
+        if baseline_time_f is not None and optimized_time_f is not None:
+            derived_speedup = compute_speedup(baseline_time_f, optimized_time_f)
+            if math.isfinite(derived_speedup) and derived_speedup > 0:
+                _capture_metric(metrics, "best_speedup", derived_speedup)
+                _capture_metric(metrics, "best_optimized_speedup", derived_speedup)
         else:
             # Fall back to stored speedup if timing not available
-            _capture_metric(metrics, "best_speedup", best_opt.get("speedup"))
-            _capture_metric(metrics, "best_optimized_speedup", best_opt.get("speedup"))
+            stored_speedup = _coerce_positive_float(best_opt.get("speedup"))
+            if stored_speedup is not None:
+                _capture_metric(metrics, "best_speedup", stored_speedup)
+                _capture_metric(metrics, "best_optimized_speedup", stored_speedup)
     else:
         # No successful optimization - use result_entry's best_speedup (likely 1.0)
-        _capture_metric(metrics, "best_speedup", result_entry.get("best_speedup"))
+        best_speedup = _coerce_positive_float(result_entry.get("best_speedup"))
+        if best_speedup is not None:
+            _capture_metric(metrics, "best_speedup", best_speedup)
 
     return metrics, best_opt
 
@@ -503,25 +529,26 @@ def build_expectation_metadata(
             metadata["best_optimization_memory_mb"] = best_opt.get("memory_mb")
             baseline_memory = result_entry.get("baseline_memory_mb")
             optimized_memory = best_opt.get("memory_mb")
-            if baseline_memory and optimized_memory and optimized_memory > 0:
-                try:
-                    baseline_mem_f = float(baseline_memory)
-                    optimized_mem_f = float(optimized_memory)
-                except (TypeError, ValueError):
-                    baseline_mem_f = 0.0
-                    optimized_mem_f = 0.0
-                if baseline_mem_f > 0 and optimized_mem_f > 0:
-                    metadata["best_memory_savings_ratio"] = baseline_mem_f / optimized_mem_f
-                    metadata["best_memory_savings_pct"] = ((baseline_mem_f - optimized_mem_f) / baseline_mem_f) * 100.0
+            baseline_mem_f = _coerce_positive_float(baseline_memory)
+            optimized_mem_f = _coerce_positive_float(optimized_memory)
+            if baseline_mem_f is not None and optimized_mem_f is not None:
+                metadata["best_memory_savings_ratio"] = baseline_mem_f / optimized_mem_f
+                metadata["best_memory_savings_pct"] = ((baseline_mem_f - optimized_mem_f) / baseline_mem_f) * 100.0
             return metadata
 
         # Derive speedup from timing values for consistency with metrics
         baseline_time = result_entry.get("baseline_time_ms")
         optimized_time = best_opt.get("time_ms")
-        if baseline_time and optimized_time and optimized_time > 0:
-            metadata["best_optimization_speedup"] = compute_speedup(baseline_time, optimized_time)
+        baseline_time_f = _coerce_positive_float(baseline_time)
+        optimized_time_f = _coerce_positive_float(optimized_time)
+        if baseline_time_f is not None and optimized_time_f is not None:
+            derived = compute_speedup(baseline_time_f, optimized_time_f)
+            if math.isfinite(derived) and derived > 0:
+                metadata["best_optimization_speedup"] = derived
         else:
-            metadata["best_optimization_speedup"] = best_opt.get("speedup")
+            stored_speedup = _coerce_positive_float(best_opt.get("speedup"))
+            if stored_speedup is not None:
+                metadata["best_optimization_speedup"] = stored_speedup
     return metadata
 
 
@@ -750,26 +777,30 @@ def clean_build_directories(chapter_dir: Path) -> None:
         from core.utils.build_utils import ensure_clean_build_directory
     except ImportError:
         ensure_clean_build_directory = None
+
+    unlink_failure_count = 0
+    unlink_failures: List[str] = []
+    max_failures_to_log = 10
+
+    def _try_unlink(lock_path: Path) -> None:
+        nonlocal unlink_failure_count
+        try:
+            lock_path.unlink()
+        except Exception as exc:
+            unlink_failure_count += 1
+            if len(unlink_failures) < max_failures_to_log:
+                unlink_failures.append(f"{lock_path}: {exc}")
     
     # Clean chapter build directory - more aggressive: remove lock files directly
     build_dir = chapter_dir / "build"
     if build_dir.exists():
         # Remove all lock files first
         for lock_file in build_dir.glob("**/*.lock"):
-            try:
-                lock_file.unlink()
-            except Exception:
-                pass
+            _try_unlink(lock_file)
         for lock_file in build_dir.glob("**/lock"):
-            try:
-                lock_file.unlink()
-            except Exception:
-                pass
+            _try_unlink(lock_file)
         for lock_file in build_dir.glob("**/.ninja_lock"):
-            try:
-                lock_file.unlink()
-            except Exception:
-                pass
+            _try_unlink(lock_file)
         # Then run the standard cleanup
         if ensure_clean_build_directory:
             try:
@@ -783,29 +814,26 @@ def clean_build_directories(chapter_dir: Path) -> None:
     for ext_dir in torch_ext_dir.glob(f"py*/{chapter_name}*"):
         # Remove all lock files
         for lock_file in ext_dir.glob("**/*.lock"):
-            try:
-                lock_file.unlink()
-            except Exception:
-                pass
+            _try_unlink(lock_file)
         for lock_file in ext_dir.glob("**/lock"):
-            try:
-                lock_file.unlink()
-            except Exception:
-                pass
+            _try_unlink(lock_file)
         if ensure_clean_build_directory:
             try:
                 ensure_clean_build_directory(ext_dir, max_lock_age_seconds=30)
-            except Exception:
-                pass  # Best effort cleanup
+            except Exception as e:
+                logger.warning(f"Failed to clean torch extensions directory {ext_dir}: {e}")
     
     # Also clean torch inductor cache locks
     inductor_cache = Path(os.environ.get("TORCHINDUCTOR_CACHE_DIR", ".torch_inductor"))
     if inductor_cache.exists():
         for lock_file in inductor_cache.glob("**/*.lock"):
-            try:
-                lock_file.unlink()
-            except Exception:
-                pass
+            _try_unlink(lock_file)
+
+    if unlink_failure_count:
+        preview = "; ".join(unlink_failures)
+        if unlink_failure_count > len(unlink_failures):
+            preview = f"{preview}; ... (+{unlink_failure_count - len(unlink_failures)} more)"
+        logger.warning("Failed to remove %d build lock file(s): %s", unlink_failure_count, preview)
 
 
 def is_distributed_benchmark(file_path: Path) -> bool:

@@ -6,5 +6,11 @@ repo_root = Path(__file__).parent.parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from labs.moe_optimization_journey.level4_grouped import Level4Grouped, get_benchmark
+from labs.moe_optimization_journey.level4_grouped import Level4Grouped
+
+
+def get_benchmark() -> Level4Grouped:
+    return Level4Grouped()
+
+
 __all__ = ["Level4Grouped", "get_benchmark"]

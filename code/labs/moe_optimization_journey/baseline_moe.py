@@ -6,5 +6,11 @@ repo_root = Path(__file__).parent.parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from labs.moe_optimization_journey.level0_naive import Level0Naive, get_benchmark
+from labs.moe_optimization_journey.level0_naive import Level0Naive
+
+
+def get_benchmark() -> Level0Naive:
+    return Level0Naive()
+
+
 __all__ = ["Level0Naive", "get_benchmark"]
