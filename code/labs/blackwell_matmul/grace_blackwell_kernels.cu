@@ -113,9 +113,7 @@ __global__ void pipeline_prefetch_kernel(const half* __restrict__ A,
   const int warp_id = threadIdx.x / warpSize;
   const int lane_id = threadIdx.x % warpSize;
 
-  if (warp_id == 2) {
-    zero_tile(C_tile, TILE_M * TILE_N);
-  }
+  zero_tile(C_tile, TILE_M * TILE_N);
   cta.sync();
 
   const int total_k_tiles = (K + TILE_K - 1) / TILE_K;

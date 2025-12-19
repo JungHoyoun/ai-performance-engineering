@@ -7,6 +7,7 @@ from typing import Callable, Optional
 
 import torch
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 
 TensorRunner = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
@@ -18,7 +19,7 @@ class FeatureDescriptor:
     notes: str
 
 
-class GraceBlackwellMatmulBenchmark(BaseBenchmark):
+class GraceBlackwellMatmulBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Benchmark wrapper that mimics the Modular.org Blackwell lessons."""
 
     def __init__(
@@ -117,6 +118,23 @@ class GraceBlackwellMatmulBenchmark(BaseBenchmark):
             self._output = self._runner(self._lhs, self._rhs)
         torch.cuda.synchronize(self.device)
 
+    def capture_verification_payload(self) -> None:
+        if self._lhs is None or self._rhs is None or self._output is None:
+            raise RuntimeError("capture_verification_payload() requires benchmark_fn() output")
+        self._set_verification_payload(
+            inputs={"lhs": self._lhs, "rhs": self._rhs},
+            output=self._output,
+            batch_size=int(self._size_m),
+            parameter_count=int(self._parameter_count),
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-3, 5.0),
+        )
+
     def teardown(self) -> None:
         self._lhs = None
         self._rhs = None
@@ -155,43 +173,6 @@ class GraceBlackwellMatmulBenchmark(BaseBenchmark):
     def get_required_capabilities(self) -> Optional[dict[str, bool]]:
         """Override in subclasses to declare required device features."""
         return self.required_capabilities or None
-
-    def get_verify_output(self) -> torch.Tensor:
-        if self._output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self._output.detach().clone()
-
-    def get_verify_inputs(self) -> dict:
-        if self._lhs is None or self._rhs is None:
-            raise RuntimeError("setup() must be called before get_verify_inputs()")
-        return {"lhs": self._lhs, "rhs": self._rhs}
-
-    def get_input_signature(self) -> dict:
-        return {
-            "label": self._label,
-            "size_m": self._size_m,
-            "size_n": self._size_n,
-            "size_k": self._size_k,
-            "shapes": {
-                "lhs": (self._size_m, self._size_k),
-                "rhs": (self._size_n, self._size_k),
-            },
-            "dtypes": {
-                "lhs": str(self._dtype),
-                "rhs": str(self._dtype),
-            },
-            "batch_size": int(self._size_m),
-            "parameter_count": int(self._parameter_count),
-            "precision_flags": {
-                "fp16": True,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
-        }
-
-    def get_output_tolerance(self) -> tuple:
-        return (1e-3, 5.0)
 
     @property
     def descriptor(self) -> Optional[FeatureDescriptor]:

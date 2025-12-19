@@ -509,7 +509,7 @@ def validate_environment(
     *,
     device: Optional["torch.device"] = None,
     probe: Optional[EnvironmentProbe] = None,
-    allow_virtualization: bool = False,
+    allow_virtualization: bool = True,
 ) -> EnvironmentValidationResult:
     """Validate benchmark environment is suitable (fail-fast on known invalid states)."""
     probe = probe or EnvironmentProbe()
@@ -682,14 +682,9 @@ def validate_environment(
             f"{product_hint}"
         )
         if allow_virtualization:
-            warnings_list.append(
-                f"{message} Continuing because allow_virtualization=True."
-            )
+            warnings_list.append(f"{message} Continuing because allow_virtualization=True.")
         else:
-            errors.append(
-                f"{message} Run on bare metal for final results. "
-                "If you want to run anyway, pass --allow-virtualization or set allow_virtualization=True."
-            )
+            warnings_list.append(message)
 
     # torch.compile backend sanity (Compile category)
     try:

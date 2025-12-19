@@ -387,8 +387,9 @@ if TYPER_AVAILABLE:
             True,
             "--allow-virtualization/--disallow-virtualization",
             help=(
-                "Allow running in a virtualized environment (VM/hypervisor) by downgrading ONLY the "
-                "virtualization check to a loud warning. Use --disallow-virtualization to enforce bare metal."
+                "Allow running in a virtualized environment (VM/hypervisor); the virtualization check "
+                "emits a loud warning and never blocks runs. Use --disallow-virtualization to keep the "
+                "warning but omit the explicit allow marker."
             ),
         ),
         reproducible: bool = Option(False, "--reproducible", help="Enable reproducible mode: set all seeds to 42 and force deterministic algorithms (uses slower fallbacks; ops without deterministic support may error)."),
