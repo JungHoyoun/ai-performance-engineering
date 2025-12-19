@@ -21,7 +21,7 @@ except ImportError as exc:  # pragma: no cover - optional dependency
     _PYNVML_IMPORT_ERROR = exc
 
 _NVML_INITIALIZED = False
-_TELEMETRY_CACHE: Dict[int, tuple[float, Dict[str, Optional[float]]]] = {}
+_TELEMETRY_CACHE: Dict[int, tuple[float, Dict[str, Optional[float | str]]]] = {}
 # Cache telemetry briefly to avoid repeated NVML calls inside tight loops.
 # Kept fixed to avoid environment-dependent behavior.
 _TELEMETRY_TTL_SEC = 1.0
@@ -65,7 +65,18 @@ def _resolve_physical_gpu_index(logical_index: int) -> int:
     return logical_index
 
 
-def query_gpu_telemetry(device_index: Optional[int] = None) -> Dict[str, Optional[float]]:
+def _coerce_metric_value(value: object) -> Optional[float | str]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def query_gpu_telemetry(device_index: Optional[int] = None) -> Dict[str, Optional[float | str]]:
     """Return a snapshot of GPU telemetry (temperature, power, utilization, errors).
 
     Args:
@@ -74,7 +85,7 @@ def query_gpu_telemetry(device_index: Optional[int] = None) -> Dict[str, Optiona
     Returns:
         Dict with temperature/power/utilization/error data (values may be None when unavailable).
     """
-    metrics: Dict[str, Optional[float]] = {
+    metrics: Dict[str, Optional[float | str]] = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "gpu_index": None,
         "temperature_gpu_c": None,
@@ -121,7 +132,7 @@ def query_gpu_telemetry(device_index: Optional[int] = None) -> Dict[str, Optiona
 
     nvml_metrics = _query_via_nvml(logical_index)
     metrics.update(nvml_metrics)
-    metrics_copy = dict(metrics)
+    metrics_copy = {key: _coerce_metric_value(value) for key, value in metrics.items()}
     if _TELEMETRY_TTL_SEC > 0:
         _TELEMETRY_CACHE[cache_key] = (now, metrics_copy)
     return metrics_copy
