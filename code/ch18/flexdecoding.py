@@ -129,7 +129,8 @@ class FlexDecodingModule(torch.nn.Module):
         head_dim = self.head_dim
         heads = self.cfg.heads
 
-        q_prefill = torch.zeros(1, heads, 256, head_dim, device=device)
+        prefill_len = self.cfg.window * 2
+        q_prefill = torch.zeros(1, heads, prefill_len, head_dim, device=device)
         kv_prefill = torch.zeros_like(q_prefill)
         q_decode = torch.zeros(1, heads, 1, head_dim, device=device)
         compile_kwargs = {"mode": self.compile_mode, "dynamic": None}
@@ -166,12 +167,22 @@ class FlexDecodingModule(torch.nn.Module):
 
         if HAS_FLEX:
             score_mod = _score_mod_causal(self.offset)
+            kernel_options = {
+                "PRESCALE_QK": True,
+                "ROWS_GUARANTEED_SAFE": True,
+                "BLOCKS_ARE_CONTIGUOUS": True,
+                "USE_TMA": True,
+            }
 
             def prefill(q, k, v):
-                return flex_attention.flex_attention(q, k, v, score_mod=score_mod)
+                return flex_attention.flex_attention(
+                    q, k, v, score_mod=score_mod, kernel_options=kernel_options
+                )
 
             def decode(q, k, v):
-                return flex_attention.flex_attention(q, k, v, score_mod=score_mod)
+                return flex_attention.flex_attention(
+                    q, k, v, score_mod=score_mod, kernel_options=kernel_options
+                )
 
             self.prefill_impl = compile_callable(prefill, **compile_kwargs)
             self.decode_impl = compile_callable(decode, **compile_kwargs)
@@ -200,7 +211,6 @@ class FlexDecodingModule(torch.nn.Module):
         self.ensure_compiled()
         if self.k_cache.shape[0] != batch:
             self.clear_cache(batch)
-
         q = self.q_proj(tokens).view(batch, seqlen, self.cfg.heads, self.head_dim)
         k = self.k_proj(tokens).view(batch, seqlen, self.cfg.heads, self.head_dim)
         v = self.v_proj(tokens).view(batch, seqlen, self.cfg.heads, self.head_dim)
@@ -217,7 +227,6 @@ class FlexDecodingModule(torch.nn.Module):
     def decode(self, token: torch.Tensor, position: int) -> torch.Tensor:
         batch, _, _ = token.shape
         self.ensure_compiled()
-
         q = self.q_proj(token).view(batch, 1, self.cfg.heads, self.head_dim)
         k = self.k_proj(token).view(batch, 1, self.cfg.heads, self.head_dim)
         v = self.v_proj(token).view(batch, 1, self.cfg.heads, self.head_dim)

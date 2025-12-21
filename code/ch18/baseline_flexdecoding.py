@@ -151,7 +151,7 @@ class FlexDecodingHarness(VerificationPayloadMixin, BaseBenchmark):
 
 class BaselineFlexDecodingBenchmark(FlexDecodingHarness):
     def __init__(self):
-        super().__init__(use_flex_attention=False, require_flex=False, decode_tokens=128)
+        super().__init__(use_flex_attention=False, require_flex=False, decode_tokens=512)
 
 
 def get_benchmark() -> BaseBenchmark:

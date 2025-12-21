@@ -14,6 +14,8 @@ Applies tensor-core friendly scheduling on Blackwell: warp specialization, TMA-p
 | --- | --- |
 | `baseline_attention.py`, `optimized_attention.py`, `baseline_flash_attention.py`, `optimized_flash_attention.py`, `analyze_scaling.py` | Attention workloads that span eager, fused, and `torch.compile` paths for modern decoder models. |
 | `baseline_batch.py`, `optimized_batch.py`, `baseline_matmul.py`, `optimized_matmul.py`, `baseline_matmul_tcgen05.py`, `optimized_matmul_tcgen05.py` | Tensor-core matmul variants demonstrating tcgen05 lowering, register tiling, and PyTorch integration. |
+| `baseline_tcgen05_cluster_pipeline.py`, `optimized_tcgen05_cluster_pipeline.py`, `tcgen05_cluster.cu` | tcgen05 matmul pair comparing pipelined baseline vs cluster-launched TMA multicast. |
+| `baseline_tcgen05_warp_specialization.py`, `optimized_tcgen05_warp_specialization.py`, `tcgen05_warp_specialized.cu` | Warp-specialized tcgen05 matmul compared against the pipelined baseline. |
 | `baseline_double_buffered_pipeline.{py,cu}`, `optimized_double_buffered_pipeline.{py,cu}`, `baseline_tma_2d_pipeline.py`, `optimized_tma_2d_pipeline.py` | Async pipeline samples mixing cp.async, TMA, and manual double buffering. |
 | `baseline_cluster_group*.{py,cu}`, `optimized_cluster_group*.{py,cu}`, `cluster_group_common.cuh`, `cluster_group_utils.py` | Clustered kernel suite covering DSMEM-enabled and DSMEM-free thread-block clusters. |
 | `baseline_cluster_multicast.py`, `optimized_cluster_multicast.py`, `tma_multicast_baseline.cu`, `tma_multicast_cluster.cu` | Cluster multicast GEMM example (baseline vs cluster multicast) wrapped as CUDA-binary harness benchmarks. |

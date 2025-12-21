@@ -69,7 +69,7 @@ int main() {
     
     // Problem size - split into segments for stream overlap
     const int N = 16 * 1024 * 1024;  // 16M elements
-    const int NUM_SEGMENTS = 8;
+    const int NUM_SEGMENTS = 16;
     const int SEGMENT_SIZE = N / NUM_SEGMENTS;
     
     printf("Elements: %d (%.1f MB)\n", N, N * sizeof(float) / 1e6);

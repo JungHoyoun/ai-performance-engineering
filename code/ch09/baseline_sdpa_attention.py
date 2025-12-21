@@ -52,7 +52,7 @@ class BaselineSDPAAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         # Typical LLM attention dimensions
         self.batch_size = 4
         self.num_heads = 32
-        self.seq_len = 512
+        self.seq_len = 1024
         self.head_dim = 128
         
         self.query = None

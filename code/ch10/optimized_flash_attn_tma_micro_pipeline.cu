@@ -29,11 +29,11 @@ using cuda_tma::check_cuda;
 using cuda_tma::load_cuTensorMapEncodeTiled;
 using cuda_tma::make_2d_tensor_map;
 
-constexpr int SEQ_LEN = 2048;
+constexpr int SEQ_LEN = 4096;
 constexpr int D_HEAD  = 64;
-constexpr int TILE_KV = 64;    // rows per tile (K/V)
+constexpr int TILE_KV = 32;    // rows per tile (K/V)
 constexpr int THREADS = 128;
-constexpr int STAGES  = 2;     // double buffer
+constexpr int STAGES  = 3;     // deeper buffer to hide TMA latency
 constexpr int ITERS   = 10;
 
 inline bool make_2d_tensor_map_col_row(

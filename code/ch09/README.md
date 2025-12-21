@@ -14,6 +14,7 @@ Explores how to move workloads along the roofline: raise arithmetic intensity wi
 | --- | --- |
 | `baseline_compute_bound.py`, `optimized_compute_bound.py`, `baseline_memory_bound.py`, `optimized_memory_bound.py` | Reference kernels that isolate compute vs bandwidth ceilings and demonstrate tuning strategies. |
 | `baseline_micro_tiling_matmul.cu`, `baseline_micro_tiling_matmul.py`, `optimized_micro_tiling_matmul.cu`, `optimized_micro_tiling_matmul.py` | Micro-tiling matmuls with explicit register blocking and cp.async prefetch. |
+| `baseline_tcgen05_tma_pipeline.py`, `optimized_tcgen05_tma_pipeline.py`, `tcgen05_basic.cu`, `tcgen05_pipelined.cu` | tcgen05 matmul pair showing TMA-backed double buffering and pipeline overlap. |
 | `baseline_cutlass_gemm.cu`, `baseline_cutlass_gemm.py`, `optimized_cutlass_gemm.cu`, `optimized_cutlass_gemm.py`, `warp_specialized_cuda.cu` | CUTLASS-driven matmuls and warp-specialized kernels showcasing tcgen05 lowering and occupancy tuning. |
 | `baseline_fused_l2norm.cu`, `baseline_fused_l2norm.py`, `optimized_fused_l2norm.cu`, `optimized_fused_l2norm.py`, `fusedL2Norm/` | Fusion examples that merge L2 norm + scaling while staying numerically stable. |
 | `baseline_triton.py`, `optimized_triton.py`, `warp_specialized_triton.py` | Triton counterparts for quick prototyping and verifying compiler-generated PTX on Blackwell. |

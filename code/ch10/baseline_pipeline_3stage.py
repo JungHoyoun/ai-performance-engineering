@@ -28,8 +28,8 @@ class BaselinePipeline3StageBenchmark(CudaBinaryBenchmark):
                 "batch_size": 8,
                 "dtype": "float32",
                 "elements": 16 * 1024 * 1024,
-                "segments": 8,
-                "segment_size": 2 * 1024 * 1024,
+                "segments": 16,
+                "segment_size": 1 * 1024 * 1024,
             },
         )
         self.register_workload_metadata(bytes_per_iteration=1024 * 1024)
@@ -48,8 +48,8 @@ class BaselinePipeline3StageBenchmark(CudaBinaryBenchmark):
             batch_size=8,
             dtype="float32",
             elements=16 * 1024 * 1024,
-            segments=8,
-            segment_size=2 * 1024 * 1024,
+            segments=16,
+            segment_size=1 * 1024 * 1024,
         ).to_dict()
 
     def get_output_tolerance(self) -> tuple[float, float]:

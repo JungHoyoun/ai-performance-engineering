@@ -312,6 +312,30 @@ def load_tiling_tcgen05_module():
     return _load_extension("ch08_tiling_tcgen05_ext", [_REPO_ROOT / "ch08" / "tiling_kernels_tcgen05.cu"])
 
 
+@lru_cache(None)
+def load_tcgen05_basic_module():
+    """Compile (if needed) and return the Chapter 9 basic tcgen05 matmul extension."""
+    return _load_extension("ch09_tcgen05_basic_ext", [_REPO_ROOT / "ch09" / "tcgen05_basic.cu"])
+
+
+@lru_cache(None)
+def load_tcgen05_pipelined_module():
+    """Compile (if needed) and return the Chapter 9 pipelined tcgen05 matmul extension."""
+    return _load_extension("ch09_tcgen05_pipelined_ext", [_REPO_ROOT / "ch09" / "tcgen05_pipelined.cu"])
+
+
+@lru_cache(None)
+def load_tcgen05_cluster_module():
+    """Compile (if needed) and return the Chapter 10 cluster tcgen05 matmul extension."""
+    return _load_extension("ch10_tcgen05_cluster_ext", [_REPO_ROOT / "ch10" / "tcgen05_cluster.cu"])
+
+
+@lru_cache(None)
+def load_tcgen05_warp_specialized_module():
+    """Compile (if needed) and return the Chapter 10 warp-specialized tcgen05 matmul extension."""
+    return _load_extension("ch10_tcgen05_warp_specialized_ext", [_REPO_ROOT / "ch10" / "tcgen05_warp_specialized.cu"])
+
+
 def matmul_tcgen05(a: torch.Tensor, b: torch.Tensor, *, module_name: str = "tcgen05 matmul") -> torch.Tensor:
     """Execute the CUTLASS tcgen05 GEMM after ensuring hardware/toolchain support."""
     ensure_tcgen05_supported(loader=load_matmul_tcgen05_module, module_name=module_name)
@@ -347,6 +371,10 @@ def matmul_tiling_tcgen05(
 __all__ = [
     "load_matmul_tcgen05_module",
     "load_tiling_tcgen05_module",
+    "load_tcgen05_basic_module",
+    "load_tcgen05_pipelined_module",
+    "load_tcgen05_cluster_module",
+    "load_tcgen05_warp_specialized_module",
     "matmul_tcgen05",
     "matmul_tcgen05_bias_silu",
     "matmul_tiling_tcgen05",

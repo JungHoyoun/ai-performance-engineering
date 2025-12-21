@@ -44,7 +44,7 @@ class TilingBenchmarkBaseTCGen05(TilingBenchmarkBase):
     matrix_cols: int = 8192
     # Use a smaller K so the baseline's redundant output copy is a larger
     # fraction of end-to-end time (and the optimization is clearly measurable).
-    shared_dim: int = 128
+    shared_dim: int = 64
 
     def __init__(self) -> None:
         # Check availability first and raise SKIPPED if needed

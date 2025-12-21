@@ -206,7 +206,7 @@ int main() {
   }
 
   int tile = cuda_arch::select_square_tile_size<float>(
-      /*shared_tiles=*/3, {32, 16, 8});
+      /*shared_tiles=*/3 * PIPELINE_STAGES, {32, 16, 8});
 
   // Use a large tile count so the block-strided loop runs long enough for the
   // double-buffered pipeline to hide global-memory latency in steady-state.

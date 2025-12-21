@@ -33,7 +33,7 @@ class OptimizedPerformanceFP16Benchmark(VerificationPayloadMixin, BaseBenchmark)
         self.workload = WORKLOAD
         self.batch_size = self.workload.microbatch_size
         self.num_microbatches = self.workload.performance_microbatches
-        self.fusion = 4
+        self.fusion = 8
 
         self.model = None
         self.microbatches = None
@@ -42,18 +42,21 @@ class OptimizedPerformanceFP16Benchmark(VerificationPayloadMixin, BaseBenchmark)
         self._verify_input = None
         self._verify_output = None
         self.parameter_count = 0
-
+        self._prev_fp16_accum = None
         samples = float(self.batch_size * self.num_microbatches)
         self.register_workload_metadata(samples_per_iteration=samples)
 
     def setup(self) -> None:
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
+        if self.device.type == "cuda":
+            self._prev_fp16_accum = torch.backends.cuda.matmul.allow_fp16_accumulation
+            torch.backends.cuda.matmul.allow_fp16_accumulation = True
 
         self.model = torch.nn.Sequential(
-            torch.nn.Linear(256, 256),
+            torch.nn.Linear(2048, 2048),
             torch.nn.ReLU(),
-            torch.nn.Linear(256, 10),
+            torch.nn.Linear(2048, 10),
         )
 
         if self.device.type == "cuda":
@@ -65,7 +68,7 @@ class OptimizedPerformanceFP16Benchmark(VerificationPayloadMixin, BaseBenchmark)
         self.parameter_count = sum(p.numel() for p in self.model.parameters())
 
         self.microbatches = [
-            torch.randn(self.batch_size, 256, device=self.device, dtype=dtype).contiguous()
+            torch.randn(self.batch_size, 2048, device=self.device, dtype=dtype).contiguous()
             for _ in range(self.num_microbatches)
         ]
         self.targets = [
@@ -128,6 +131,8 @@ class OptimizedPerformanceFP16Benchmark(VerificationPayloadMixin, BaseBenchmark)
 
     def teardown(self) -> None:
         del self.model, self.microbatches, self.targets, self.optimizer
+        if self._prev_fp16_accum is not None:
+            torch.backends.cuda.matmul.allow_fp16_accumulation = self._prev_fp16_accum
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 

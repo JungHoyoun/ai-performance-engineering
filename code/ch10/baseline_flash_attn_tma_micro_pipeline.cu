@@ -26,9 +26,9 @@
 #endif
 
 // Toy problem sizes (kept identical to the optimized variant for A/B comparisons)
-constexpr int SEQ_LEN = 2048;
+constexpr int SEQ_LEN = 4096;
 constexpr int D_HEAD  = 64;
-constexpr int TILE_KV = 40;    // rows per tile (kept small to fit shared memory comfortably)
+constexpr int TILE_KV = 32;    // rows per tile (kept small to fit shared memory comfortably)
 constexpr int THREADS = 128;
 
 __global__ void flash_attn_baseline_kernel(

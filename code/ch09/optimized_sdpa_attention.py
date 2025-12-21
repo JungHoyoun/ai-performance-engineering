@@ -25,6 +25,7 @@ from typing import Optional
 
 import torch
 import torch.nn.functional as F
+from torch.nn.attention import SDPBackend, sdpa_kernel
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -56,7 +57,7 @@ class OptimizedSDPAAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         # Same dimensions as baseline for fair comparison
         self.batch_size = 4
         self.num_heads = 32
-        self.seq_len = 512
+        self.seq_len = 1024
         self.head_dim = 128
         
         self.query = None
@@ -76,6 +77,9 @@ class OptimizedSDPAAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         torch.manual_seed(42)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(42)
+
+        if torch.cuda.is_available() and not torch.backends.cuda.flash_sdp_enabled():
+            raise RuntimeError("Flash SDP backend is disabled; enable flash attention for this benchmark.")
         
         # Create Q, K, V tensors in attention shape [B, H, S, D]
         shape = (self.batch_size, self.num_heads, self.seq_len, self.head_dim)
@@ -89,21 +93,18 @@ class OptimizedSDPAAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Fused SDPA: Single kernel, minimal HBM traffic."""
         with self._nvtx_range("optimized_sdpa_attention"):
             with torch.no_grad():
-                # Use PyTorch's SDPA - automatically dispatches to:
-                # - FlashAttention (if available and shapes match)
-                # - Memory-efficient attention (fallback)
-                # - cuDNN attention (Hopper+ GPUs)
-                #
-                # This single call fuses Q@K^T, scale, softmax, attn@V
-                # and uses tiled shared memory to avoid HBM writes of S×S matrix
-                self.output = F.scaled_dot_product_attention(
-                    self.query,
-                    self.key, 
-                    self.value,
-                    attn_mask=None,
-                    dropout_p=0.0,
-                    is_causal=False,
-                )
+                # Force FlashAttention to avoid slow math fallback paths.
+                with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+                    # This single call fuses Q@K^T, scale, softmax, attn@V
+                    # and uses tiled shared memory to avoid HBM writes of S×S matrix.
+                    self.output = F.scaled_dot_product_attention(
+                        self.query,
+                        self.key,
+                        self.value,
+                        attn_mask=None,
+                        dropout_p=0.0,
+                        is_causal=False,
+                    )
                 
                 # Force materialization
                 _ = self.output.sum()

@@ -14,9 +14,9 @@ from core.common.async_input_pipeline import AsyncInputPipelineBenchmark, Pipeli
 
 def get_benchmark() -> AsyncInputPipelineBenchmark:
     cfg = PipelineConfig(
-        batch_size=128,
-        feature_shape=(3, 224, 224),
-        dataset_size=512,
+        batch_size=256,
+        feature_shape=(3, 256, 256),
+        dataset_size=2048,
         num_workers=0,
         prefetch_factor=None,
         pin_memory=False,

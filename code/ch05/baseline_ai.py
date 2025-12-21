@@ -34,8 +34,8 @@ class BaselineAIBenchmark(VerificationPayloadMixin, BaseBenchmark):
         # A larger number of smaller blocks better models CPU-orchestrated
         # micro-ops (e.g., tokenization / batching / enqueue) in IO-heavy pipelines.
         self.batch = 128
-        self.hidden = 256
-        self.num_blocks = 64
+        self.hidden = 32
+        self.num_blocks = 1024
         # Inference benchmark - jitter check not applicable
         tokens = self.batch * self.hidden * self.num_blocks
         self._workload = WorkloadMetadata(

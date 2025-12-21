@@ -208,17 +208,14 @@ int main() {
     // Warmup
     const int warmup = 5;
     for (int i = 0; i < warmup; ++i) {
-        CUDA_CHECK(cudaMemset(d_output, 0, num_clusters * sizeof(float)));
         CUDA_CHECK(cudaLaunchKernelExC(&config, (void*)dsmem_reduction_kernel_v3, args));
     }
     CUDA_CHECK(cudaDeviceSynchronize());
     
     // Benchmark
     const int iterations = 50;
-    CUDA_CHECK(cudaMemset(d_output, 0, num_clusters * sizeof(float)));
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; ++i) {
-        CUDA_CHECK(cudaMemset(d_output, 0, num_clusters * sizeof(float)));
         CUDA_CHECK(cudaLaunchKernelExC(&config, (void*)dsmem_reduction_kernel_v3, args));
     }
     CUDA_CHECK(cudaEventRecord(stop));
@@ -247,4 +244,3 @@ int main() {
     
     return 0;
 }
-

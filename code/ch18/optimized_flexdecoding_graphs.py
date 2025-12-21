@@ -20,7 +20,7 @@ class OptimizedFlexDecodingGraphsBenchmark(FlexDecodingHarness):
     """Capture a single-token decode in a CUDA Graph and replay per token."""
 
     def __init__(self) -> None:
-        super().__init__(use_flex_attention=False, require_flex=False, decode_tokens=128)
+        super().__init__(use_flex_attention=False, require_flex=False, decode_tokens=512)
         self.graph: torch.cuda.CUDAGraph | None = None
         self.capture_stream: torch.cuda.Stream | None = None
         self.static_decode_in: torch.Tensor | None = None

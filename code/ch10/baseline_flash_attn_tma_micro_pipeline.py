@@ -28,9 +28,9 @@ class BaselineFlashAttnTmaMicroPipelineBenchmark(CudaBinaryBenchmark):
             workload_params={
                 "batch_size": 2048,
                 "dtype": "float32",
-                "seq_len": 2048,
+                "seq_len": 4096,
                 "d_head": 64,
-                "tile_kv": 40,
+                "tile_kv": 32,
                 "threads": 128,
             },
         )
@@ -49,9 +49,9 @@ class BaselineFlashAttnTmaMicroPipelineBenchmark(CudaBinaryBenchmark):
         return simple_signature(
             batch_size=2048,
             dtype="float32",
-            seq_len=2048,
+            seq_len=4096,
             d_head=64,
-            tile_kv=40,
+            tile_kv=32,
             threads=128,
         ).to_dict()
 

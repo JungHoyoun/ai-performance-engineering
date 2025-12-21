@@ -239,7 +239,6 @@ int main() {
     
     // Warmup
     for (int i = 0; i < 5; ++i) {
-        CUDA_CHECK(cudaMemset(d_output, 0, num_clusters * sizeof(float)));
         CUDA_CHECK(cudaLaunchKernelEx(&config, 
                                        dsmem_cluster_reduction_kernel_v1,
                                        d_input, d_output, N_param, elements_param));
@@ -250,7 +249,6 @@ int main() {
     const int iterations = 50;
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; ++i) {
-        CUDA_CHECK(cudaMemset(d_output, 0, num_clusters * sizeof(float)));
         CUDA_CHECK(cudaLaunchKernelEx(&config,
                                        dsmem_cluster_reduction_kernel_v1,
                                        d_input, d_output, N_param, elements_param));

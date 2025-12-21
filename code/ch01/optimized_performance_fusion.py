@@ -33,7 +33,7 @@ class OptimizedPerformanceFusionBenchmark(VerificationPayloadMixin, BaseBenchmar
         self.workload = WORKLOAD
         self.batch_size = self.workload.microbatch_size
         self.num_microbatches = self.workload.performance_microbatches
-        self.fusion = 4
+        self.fusion = 8
 
         self.model = None
         self.microbatches = None
@@ -44,6 +44,8 @@ class OptimizedPerformanceFusionBenchmark(VerificationPayloadMixin, BaseBenchmar
         self.parameter_count = 0
         self._fused_batches = None
         self._fused_targets = None
+        self._prev_matmul_tf32 = None
+        self._prev_cudnn_tf32 = None
 
         samples = float(self.batch_size * self.num_microbatches)
         self.register_workload_metadata(samples_per_iteration=samples)
@@ -51,16 +53,21 @@ class OptimizedPerformanceFusionBenchmark(VerificationPayloadMixin, BaseBenchmar
     def setup(self) -> None:
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
+        if self.device.type == "cuda":
+            self._prev_matmul_tf32 = torch.backends.cuda.matmul.allow_tf32
+            self._prev_cudnn_tf32 = torch.backends.cudnn.allow_tf32
+            torch.backends.cuda.matmul.allow_tf32 = False
+            torch.backends.cudnn.allow_tf32 = False
 
         self.model = torch.nn.Sequential(
-            torch.nn.Linear(256, 256),
+            torch.nn.Linear(2048, 2048),
             torch.nn.ReLU(),
-            torch.nn.Linear(256, 10),
+            torch.nn.Linear(2048, 10),
         ).to(self.device).eval()
         self.parameter_count = sum(p.numel() for p in self.model.parameters())
 
         self.microbatches = [
-            torch.randn(self.batch_size, 256, device=self.device, dtype=torch.float32).contiguous()
+            torch.randn(self.batch_size, 2048, device=self.device, dtype=torch.float32).contiguous()
             for _ in range(self.num_microbatches)
         ]
         self.targets = [
@@ -124,6 +131,10 @@ class OptimizedPerformanceFusionBenchmark(VerificationPayloadMixin, BaseBenchmar
         del self.model, self.microbatches, self.targets, self.optimizer
         self._fused_batches = None
         self._fused_targets = None
+        if self._prev_matmul_tf32 is not None:
+            torch.backends.cuda.matmul.allow_tf32 = self._prev_matmul_tf32
+        if self._prev_cudnn_tf32 is not None:
+            torch.backends.cudnn.allow_tf32 = self._prev_cudnn_tf32
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 

@@ -33,8 +33,8 @@ class OptimizedAIBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.output: Optional[torch.Tensor] = None
         # Must match baseline workload; tuned to make CPU sync overhead visible.
         self.batch = 128
-        self.hidden = 256
-        self.num_blocks = 64
+        self.hidden = 32
+        self.num_blocks = 1024
         # Inference benchmark - jitter check not applicable
         tokens = self.batch * self.hidden * self.num_blocks
         self._workload = WorkloadMetadata(

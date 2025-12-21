@@ -36,6 +36,7 @@ class OptimizedMemoryBoundBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.N = 16_777_216  # Same size as baseline (~64 MB)
         self.repeats = 64
         self.output: Optional[torch.Tensor] = None
+        self._compiled_run = None
         # Memory-bound benchmark - fixed dimensions for roofline analysis
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.repeats),
@@ -52,17 +53,27 @@ class OptimizedMemoryBoundBenchmark(VerificationPayloadMixin, BaseBenchmark):
             requests_per_iteration=self._workload.requests_per_iteration,
             tokens_per_iteration=self._workload.tokens_per_iteration,
         )
+        if not hasattr(torch, "compile"):
+            raise RuntimeError("torch.compile is required for the fused memory-bound optimization.")
+
+        def fused_kernel(t: torch.Tensor) -> torch.Tensor:
+            for _ in range(self.repeats):
+                t = t * 1.0001 + 0.0001
+            return t
+
+        self._compiled_run = torch.compile(fused_kernel, mode="reduce-overhead", fullgraph=True)
+        # Warmup to trigger compilation outside the timed region.
+        _ = self._compiled_run(self.data)
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Fused operations (high AI)."""
         if self.data is None:
             raise RuntimeError("Data tensor not initialized")
+        if self._compiled_run is None:
+            raise RuntimeError("Compiled kernel not initialized")
         with self._nvtx_range("memory_bound"):
-            # Preserve baseline semantics: start from the same input each call.
-            t = self.data.detach().clone()
-            for _ in range(self.repeats):
-                t.mul_(1.0001).add_(0.0001)
-            self.output = t
+            self.output = self._compiled_run(self.data)
         self._synchronize()
         if self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")

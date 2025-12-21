@@ -1,12 +1,12 @@
 """Optimized matmul benchmark: Pipelined tcgen05 kernel variant.
 
-CHAPTER 10 CONTEXT: Uses a 2-stage pipelined tcgen05 kernel from the
+CHAPTER 10 CONTEXT: Uses an advanced pipelined tcgen05 kernel from the
 custom_vs_cublas lab to overlap compute and memory via double-buffering.
 
 Key optimizations over basic tcgen05:
 1. Double-buffered shared memory for async prefetch
 2. Overlapped TMA loads with MMA compute
-3. Better warp scheduling
+3. Reduced barrier waits (no-wait pipeline pattern)
 
 Compare against:
 - baseline_matmul_tcgen05.py (cuBLAS) - The gold standard
@@ -26,7 +26,7 @@ from ch10.matmul_extension_tcgen05 import load_matmul_tcgen05_module
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from core.benchmark.tcgen05_requirements import check_tcgen05_support
-from labs.custom_vs_cublas.tcgen05_loader import matmul_tcgen05_pipelined
+from labs.custom_vs_cublas.tcgen05_loader import matmul_tcgen05_no_wait
 
 
 class OptimizedMatmulTCGen05PipelinedBenchmark(VerificationPayloadMixin, BaseBenchmark):
@@ -68,7 +68,7 @@ class OptimizedMatmulTCGen05PipelinedBenchmark(VerificationPayloadMixin, BaseBen
         assert self.A is not None and self.B is not None
         with self._nvtx_range("optimized_matmul_tcgen05_pipelined"):
             with torch.no_grad():
-                self.output = matmul_tcgen05_pipelined(self.A, self.B)
+                self.output = matmul_tcgen05_no_wait(self.A, self.B)
         self._synchronize()
         if self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
@@ -102,7 +102,7 @@ class OptimizedMatmulTCGen05PipelinedBenchmark(VerificationPayloadMixin, BaseBen
         return {
             "matrix_size": self.size,
             "theoretical_flops": flops,
-            "optimization": "pipelined tcgen05 (2-stage async overlap)",
+            "optimization": "pipelined tcgen05 (no-wait async overlap)",
             "pipelined_kernel_available": True,
         }
 

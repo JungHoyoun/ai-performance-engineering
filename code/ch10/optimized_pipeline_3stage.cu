@@ -31,7 +31,7 @@
     } while (0)
 
 constexpr int BLOCK_SIZE = 256;
-constexpr int NUM_STREAMS = 4;  // Multiple streams for parallelism
+constexpr int NUM_STREAMS = 8;  // Multiple streams for parallelism
 
 //============================================================================
 // Same compute kernel as baseline
@@ -70,7 +70,7 @@ int main() {
     
     // Problem size - same as baseline
     const int N = 16 * 1024 * 1024;  // 16M elements
-    const int NUM_SEGMENTS = 8;
+    const int NUM_SEGMENTS = 16;
     const int SEGMENT_SIZE = N / NUM_SEGMENTS;
     
     printf("Elements: %d (%.1f MB)\n", N, N * sizeof(float) / 1e6);
