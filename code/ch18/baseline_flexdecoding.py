@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import statistics
 import sys
-import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -47,6 +46,8 @@ class FlexDecodingHarness(VerificationPayloadMixin, BaseBenchmark):
         self._last_output: Optional[torch.Tensor] = None
         self.parameter_count: int = 0
         self._verification_payload = None
+        self._prefill_events: Optional[tuple[torch.cuda.Event, torch.cuda.Event]] = None
+        self._decode_events: Optional[List[tuple[torch.cuda.Event, torch.cuda.Event]]] = None
         total_tokens = self.config.max_seq_len + self.decode_tokens
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,
@@ -88,12 +89,34 @@ class FlexDecodingHarness(VerificationPayloadMixin, BaseBenchmark):
             device=self.device,
             dtype=self.config.dtype,
         )
+        self._prefill_events = (
+            torch.cuda.Event(enable_timing=True),
+            torch.cuda.Event(enable_timing=True),
+        )
+        self._decode_events = [
+            (torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True))
+            for _ in range(self.decode_tokens)
+        ]
         torch.cuda.synchronize(self.device)
+
+    def _prefill_step(self) -> torch.Tensor:
+        if self.model is None or self.prefill_tokens is None:
+            raise RuntimeError("Model/tokens not initialized")
+        return self.model.prefill(self.prefill_tokens)
+
+    def _decode_step(self, token: torch.Tensor, position: int) -> torch.Tensor:
+        if self.model is None:
+            raise RuntimeError("Model not initialized")
+        return self.model.decode(token, position)
 
     # --------------------------------------------------------------- benchmark_fn
     def benchmark_fn(self) -> Dict[str, List[float]]:
         if self.model is None or self.prefill_tokens is None or self.decode_token is None:
             raise RuntimeError("Model/tokens not initialized")
+        if self._prefill_events is None or self._decode_events is None:
+            raise RuntimeError("Timing events not initialized")
+        if len(self._decode_events) != self.decode_tokens:
+            raise RuntimeError("Timing event count mismatch")
 
         prefill_times: List[float] = []
         decode_times: List[float] = []
@@ -101,17 +124,21 @@ class FlexDecodingHarness(VerificationPayloadMixin, BaseBenchmark):
 
         with torch.no_grad():
             with self._nvtx_range("flex_prefill"):
-                start = time.perf_counter()
-                prefill_out = self.model.prefill(self.prefill_tokens)
-                torch.cuda.synchronize(self.device)
-                prefill_times.append((time.perf_counter() - start) * 1000.0)
+                prefill_start, prefill_end = self._prefill_events
+                prefill_start.record()
+                prefill_out = self._prefill_step()
+                prefill_end.record()
 
             with self._nvtx_range("flex_decode"):
                 for pos in range(self.decode_tokens):
-                    start = time.perf_counter()
-                    decode_out = self.model.decode(self.decode_token, base_position + pos)
-                    torch.cuda.synchronize(self.device)
-                    decode_times.append((time.perf_counter() - start) * 1000.0)
+                    start_evt, end_evt = self._decode_events[pos]
+                    start_evt.record()
+                    decode_out = self._decode_step(self.decode_token, base_position + pos)
+                    end_evt.record()
+
+        torch.cuda.synchronize(self.device)
+        prefill_times.append(prefill_start.elapsed_time(prefill_end))
+        decode_times.extend(start.elapsed_time(end) for start, end in self._decode_events)
 
         # Store last output for verification
         self._last_output = decode_out if 'decode_out' in dir() else prefill_out

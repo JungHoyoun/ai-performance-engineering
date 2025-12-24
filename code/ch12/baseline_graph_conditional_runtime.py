@@ -111,6 +111,7 @@ class BaselineGraphBenchmark(VerificationPayloadMixin, BaseBenchmark):
             iterations=100,
             warmup=20,
             ncu_replay_mode="application",
+            adaptive_iterations=False,
         )
     
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:

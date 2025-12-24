@@ -143,7 +143,7 @@ PROTECTIONS = {
         ("Background Process Noise", "process.*isolation|background"),
     ],
     
-    # EVALUATION (7 issues)
+    # EVALUATION (8 issues)
     "Evaluation": [
         ("Eval Code Exploitation", "contract|benchmark.*contract"),
         ("Timeout Manipulation", "config.*immutab|timeout"),
@@ -151,6 +151,8 @@ PROTECTIONS = {
         ("Test Data Leakage", "contaminat|leakage"),
         ("Benchmark Overfitting", "fresh.*input|jitter|overfit"),
         ("Self-Modifying Tests", "config.*immutab|self.*modify"),
+        ("Benchmark Memorization", "memorization|hash"),
+        ("Missing Holdout Sets", "holdout"),
     ],
 }
 
@@ -295,4 +297,3 @@ def test_{func_name}_detection():
 if __name__ == "__main__":
     covered, total = main()
     sys.exit(0 if covered >= total * 0.9 else 1)  # Fail if <90% covered
-

@@ -5,6 +5,7 @@
 #include <cuda_runtime.h>
 
 #include <array>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -19,6 +20,33 @@ namespace {
     } while (0)
 
 constexpr int NUM_STREAMS = 8;
+
+struct MemPoolState {
+    cudaMemPool_t pool = nullptr;
+    uint64_t prev_threshold = 0;
+    bool active = false;
+};
+
+MemPoolState configure_mem_pool(bool enable) {
+    MemPoolState state;
+    if (!enable) {
+        return state;
+    }
+    CUDA_CHECK(cudaDeviceGetDefaultMemPool(&state.pool, 0));
+    CUDA_CHECK(cudaMemPoolGetAttribute(state.pool, cudaMemPoolAttrReleaseThreshold, &state.prev_threshold));
+    uint64_t threshold = std::numeric_limits<uint64_t>::max();
+    CUDA_CHECK(cudaMemPoolSetAttribute(state.pool, cudaMemPoolAttrReleaseThreshold, &threshold));
+    state.active = true;
+    return state;
+}
+
+void restore_mem_pool(const MemPoolState& state) {
+    if (!state.active) {
+        return;
+    }
+    uint64_t threshold = state.prev_threshold;
+    CUDA_CHECK(cudaMemPoolSetAttribute(state.pool, cudaMemPoolAttrReleaseThreshold, &threshold));
+}
 
 __global__ void scale_kernel(const float* __restrict__ input,
                              float* __restrict__ output,
@@ -38,7 +66,9 @@ void run_allocation_workload(int64_t elements, int iterations, bool stream_order
     TORCH_CHECK(elements > 0, "elements must be > 0");
     TORCH_CHECK(iterations > 0, "iterations must be > 0");
     size_t bytes = static_cast<size_t>(elements) * sizeof(float);
-    
+
+    auto pool_state = configure_mem_pool(stream_ordered);
+
     std::array<cudaStream_t, NUM_STREAMS> streams{};
     for (auto& st : streams) {
         CUDA_CHECK(cudaStreamCreateWithFlags(&st, cudaStreamNonBlocking));
@@ -99,6 +129,7 @@ void run_allocation_workload(int64_t elements, int iterations, bool stream_order
     }
 
     CUDA_CHECK(cudaDeviceSynchronize());
+    restore_mem_pool(pool_state);
     
     for (auto& st : streams) {
         CUDA_CHECK(cudaStreamDestroy(st));
@@ -122,6 +153,7 @@ torch::Tensor run_standard_allocator_capture(int64_t elements, int iterations) {
     TORCH_CHECK(elements > 0, "elements must be > 0");
     TORCH_CHECK(iterations > 0, "iterations must be > 0");
     size_t bytes = static_cast<size_t>(elements) * sizeof(float);
+    auto pool_state = configure_mem_pool(false);
 
     std::array<cudaStream_t, NUM_STREAMS> streams{};
     for (auto& st : streams) {
@@ -161,6 +193,7 @@ torch::Tensor run_standard_allocator_capture(int64_t elements, int iterations) {
     }
 
     CUDA_CHECK(cudaDeviceSynchronize());
+    restore_mem_pool(pool_state);
 
     auto out = torch::empty({NUM_STREAMS}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
     float* out_ptr = out.data_ptr<float>();
@@ -182,6 +215,7 @@ torch::Tensor run_stream_ordered_allocator_capture(int64_t elements, int iterati
     TORCH_CHECK(elements > 0, "elements must be > 0");
     TORCH_CHECK(iterations > 0, "iterations must be > 0");
     size_t bytes = static_cast<size_t>(elements) * sizeof(float);
+    auto pool_state = configure_mem_pool(true);
 
     std::array<cudaStream_t, NUM_STREAMS> streams{};
     for (auto& st : streams) {
@@ -221,6 +255,7 @@ torch::Tensor run_stream_ordered_allocator_capture(int64_t elements, int iterati
     }
 
     CUDA_CHECK(cudaDeviceSynchronize());
+    restore_mem_pool(pool_state);
 
     auto out = torch::empty({NUM_STREAMS}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
     float* out_ptr = out.data_ptr<float>();

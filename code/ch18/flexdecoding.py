@@ -36,7 +36,7 @@ from typing import Iterable, List, Optional
 import torch
 import torch.nn.functional as F
 
-from core.utils.compile_utils import enable_tf32, compile_callable
+from core.utils.compile_utils import compile_callable
 
 try:
     from torch.nn.attention import flex_attention
@@ -142,7 +142,6 @@ class FlexDecodingModule(torch.nn.Module):
         # Blackwell is sm_100 (major=10), not sm_120
         if major < 10:
             raise RuntimeError(f"SKIPPED: FlexDecoding targets Blackwell (sm_100+); found sm_{major}{minor}")
-        enable_tf32()
         self.compile_mode = COMPILE_MODE
         if self.use_flex_attention and not QUICK_MODE:
             self.compile_mode = "max-autotune"

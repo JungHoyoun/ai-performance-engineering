@@ -142,7 +142,7 @@ class OptimizedMoEReadinessBenchmark(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             launch_via=LaunchVia.TORCHRUN,
-            nproc_per_node=4,
+            nproc_per_node=2,
             iterations=1,
             warmup=5,
             multi_gpu_required=True,
