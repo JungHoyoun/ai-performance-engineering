@@ -99,7 +99,7 @@ def _score_mod_causal_with_offset(window_size: int, offset: torch.Tensor):
 class FlexDecodingConfig:
     dim: int = 512
     heads: int = 8
-    max_seq_len: int = 4096
+    max_seq_len: int = 16384
     window: int = 512
     dtype: torch.dtype = torch.bfloat16
 
@@ -152,7 +152,8 @@ class FlexDecodingModule(torch.nn.Module):
         head_dim = self.head_dim
         heads = self.cfg.heads
 
-        prefill_len = self.cfg.window * 2
+        window = self.cfg.window
+        prefill_len = window * 2
         max_kv_len = self.cfg.max_seq_len
         dtype = next(self.parameters()).dtype
         q_prefill = torch.zeros(1, heads, prefill_len, head_dim, device=device, dtype=dtype)
@@ -174,8 +175,9 @@ class FlexDecodingModule(torch.nn.Module):
                 q_positions = torch.arange(seq_q, device=attn.device).unsqueeze(-1)
                 q_positions = q_positions + offset
                 k_positions = torch.arange(seq_k, device=attn.device).unsqueeze(0)
-                causal = (q_positions >= k_positions).to(attn.dtype)
-                attn = attn + (causal - 1.0) * 1e9  # large negative for masked entries
+                delta = q_positions - k_positions
+                in_window = (delta >= 0) & (delta <= window)
+                attn = attn.masked_fill(~in_window, -1e9)
                 probs = torch.softmax(attn, dim=-1)
                 out = torch.matmul(probs, vh)
                 return out.transpose(1, 2)
@@ -207,8 +209,8 @@ class FlexDecodingModule(torch.nn.Module):
             self.flex_enabled = False
 
         if self.use_flex_attention:
-            score_mod_prefill = _score_mod_causal()
-            score_mod_decode = _score_mod_causal_with_offset(self.offset)
+            score_mod_prefill = _score_mod_causal(window)
+            score_mod_decode = _score_mod_causal_with_offset(window, self.offset)
             def prefill(q, k, v):
                 return flex_attention.flex_attention(
                     q, k, v, score_mod=score_mod_prefill

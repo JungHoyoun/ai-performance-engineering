@@ -88,7 +88,6 @@ void run_allocation_workload(int64_t elements, int iterations, bool stream_order
         }
         
         for (int s = 0; s < NUM_STREAMS; ++s) {
-            CUDA_CHECK(cudaStreamSynchronize(streams[s]));
             if (stream_ordered) {
                 CUDA_CHECK(cudaFreeAsync(d_in[s], streams[s]));
                 CUDA_CHECK(cudaFreeAsync(d_out[s], streams[s]));
@@ -98,6 +97,8 @@ void run_allocation_workload(int64_t elements, int iterations, bool stream_order
             }
         }
     }
+
+    CUDA_CHECK(cudaDeviceSynchronize());
     
     for (auto& st : streams) {
         CUDA_CHECK(cudaStreamDestroy(st));
@@ -154,11 +155,12 @@ torch::Tensor run_standard_allocator_capture(int64_t elements, int iterations) {
         }
 
         for (int s = 0; s < NUM_STREAMS; ++s) {
-            CUDA_CHECK(cudaStreamSynchronize(streams[s]));
             CUDA_CHECK(cudaFree(d_in[s]));
             CUDA_CHECK(cudaFree(d_out[s]));
         }
     }
+
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     auto out = torch::empty({NUM_STREAMS}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
     float* out_ptr = out.data_ptr<float>();
@@ -213,11 +215,12 @@ torch::Tensor run_stream_ordered_allocator_capture(int64_t elements, int iterati
         }
 
         for (int s = 0; s < NUM_STREAMS; ++s) {
-            CUDA_CHECK(cudaStreamSynchronize(streams[s]));
             CUDA_CHECK(cudaFreeAsync(d_in[s], streams[s]));
             CUDA_CHECK(cudaFreeAsync(d_out[s], streams[s]));
         }
     }
+
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     auto out = torch::empty({NUM_STREAMS}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
     float* out_ptr = out.data_ptr<float>();
