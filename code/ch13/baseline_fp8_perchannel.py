@@ -173,6 +173,7 @@ class BaselineFP8PerChannelBenchmark(VerificationPayloadMixin, BaseBenchmark):
         return BenchmarkConfig(
             iterations=50,
             warmup=10,
+            timing_method="wall_clock",
         )
     
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:

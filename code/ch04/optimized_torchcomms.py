@@ -180,6 +180,9 @@ class OptimizedTorchcommsBenchmark(BaseBenchmark):
     def get_output_tolerance(self) -> tuple:
         return (1e-5, 1e-5)
 
+    def get_verify_output(self) -> torch.Tensor:
+        raise RuntimeError("optimized_torchcomms does not expose verification outputs in-process.")
+
 
 def get_benchmark() -> BaseBenchmark:
     return OptimizedTorchcommsBenchmark()

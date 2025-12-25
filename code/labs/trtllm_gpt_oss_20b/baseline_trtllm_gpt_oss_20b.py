@@ -1,0 +1,155 @@
+"""Baseline Transformers generate for gpt-oss-20b."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from typing import Optional
+
+import torch
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from core.benchmark.verification_mixin import VerificationPayloadMixin
+from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
+from labs.trtllm_gpt_oss_20b.trtllm_common import build_prompt_tokens, parse_trtllm_args, slice_logits
+
+
+class BaselineTrtLlmGptOssBenchmark(VerificationPayloadMixin, BaseBenchmark):
+    """Baseline HF Transformers generation for gpt-oss-20b."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        args = parse_trtllm_args()
+        self.model_path = Path(args.model_path)
+        self.prompt_len = args.prompt_len
+        self.max_new_tokens = args.max_new_tokens
+        self.batch_size = args.batch_size
+        self.vocab_slice = args.vocab_slice
+        self.model = None
+        self.tokenizer = None
+        self.input_ids: Optional[torch.Tensor] = None
+        self.attention_mask: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
+        tokens = float(self.prompt_len + self.max_new_tokens)
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=tokens,
+        )
+        self.register_workload_metadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=tokens,
+        )
+
+    def setup(self) -> None:
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA is required for the TRT-LLM gpt-oss-20b baseline")
+        if not self.model_path.exists():
+            raise RuntimeError(
+                f"Model path not found: {self.model_path}. "
+                "Provide --model-path to a local gpt-oss-20b checkout."
+            )
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
+        try:
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+        except ImportError as exc:
+            raise RuntimeError("Transformers is required for the baseline TRT-LLM lab") from exc
+
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
+        input_ids, attention_mask = build_prompt_tokens(
+            self.tokenizer,
+            prompt_len=self.prompt_len,
+            batch_size=self.batch_size,
+        )
+        self.input_ids = input_ids.to(self.device)
+        self.attention_mask = attention_mask.to(self.device)
+
+        self.model = AutoModelForCausalLM.from_pretrained(
+            self.model_path,
+            torch_dtype=torch.float16,
+            attn_implementation="eager",
+            trust_remote_code=False,
+        ).to(self.device)
+        self.model.eval()
+        self._synchronize()
+
+    def benchmark_fn(self) -> None:
+        if self.model is None or self.input_ids is None or self.attention_mask is None:
+            raise RuntimeError("Benchmark not initialized")
+        with self._nvtx_range("baseline_trtllm_gpt_oss"):
+            with torch.inference_mode():
+                outputs = self.model.generate(
+                    input_ids=self.input_ids,
+                    attention_mask=self.attention_mask,
+                    max_new_tokens=self.max_new_tokens,
+                    do_sample=False,
+                    num_beams=1,
+                    use_cache=True,
+                    output_scores=True,
+                    return_dict_in_generate=True,
+                )
+                if not outputs.scores:
+                    raise RuntimeError("Transformers generate did not return scores")
+                logits = outputs.scores[0]
+                self.output = slice_logits(logits, self.vocab_slice).float()
+        self._synchronize()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+
+    def capture_verification_payload(self) -> None:
+        if self.output is None or self.input_ids is None:
+            raise RuntimeError("setup() and benchmark_fn() must run before capture_verification_payload()")
+        verify_output = self.output[:1, :128]
+        parameter_count = 0
+        if self.model is not None:
+            parameter_count = sum(p.numel() for p in self.model.parameters())
+        self._set_verification_payload(
+            inputs={"input_ids": self.input_ids},
+            output=verify_output.detach().clone(),
+            batch_size=int(self.batch_size),
+            parameter_count=parameter_count,
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(1e-2, 1e-2),
+            signature_overrides={
+                "prompt_len": self.prompt_len,
+                "max_new_tokens": self.max_new_tokens,
+            },
+        )
+
+    def teardown(self) -> None:
+        self.model = None
+        self.tokenizer = None
+        self.input_ids = None
+        self.attention_mask = None
+        self.output = None
+        torch.cuda.empty_cache()
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(iterations=5, warmup=2)
+
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
+    def validate_result(self) -> Optional[str]:
+        if self.output is None:
+            return "benchmark_fn() did not produce output"
+        return None
+
+
+def get_benchmark() -> BaseBenchmark:
+    return BaselineTrtLlmGptOssBenchmark()
+
+
+if __name__ == "__main__":
+    from core.harness.benchmark_harness import benchmark_main
+
+    benchmark_main(get_benchmark)

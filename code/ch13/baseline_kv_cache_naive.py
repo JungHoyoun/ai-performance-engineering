@@ -216,7 +216,7 @@ class BaselineKVCacheNaiveBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
-            iterations=1,
+            iterations=3,
             warmup=5,
             enable_memory_tracking=False,
             enable_profiling=False,
@@ -224,6 +224,7 @@ class BaselineKVCacheNaiveBenchmark(VerificationPayloadMixin, BaseBenchmark):
             warmup_timeout_seconds=120,
             setup_timeout_seconds=120,
             timeout_multiplier=1.0,
+            ncu_replay_mode="application",
         )
     
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:

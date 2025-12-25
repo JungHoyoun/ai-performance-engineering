@@ -23,6 +23,9 @@ This lab demonstrates how to overlap data loading with GPU computation using PyT
 | `pipeline.py` | Shared helpers: `PipelineConfig`, DataLoader builder, benchmark base |
 | `baseline_async_input_pipeline.py` | No overlap: synchronous loading |
 | `optimized_async_input_pipeline.py` | Full overlap: pinned memory + async + workers |
+| `nvcomp_pipeline_common.py` | nvCOMP zstd helpers for CPU vs GPU decode |
+| `baseline_nvcomp_input_pipeline.py` | CPU zstd decode baseline |
+| `optimized_nvcomp_input_pipeline.py` | GPU nvCOMP zstd decode |
 
 ## Running
 
@@ -31,6 +34,11 @@ This lab demonstrates how to overlap data loading with GPU computation using PyT
 python -m cli.aisp bench compare \
     labs.async_input_pipeline.baseline_async_input_pipeline \
     labs.async_input_pipeline.optimized_async_input_pipeline
+
+# Compare CPU vs GPU nvCOMP decode
+python -m cli.aisp bench compare \
+    labs.async_input_pipeline.baseline_nvcomp_input_pipeline \
+    labs.async_input_pipeline.optimized_nvcomp_input_pipeline
 
 # Profile with nsys
 nsys profile -o async_pipeline python labs/async_input_pipeline/optimized_async_input_pipeline.py
@@ -60,10 +68,16 @@ In **nsys** profiles:
 - Check for gaps between compute kernels (indicates data starvation)
 - Compare "CUDA API" row between baseline and optimized
 
+For nvCOMP decoding:
+- Focus on CPU decompress time vs GPU decode throughput.
+- Ensure compressed payloads stay on GPU for the optimized path.
+
 ## Related Chapters
 
 - **Ch2**: Memory hierarchy and transfer types
 - **Ch5**: Storage I/O and DataLoader tuning
 - **Ch11**: CUDA streams and async execution
 
-
+## Dependencies
+- `zstandard` for CPU zstd decode in the nvCOMP baseline.
+- CuPy built with `cupy.cuda.nvcomp` support for GPU zstd decode.

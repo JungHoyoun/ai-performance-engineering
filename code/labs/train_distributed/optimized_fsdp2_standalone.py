@@ -254,6 +254,9 @@ class OptimizedFSDP2Benchmark(BaseBenchmark):
     def get_output_tolerance(self) -> tuple:
         return (0.1, 1.0)
 
+    def get_verify_output(self) -> torch.Tensor:
+        raise RuntimeError("optimized_fsdp2_standalone does not expose verification outputs in-process.")
+
 
 def get_benchmark() -> BaseBenchmark:
     return OptimizedFSDP2Benchmark()

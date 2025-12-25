@@ -136,4 +136,8 @@ class SlidingWindowAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         return None
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=5, warmup=5)
+        return BenchmarkConfig(
+            iterations=5,
+            warmup=5,
+            timing_method="wall_clock",
+        )

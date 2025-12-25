@@ -15,6 +15,7 @@
 - ALWAYS lock GPU clocks before any benchmark/profiling run; focus on relative performance rather than absolute numbers.
 - Fix as many variables as possible (persistence mode, power limits, thermal state) and keep them stable across baseline/optimized runs.
 - Use the repo’s clock-locking mechanism (`lock_gpu_clocks` in the harness); do not manually invoke `nvidia-smi` to lock clocks.
+- NEVER disable Nsight tools (ncu/nsys); profiling runs must use both and they must succeed.
 
 ## Test Realism (CRITICAL)
 - Tests MUST NOT use `precheck_only`, `dry_run`, `estimate_only`, or any other short-circuit/preview mode.

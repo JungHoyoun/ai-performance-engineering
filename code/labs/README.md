@@ -14,6 +14,7 @@ Labs are end-to-end optimization stories that combine multiple chapter technique
 | `labs/decode_optimization/` | Decoder hot-path optimization | ch18, ch19 |
 | `labs/dynamic_router/` | Dynamic prefill/decode routing | ch17, ch19 |
 | `labs/flashattention_gluon/` | FlashAttention experimentation | ch18 |
+| `labs/flashinfer_attention/` | FlashInfer block-sparse attention lab | ch16 |
 | `labs/flexattention/` | FlexAttention harness and sweeps | ch18 |
 | `labs/fullstack_cluster/` | Full-stack cluster + DSMEM workflows | ch10 |
 | `labs/kv_cache_compression/` | KV-cache compression/quantization | ch18, ch19 |
@@ -26,10 +27,11 @@ Labs are end-to-end optimization stories that combine multiple chapter technique
 | `labs/persistent_decode/` | Persistent decode + TMA prefill | ch10, ch11 |
 | `labs/real_world_models/` | Real-world model optimization playbook | ch20 |
 | `labs/speculative_decode/` | Speculative decoding | ch15, ch18 |
+| `labs/structured_sparsity/` | 2:4 structured sparsity SwiGLU FFN lab | ch09, ch12 |
+| `labs/trtllm_gpt_oss_20b/` | TensorRT-LLM gpt-oss-20b comparison | ch16, ch18 |
 | `labs/train_distributed/` | Distributed training workflows | ch03, ch04 |
 | `labs/uma_memory/` | UMA / unified memory diagnostics | ch02, ch07 |
 
 Notes:
 - “Suggested Chapters” is a best-effort map; when a lab has an explicit mapping, it is documented in that lab’s `README.md`.
 - `labs/common/` contains shared helpers and is not a standalone lab target.
-

@@ -220,6 +220,7 @@ class BaselinePipelineParallelBenchmark(BaseBenchmark):
         )
 
     def get_input_signature(self) -> dict:
+        layers_per_stage = _DEFAULT_LAYERS // 2
         signature = simple_signature(
             batch_size=_DEFAULT_BATCH,
             dtype="bfloat16",
@@ -230,11 +231,18 @@ class BaselinePipelineParallelBenchmark(BaseBenchmark):
         )
         signature.world_size = 2
         signature.pipeline_stages = 2
+        signature.pipeline_stage_boundaries = [
+            (0, layers_per_stage - 1),
+            (layers_per_stage, _DEFAULT_LAYERS - 1),
+        ]
         signature.collective_type = "send_recv"
         return signature
 
     def get_output_tolerance(self) -> tuple:
         return (0.1, 1.0)
+
+    def get_verify_output(self) -> torch.Tensor:
+        raise RuntimeError("baseline_pipeline_parallel does not expose verification outputs in-process.")
 
 
 def get_benchmark() -> BaseBenchmark:

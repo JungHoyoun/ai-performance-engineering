@@ -198,6 +198,9 @@ class OptimizedTensorParallelBenchmark(BaseBenchmark):
     def get_output_tolerance(self) -> tuple:
         return (0.1, 1.0)
 
+    def get_verify_output(self) -> torch.Tensor:
+        raise RuntimeError("optimized_tensor_parallel_async does not expose verification outputs in-process.")
+
 
 def get_benchmark() -> BaseBenchmark:
     return OptimizedTensorParallelBenchmark()

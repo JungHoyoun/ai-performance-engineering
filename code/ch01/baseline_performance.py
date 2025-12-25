@@ -80,8 +80,6 @@ class BaselinePerformanceBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._verify_input = None
         self._verify_output = None
         self.parameter_count = 0
-        self._prev_matmul_tf32 = None
-        self._prev_cudnn_tf32 = None
         samples = float(self.batch_size * self.num_microbatches)
         self.register_workload_metadata(samples_per_iteration=samples)
     
@@ -90,11 +88,6 @@ class BaselinePerformanceBenchmark(VerificationPayloadMixin, BaseBenchmark):
         # Seed FIRST for deterministic verification
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-        if self.device.type == "cuda":
-            self._prev_matmul_tf32 = torch.backends.cuda.matmul.allow_tf32
-            self._prev_cudnn_tf32 = torch.backends.cudnn.allow_tf32
-            torch.backends.cuda.matmul.allow_tf32 = False
-            torch.backends.cudnn.allow_tf32 = False
         
         self.model = torch.nn.Sequential(
             torch.nn.Linear(self.hidden_dim, self.hidden_dim),
@@ -192,10 +185,6 @@ class BaselinePerformanceBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def teardown(self) -> None:
         """Cleanup."""
         del self.model, self.microbatches, self.targets, self.optimizer
-        if self._prev_matmul_tf32 is not None:
-            torch.backends.cuda.matmul.allow_tf32 = self._prev_matmul_tf32
-        if self._prev_cudnn_tf32 is not None:
-            torch.backends.cudnn.allow_tf32 = self._prev_cudnn_tf32
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
     

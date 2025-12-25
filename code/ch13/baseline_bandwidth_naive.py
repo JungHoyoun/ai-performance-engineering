@@ -124,6 +124,7 @@ class BaselineBandwidthNaiveBenchmark(VerificationPayloadMixin, BaseBenchmark):
             warmup=10,
             enable_memory_tracking=False,
             enable_profiling=False,
+            timing_method="wall_clock",
         )
     
     def get_custom_metrics(self) -> Optional[dict]:

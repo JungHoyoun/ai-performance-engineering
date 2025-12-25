@@ -15,13 +15,14 @@
   } while (0)
 
 constexpr int N = 1 << 16;
+constexpr int KERNEL_ITERS = 1024;
 
 __global__ void expensive_kernel(float* data, int n, float scale) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
         float val = data[idx];
-        #pragma unroll
-        for (int i = 0; i < 16; ++i) {
+        #pragma unroll 4
+        for (int i = 0; i < KERNEL_ITERS; ++i) {
             val = sqrtf(val * val + scale) * 0.99f;
         }
         data[idx] = val;
