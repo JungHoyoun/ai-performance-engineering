@@ -56,7 +56,7 @@ class OptimizedStructuredSparsityFFNBenchmark(VerificationPayloadMixin, BaseBenc
     def capture_verification_payload(self) -> None:
         if self.ffn is None or self.output is None or self.ffn.input is None:
             raise RuntimeError("setup() and benchmark_fn() must run before capture_verification_payload()")
-        verify_output = self.output[:128, :128]
+        verify_output = self.output.t()[:128, :128]
         parameter_count = 0
         if self.ffn.w1 is not None:
             parameter_count += self.ffn.w1.numel()

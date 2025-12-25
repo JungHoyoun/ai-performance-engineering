@@ -9,12 +9,14 @@ import torch
 from core.benchmark.tcgen05_matmul_base import Tcgen05MatmulBenchmarkBase
 from core.benchmark.tcgen05_requirements import ensure_tcgen05_supported
 from core.common.tcgen05 import load_tcgen05_pipelined_module
-from core.harness.benchmark_harness import BaseBenchmark
+from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 
 
 class BaselineTcgen05ClusterPipelineBenchmark(Tcgen05MatmulBenchmarkBase):
     """Chapter 10 baseline: pipelined tcgen05 without cluster launch."""
 
+    matrix_rows = 6144
+    matrix_cols = 6144
     shared_dim = 2048
     nvtx_label = "baseline_tcgen05_cluster_pipeline"
 
@@ -38,6 +40,9 @@ class BaselineTcgen05ClusterPipelineBenchmark(Tcgen05MatmulBenchmarkBase):
             with torch.no_grad():
                 self.output = self.extension.matmul_tcgen05_pipelined(self.matrix_a, self.matrix_b)
         self._synchronize()
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(iterations=10, warmup=5)
 
 
 def get_benchmark() -> BaseBenchmark:

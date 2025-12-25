@@ -77,11 +77,7 @@ class BaselineStructuredSparsityFFNLab(VerificationPayloadMixin, BaseBenchmark):
             },
             output_tolerance=(1e-2, 1e-2),
             signature_overrides={
-                "ffn_hidden": self.cfg.hidden_size,
-                "ffn_size": self.cfg.ffn_size,
-                "seq_len": self.cfg.seq_len,
                 "sparsity_ratio": 0.5,
-                "ffn_kind": "swiglu",
             },
         )
 

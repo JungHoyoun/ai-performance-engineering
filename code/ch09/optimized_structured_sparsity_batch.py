@@ -49,7 +49,7 @@ class OptimizedStructuredSparsityBatchBenchmark(VerificationPayloadMixin, BaseBe
         if not torch.backends.cusparselt.is_available():
             raise RuntimeError("cuSPARSELt is required for structured sparsity benchmarks")
         self.input = torch.randn(self.m, self.k, device=self.device, dtype=torch.float16)
-        self.input_t = self.input.t().contiguous()
+        self.input_t = self.input.t()
         dense_weight = torch.randn(self.n, self.k, device=self.device, dtype=torch.float16)
         self.weight = prune_2_4(dense_weight)
         self.weight_compressed = torch._cslt_compress(self.weight)
@@ -61,7 +61,7 @@ class OptimizedStructuredSparsityBatchBenchmark(VerificationPayloadMixin, BaseBe
             None,
             None,
             None,
-            True,
+            False,
         )
         self.alg_id = int(alg_id)
         self.split_k = int(split_k)
@@ -81,7 +81,7 @@ class OptimizedStructuredSparsityBatchBenchmark(VerificationPayloadMixin, BaseBe
             self.output = torch._cslt_sparse_mm(
                 self.weight_compressed,
                 self.input_t,
-                transpose_result=True,
+                transpose_result=False,
                 alg_id=self.alg_id,
                 split_k=self.split_k,
                 split_k_mode=self.split_k_mode,
@@ -93,7 +93,7 @@ class OptimizedStructuredSparsityBatchBenchmark(VerificationPayloadMixin, BaseBe
     def capture_verification_payload(self) -> None:
         if self.input is None or self.weight is None or self.output is None:
             raise RuntimeError("setup() and benchmark_fn() must run before capture_verification_payload()")
-        verify_output = self.output[:256, :256]
+        verify_output = self.output.t()[:256, :256]
         self._set_verification_payload(
             inputs={"input": self.input, "weight": self.weight},
             output=verify_output.detach().clone(),

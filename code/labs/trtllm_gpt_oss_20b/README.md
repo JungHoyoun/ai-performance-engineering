@@ -26,6 +26,8 @@ python -m cli.aisp bench run --targets labs/trtllm_gpt_oss_20b \
 - Requires local gpt-oss-20b weights at `gpt-oss-20b/original` (override with `--model-path`).
 - TRT-LLM must be built with `output_generation_logits=True` support; the benchmark validates `generation_logits`.
 - Keep TRT-LLM precision aligned with the baseline (e.g., FP16) to pass output verification.
+- `trtllm_common.load_trtllm_runtime()` loads the runtime submodule directly and calls `_common._init()` to avoid full-package imports.
+- Required runtime deps: TensorRT libs + python bindings, `tensorrt-llm`, `nvtx`, `mpi4py`, `nvidia-modelopt`, `onnx-graphsurgeon`, `h5py`, `pulp`, `soundfile`.
 
 ## Related Chapters
 - **Ch16**: Production inference systems and engine comparisons.

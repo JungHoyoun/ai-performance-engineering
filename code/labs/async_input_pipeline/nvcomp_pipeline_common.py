@@ -66,7 +66,10 @@ class NvcompInputPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
         if self.use_gpu_decode:
             try:
+                from core.utils import nvcomp_shim  # type: ignore
                 import cupy  # type: ignore
+
+                nvcomp_shim.register_nvcomp()
                 from cupy.cuda import nvcomp  # type: ignore
             except Exception as exc:
                 raise RuntimeError("nvCOMP GPU decode requires CuPy with nvcomp support") from exc

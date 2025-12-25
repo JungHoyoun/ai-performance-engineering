@@ -9,6 +9,7 @@
 - DO NOT delete any files, including untracked files or locally modified files, unless I explicitly ask.
 - NEVER delete anything (tracked or untracked, modified or not) unless I explicitly ask.
 - If you notice unexpected local file modifications, always call them out and ask for guidance; default to keeping them as-is and including them in the changes unless I explicitly say otherwise.
+- When you detect modified or untracked files, please treat them as part of this task.
 - The Amazon book link in `README.md` is expected to fail automated link checks due to bot protection; treat it as an allowlisted exception.
 
 ## Benchmark Stability (CRITICAL)

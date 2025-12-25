@@ -1167,6 +1167,28 @@ if [ ! -e "/usr/lib/x86_64-linux-gnu/nvshmem_transport_ibgda.so.3" ] && [ -e "${
     ln -sf "${nvshmem_good_ibgda}.0.0" "/usr/lib/x86_64-linux-gnu/nvshmem_transport_ibgda.so.3"
 fi
 
+# Install nvCOMP (CUDA 13)
+echo ""
+echo "Installing nvCOMP runtime and headers (CUDA 13)..."
+apt install -y libnvcomp5-cuda-13 libnvcomp5-dev-cuda-13
+NVCOMP_LIB_DIR="/usr/lib/$(uname -m)-linux-gnu/nvcomp/13"
+if [ -d "${NVCOMP_LIB_DIR}" ]; then
+    echo "${NVCOMP_LIB_DIR}" > /etc/ld.so.conf.d/nvcomp.conf
+    ldconfig 2>/dev/null || true
+else
+    echo "WARNING: nvCOMP library directory not found at ${NVCOMP_LIB_DIR}"
+fi
+
+# Install TensorRT runtime + Python bindings (CUDA 13)
+echo ""
+echo "Installing TensorRT runtime and Python bindings (CUDA 13)..."
+apt install -y libnvinfer10 libnvinfer-plugin10 libnvinfer-vc-plugin10 libnvonnxparsers10 python3-libnvinfer
+
+# TensorRT-LLM runtime helpers (MPI + audio deps)
+echo ""
+echo "Installing TensorRT-LLM system dependencies (OpenMPI, libsndfile)..."
+apt install -y openmpi-bin libsndfile1
+
 # Ensure nvshmemrun is on PATH for IBGDA/NVSHMEM binaries
 NVSHMEM_BIN_CANDIDATES=(
     "${NVSHMEM_HOME:-/usr/lib/x86_64-linux-gnu}/bin"
@@ -1752,6 +1774,40 @@ if [ -f "$REQUIREMENTS_FILE" ]; then
     echo "  ✓ PyTorch CUDA verified"
     
     echo "✓ accelerate and torchtitan installed (PyTorch CUDA verified)"
+fi
+
+# GPU compression/runtime + TRT-LLM dependencies
+echo ""
+echo "Installing GPU compression/runtime and TRT-LLM dependencies..."
+pip_install --no-input --no-deps "zstandard==0.23.0" || {
+    echo "Warning: zstandard install failed"
+}
+
+echo "Installing CuPy (CUDA 13) for nvCOMP pipelines..."
+pip_uninstall -y cupy-cuda12x cupy-cuda13x cupy >/dev/null 2>&1 || true
+pip_install --no-cache-dir --upgrade --no-deps "cupy-cuda13x==13.6.0" || {
+    echo "Warning: CuPy install failed"
+}
+
+echo "Installing TensorRT-LLM Python packages..."
+pip_install --no-cache-dir --upgrade --no-deps \
+    "tensorrt-llm==1.1.0" \
+    "nvtx==0.2.14" \
+    "mpi4py==4.1.1" \
+    "soundfile==0.13.1" \
+    "onnx-graphsurgeon==0.5.8" \
+    "strenum==0.4.15" \
+    "nvidia-modelopt==0.37.0" \
+    "pulp==3.3.0" \
+    "h5py==3.12.1" \
+    "torchprofile==0.0.4" || {
+    echo "Warning: TensorRT-LLM dependency install failed"
+}
+
+# Verify PyTorch CUDA wasn't overridden by compression/LLM deps
+if ! verify_and_restore_pytorch_cuda "nvCOMP/CuPy/TRT-LLM installation"; then
+    echo "ERROR: PyTorch CUDA missing after nvCOMP/CuPy/TRT-LLM installs!"
+    exit 1
 fi
 
 # Single pin for shared deps to avoid dependency churn

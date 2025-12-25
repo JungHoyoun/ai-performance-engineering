@@ -80,4 +80,5 @@ For nvCOMP decoding:
 
 ## Dependencies
 - `zstandard` for CPU zstd decode in the nvCOMP baseline.
-- CuPy built with `cupy.cuda.nvcomp` support for GPU zstd decode.
+- `libnvcomp5-dev-cuda-13` (and runtime) for GPU-side nvCOMP.
+- CuPy (`cupy-cuda13x`) plus the `core/utils/nvcomp_shim.py` shim that exposes `cupy.cuda.nvcomp`.

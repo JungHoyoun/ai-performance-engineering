@@ -1827,18 +1827,27 @@ benchmark.teardown()
             text=True,
             start_new_session=True,
         )
+        stdout_text = ""
+        stderr_text = ""
         try:
-            process.communicate(timeout=NCU_TIMEOUT_SECONDS)
+            stdout_text, stderr_text = process.communicate(timeout=NCU_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             timed_out = True
             _terminate_process_group(process, f"{benchmark_name}_{variant}", timeout_seconds=NCU_TIMEOUT_SECONDS)
             try:
-                process.communicate(timeout=2)
+                stdout_text, stderr_text = process.communicate(timeout=2)
             except Exception:
                 pass
         except Exception:
             _terminate_process_group(process, f"{benchmark_name}_{variant}")
             return None
+
+        log_base = output_dir / f"{benchmark_name}_{variant}_ncu"
+        if stdout_text:
+            log_base.with_suffix(".stdout.log").write_text(stdout_text)
+        if stderr_text:
+            log_base.with_suffix(".stderr.log").write_text(stderr_text)
+        log_base.with_suffix(".command.json").write_text(json.dumps({"command": ncu_command}, indent=2))
         
         # Check if file exists (ncu may create file even with non-zero exit code)
         if not timed_out:
@@ -1913,18 +1922,27 @@ def profile_cuda_executable_ncu(
             text=True,
             start_new_session=True,
         )
+        stdout_text = ""
+        stderr_text = ""
         try:
-            process.communicate(timeout=NCU_TIMEOUT_SECONDS)
+            stdout_text, stderr_text = process.communicate(timeout=NCU_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             timed_out = True
             _terminate_process_group(process, f"{exec_name}_{variant}", timeout_seconds=NCU_TIMEOUT_SECONDS)
             try:
-                process.communicate(timeout=2)
+                stdout_text, stderr_text = process.communicate(timeout=2)
             except Exception:
                 pass
         except Exception:
             _terminate_process_group(process, f"{exec_name}_{variant}")
             return None
+
+        log_base = output_dir / f"{exec_name}_{variant}_ncu"
+        if stdout_text:
+            log_base.with_suffix(".stdout.log").write_text(stdout_text)
+        if stderr_text:
+            log_base.with_suffix(".stderr.log").write_text(stderr_text)
+        log_base.with_suffix(".command.json").write_text(json.dumps({"command": ncu_command}, indent=2))
         
         # Check if file exists (ncu may create file even with non-zero exit code)
         if not timed_out:

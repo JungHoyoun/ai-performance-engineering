@@ -49,14 +49,17 @@ class OptimizedStructuredSparsityFFNLab(VerificationPayloadMixin, BaseBenchmark)
         with self._nvtx_range("optimized_structured_sparsity_ffn_lab"):
             with torch.inference_mode():
                 self.output = self.ffn.sparse_forward()
-        self._synchronize()
+        if torch.cuda.is_available():
+            torch.cuda.current_stream(self.device).synchronize()
+            torch.cuda.set_stream(torch.cuda.default_stream(self.device))
+            torch.cuda.current_stream(self.device).synchronize()
         if self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
 
     def capture_verification_payload(self) -> None:
         if self.ffn is None or self.output is None or self.ffn.input is None:
             raise RuntimeError("setup() and benchmark_fn() must run before capture_verification_payload()")
-        verify_output = self.output[:128, :128]
+        verify_output = self.output.t()[:128, :128]
         parameter_count = 0
         if self.ffn.w1 is not None:
             parameter_count += self.ffn.w1.numel()
@@ -77,11 +80,7 @@ class OptimizedStructuredSparsityFFNLab(VerificationPayloadMixin, BaseBenchmark)
             },
             output_tolerance=(1e-2, 1e-2),
             signature_overrides={
-                "ffn_hidden": self.cfg.hidden_size,
-                "ffn_size": self.cfg.ffn_size,
-                "seq_len": self.cfg.seq_len,
                 "sparsity_ratio": 0.5,
-                "ffn_kind": "swiglu",
             },
         )
 

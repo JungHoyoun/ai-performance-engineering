@@ -14,7 +14,12 @@ if str(REPO_ROOT) not in sys.path:
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
-from labs.trtllm_gpt_oss_20b.trtllm_common import build_prompt_tokens, parse_trtllm_args, slice_logits
+from labs.trtllm_gpt_oss_20b.trtllm_common import (
+    build_prompt_tokens,
+    load_trtllm_runtime,
+    parse_trtllm_args,
+    slice_logits,
+)
 
 
 class OptimizedTrtLlmGptOssBenchmark(VerificationPayloadMixin, BaseBenchmark):
@@ -64,10 +69,11 @@ class OptimizedTrtLlmGptOssBenchmark(VerificationPayloadMixin, BaseBenchmark):
         except ImportError as exc:
             raise RuntimeError("Transformers is required for tokenizer support") from exc
         try:
-            import tensorrt_llm  # noqa: F401
-            from tensorrt_llm.runtime import ModelRunner, SamplingConfig
-        except ImportError as exc:
+            runtime = load_trtllm_runtime()
+        except Exception as exc:
             raise RuntimeError("TensorRT-LLM is required for the optimized benchmark") from exc
+        ModelRunner = runtime.ModelRunner
+        SamplingConfig = runtime.SamplingConfig
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
         input_ids, attention_mask = build_prompt_tokens(

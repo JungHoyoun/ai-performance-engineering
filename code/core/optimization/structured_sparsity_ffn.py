@@ -65,8 +65,8 @@ class StructuredSparsityFFN:
         self.w3_compressed = torch._cslt_compress(self.w3)
         self.w2_compressed = torch._cslt_compress(self.w2)
 
-        self.w1_algo = self._mm_search(self.w1_compressed, self.input_t)
-        self.w3_algo = self._mm_search(self.w3_compressed, self.input_t)
+        self.w1_algo = self._mm_search(self.w1_compressed, self.input_t, transpose_result=False)
+        self.w3_algo = self._mm_search(self.w3_compressed, self.input_t, transpose_result=False)
 
         probe = torch.randn(
             self.cfg.ffn_size,
@@ -74,7 +74,7 @@ class StructuredSparsityFFN:
             device=self.device,
             dtype=self.cfg.dtype,
         )
-        self.w2_algo = self._mm_search(self.w2_compressed, probe)
+        self.w2_algo = self._mm_search(self.w2_compressed, probe, transpose_result=False)
 
     def dense_forward(self) -> torch.Tensor:
         if self.input is None or self.w1 is None or self.w3 is None or self.w2 is None:
@@ -95,11 +95,12 @@ class StructuredSparsityFFN:
             or self.w2_algo is None
         ):
             raise RuntimeError("Structured sparsity tensors not initialized")
-        y1 = self._sparse_mm(self.w1_compressed, self.input_t, self.w1_algo)
-        y3 = self._sparse_mm(self.w3_compressed, self.input_t, self.w3_algo)
+        y1 = self._sparse_mm(self.w1_compressed, self.input_t, self.w1_algo, transpose_result=False)
+        y3 = self._sparse_mm(self.w3_compressed, self.input_t, self.w3_algo, transpose_result=False)
         act = F.silu(y1) * y3
-        act_t = act.t().contiguous()
-        return self._sparse_mm(self.w2_compressed, act_t, self.w2_algo)
+        if not act.is_contiguous():
+            act = act.contiguous()
+        return self._sparse_mm(self.w2_compressed, act, self.w2_algo, transpose_result=False)
 
     def teardown(self) -> None:
         self.input = None
@@ -117,7 +118,7 @@ class StructuredSparsityFFN:
     def _init_tensors(self) -> None:
         m = self.cfg.tokens_per_iteration
         self.input = torch.randn(m, self.cfg.hidden_size, device=self.device, dtype=self.cfg.dtype)
-        self.input_t = self.input.t().contiguous()
+        self.input_t = self.input.t()
 
         dense_w1 = torch.randn(self.cfg.ffn_size, self.cfg.hidden_size, device=self.device, dtype=self.cfg.dtype)
         dense_w3 = torch.randn(self.cfg.ffn_size, self.cfg.hidden_size, device=self.device, dtype=self.cfg.dtype)
@@ -127,22 +128,35 @@ class StructuredSparsityFFN:
         self.w3 = prune_2_4(dense_w3)
         self.w2 = prune_2_4(dense_w2)
 
-    def _mm_search(self, weight_compressed: torch.Tensor, input_t: torch.Tensor) -> CusparseltAlgo:
+    def _mm_search(
+        self,
+        weight_compressed: torch.Tensor,
+        input_t: torch.Tensor,
+        *,
+        transpose_result: bool,
+    ) -> CusparseltAlgo:
         alg_id, split_k, split_k_mode, _ = torch._C._cusparselt.mm_search(
             weight_compressed,
             input_t,
             None,
             None,
             None,
-            True,
+            transpose_result,
         )
         return CusparseltAlgo(int(alg_id), int(split_k), int(split_k_mode))
 
-    def _sparse_mm(self, weight_compressed: torch.Tensor, input_t: torch.Tensor, algo: CusparseltAlgo) -> torch.Tensor:
+    def _sparse_mm(
+        self,
+        weight_compressed: torch.Tensor,
+        input_t: torch.Tensor,
+        algo: CusparseltAlgo,
+        *,
+        transpose_result: bool,
+    ) -> torch.Tensor:
         return torch._cslt_sparse_mm(
             weight_compressed,
             input_t,
-            transpose_result=True,
+            transpose_result=transpose_result,
             alg_id=algo.alg_id,
             split_k=algo.split_k,
             split_k_mode=algo.split_k_mode,
