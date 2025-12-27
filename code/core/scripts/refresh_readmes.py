@@ -668,7 +668,7 @@ ENTRIES["ch15"] = chapter_entry(
     ],
     notes=[
         "`disaggregated_inference_multigpu.py` can run purely in simulation mode; set `--simulate-network` when hardware isn't wired for NVLink pooling.",
-        "Set `AISP_DISAGG_WORLD_SIZE=<num_gpus>` to run the disaggregated pipeline on the desired GPU count (defaults to all visible GPUs, even count).",
+        "Use `torchrun --nproc_per_node <num_gpus>` to run the disaggregated pipeline on the desired GPU count (defaults to all visible GPUs, even count).",
         "`Makefile` wraps the MPI/UCX targets needed for the multi-node decode experiments.",
     ],
 )
@@ -721,7 +721,7 @@ ENTRIES["ch17"] = chapter_entry(
     ],
     contents=[
         ("`baseline_dynamic_routing.py`, `optimized_dynamic_routing.py`, `dynamic_routing.py`, `early_rejection.py`", "Routing controllers that evolve from static heuristics to telemetry-driven admission and rejection policies."),
-        ("`baseline_inference_full.py`, `optimized_inference_full.py`, `baseline_prefill_decode_disagg.py`, `optimized_prefill_decode_disagg.py`, `baseline_prefill_decode_disagg_multigpu.py`, `optimized_prefill_decode_disagg_multigpu.py`", "End-to-end inference flows modeling separate prefill and decode pools, both single-node and multi-GPU."),
+        ("`baseline_inference_full.py`, `optimized_inference_full.py`, `baseline_prefill_decode_disagg.py`, `optimized_prefill_decode_disagg.py`, `baseline_prefill_decode_disagg_multigpu.py`, `optimized_prefill_decode_disagg_multigpu.py`, `baseline_prefill_decode_disagg_ttft_multigpu.py`, `optimized_prefill_decode_disagg_ttft_multigpu.py`, `baseline_prefill_decode_disagg_tpot_long_multigpu.py`, `optimized_prefill_decode_disagg_tpot_long_multigpu.py`", "End-to-end inference flows modeling separate prefill and decode pools, including TTFT-focused and long-output TPOT-focused multi-GPU pairs."),
         ("`baseline_pipeline_parallelism.py`, `optimized_pipeline_parallelism.py`", "Pipeline parallel workloads combining compute and KV-transfer scheduling."),
         ("`baseline_moe_router_uniform.py`, `optimized_moe_router_uniform_topology.py`", "Comparable MoE router benchmark pair contrasting uniform vs topology-aware routing while keeping outputs invariant via shared expert weights."),
         ("`moe_router_uniform_demo.py`, `moe_router_topology_demo.py`", "MoE routing demos (non-benchmark) contrasting uniform vs topology-aware expert selection."),
@@ -736,7 +736,7 @@ ENTRIES["ch17"] = chapter_entry(
     ],
     notes=[
         "`blackwell_profiling_guide.py` walks through Nsight Systems/Compute captures and interpreting roofline vs occupancy bottlenecks for routing-heavy workloads.",
-        "`baseline_prefill_decode_disagg_multigpu.py` runs via torchrun and defaults to all visible GPUs (even count). Set `AISP_DISAGG_WORLD_SIZE` to override GPU count and `AISP_DISAGG_PREFILL_RANKS` to control the split (e.g., 2P1D).",
+        "`baseline_prefill_decode_disagg_multigpu.py` runs via torchrun and defaults to a 50/50 split when world size is even; override with `--prefill-ranks` (e.g., 2P1D). Use `torchrun --nproc_per_node` to choose the GPU count.",
     ],
 )
 

@@ -32,9 +32,6 @@ from core.harness.benchmark_harness import (
     TorchrunLaunchSpec,
 )
 
-_ENV_WORLD_SIZE = "AISP_DISAGG_WORLD_SIZE"
-_ENV_PREFILL_RANKS = "AISP_DISAGG_PREFILL_RANKS"
-
 
 @dataclass(frozen=True)
 class PrefillDecodeConfig:
@@ -95,38 +92,27 @@ class TinyPrefillDecode(nn.Module):
 def _resolve_world_size() -> int:
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for disaggregated prefill/decode")
-    available = torch.cuda.device_count()
-    if available < 2:
+    world_size = torch.cuda.device_count()
+    if world_size < 2:
         raise RuntimeError("prefill_decode_disagg_multigpu requires >=2 GPUs.")
-    override = os.getenv(_ENV_WORLD_SIZE)
-    if override is not None:
-        requested = int(override)
-        if requested < 2:
-            raise RuntimeError(f"{_ENV_WORLD_SIZE} must be >= 2 (got {requested}).")
-        if requested > available:
-            raise RuntimeError(
-                f"{_ENV_WORLD_SIZE}={requested} exceeds available GPUs ({available})."
-            )
-        return requested
-    return available
+    return world_size
 
 
-def _resolve_prefill_ranks(world_size: int) -> int:
-    override = os.getenv(_ENV_PREFILL_RANKS)
-    if override is not None:
-        requested = int(override)
-        if requested < 1:
-            raise RuntimeError(f"{_ENV_PREFILL_RANKS} must be >= 1 (got {requested}).")
-        if requested >= world_size:
+def _resolve_prefill_ranks(world_size: int, prefill_ranks: Optional[int]) -> int:
+    if prefill_ranks is None:
+        if world_size % 2 != 0:
             raise RuntimeError(
-                f"{_ENV_PREFILL_RANKS}={requested} must be < world_size={world_size}."
+                "--prefill-ranks must be set when world_size is odd."
             )
-        return requested
-    if world_size % 2 != 0:
+        return world_size // 2
+    requested = int(prefill_ranks)
+    if requested < 1:
+        raise RuntimeError(f"--prefill-ranks must be >= 1 (got {requested}).")
+    if requested >= world_size:
         raise RuntimeError(
-            f"{_ENV_PREFILL_RANKS} must be set when world_size is odd (world_size={world_size})."
+            f"--prefill-ranks={requested} must be < world_size={world_size}."
         )
-    return world_size // 2
+    return requested
 
 
 def _prefill_to_decode_rank(prefill_rank: int, prefill_ranks: int, decode_ranks: int) -> int:
@@ -136,6 +122,33 @@ def _prefill_to_decode_rank(prefill_rank: int, prefill_ranks: int, decode_ranks:
 def _decode_assigned_prefills(decode_rank: int, prefill_ranks: int, decode_ranks: int) -> List[int]:
     decode_idx = decode_rank - prefill_ranks
     return [rank for rank in range(prefill_ranks) if (rank % decode_ranks) == decode_idx]
+
+
+def _emit_split_advice(prefill_ranks: int, decode_ranks: int) -> None:
+    ratio = prefill_ranks / max(decode_ranks, 1)
+    split_label = f"P{prefill_ranks}:D{decode_ranks}"
+    if prefill_ranks == decode_ranks:
+        print(f"Split {split_label} is balanced (recommended default).")
+    if decode_ranks == 1 and prefill_ranks > 1:
+        print(
+            f"WARNING: split {split_label} may bottleneck TPOT/long outputs with a single decode rank."
+        )
+    if prefill_ranks == 1 and decode_ranks > 1:
+        print(
+            f"WARNING: split {split_label} may bottleneck TTFT for long prompts with a single prefill rank."
+        )
+    if ratio >= 3:
+        print(
+            f"WARNING: prefill-heavy split {split_label} may under-provision decode for TPOT."
+        )
+    elif ratio <= (1 / 3):
+        print(
+            f"WARNING: decode-heavy split {split_label} may under-provision prefill for TTFT."
+        )
+    print(
+        "Recommendation: use a balanced split when unsure; prefer 2P1D for TTFT-focused runs "
+        "and 1P2D+ for TPOT/long outputs."
+    )
 
 
 def _init_distributed() -> Tuple[int, int, torch.device]:
@@ -188,18 +201,22 @@ def _run_torchrun_worker(
     label: str,
     iters: int,
     warmup: int,
+    prefill_ranks: Optional[int],
 ) -> None:
     rank, world_size, device = _init_distributed()
-    expected_world_size = _resolve_world_size()
-    if world_size != expected_world_size:
+    if world_size < 2:
+        raise RuntimeError("prefill_decode_disagg_multigpu requires >=2 GPUs.")
+    if torch.cuda.device_count() < world_size:
         raise RuntimeError(
-            f"Expected world_size={expected_world_size} (set {_ENV_WORLD_SIZE}), got {world_size}."
+            f"torchrun world_size={world_size} exceeds visible GPUs ({torch.cuda.device_count()})."
         )
 
-    prefill_ranks = _resolve_prefill_ranks(world_size)
+    prefill_ranks = _resolve_prefill_ranks(world_size, prefill_ranks)
     decode_ranks = world_size - prefill_ranks
     if decode_ranks < 1:
         raise RuntimeError("decode_ranks must be >= 1 for disaggregated prefill/decode")
+    if rank == 0:
+        _emit_split_advice(prefill_ranks, decode_ranks)
 
     is_prefill = rank < prefill_ranks
     peer_rank = (
@@ -245,6 +262,7 @@ def _run_torchrun_worker(
         kv_chunks = []
         seed_chunks = []
         assigned_prefills = _decode_assigned_prefills(rank, prefill_ranks, decode_ranks)
+        outputs = []
         for src_rank in assigned_prefills:
             for _ in range(cfg.requests_per_rank):
                 kv_buf = torch.empty(
@@ -257,16 +275,15 @@ def _run_torchrun_worker(
                 )
                 dist.recv(kv_buf, src=src_rank)
                 dist.recv(seed_buf, src=src_rank)
-                kv_chunks.append(kv_buf)
-                seed_chunks.append(seed_buf)
+                if overlap:
+                    outputs.append(model.decode(seed_buf, kv_buf, cfg.decode_tokens))
+                else:
+                    kv_chunks.append(kv_buf)
+                    seed_chunks.append(seed_buf)
 
-        if not overlap:
-            dist.barrier()
         if overlap:
-            outputs = []
-            for kv_cache, seed in zip(kv_chunks, seed_chunks):
-                outputs.append(model.decode(seed, kv_cache, cfg.decode_tokens))
             return outputs
+        dist.barrier()
         return _run_decode(cfg, model, kv_chunks, seed_chunks)
 
     dist.barrier()
@@ -298,11 +315,18 @@ def _run_torchrun_worker(
 class _PrefillDecodeMultiGPUBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Shared multi-GPU disaggregated prefill/decode harness."""
 
-    def __init__(self, *, overlap: bool, label: str) -> None:
+    def __init__(
+        self,
+        *,
+        overlap: bool,
+        label: str,
+        cfg: Optional[PrefillDecodeConfig] = None,
+        prefill_ranks: Optional[int] = None,
+    ) -> None:
         super().__init__()
-        self.cfg = PrefillDecodeConfig()
+        self.cfg = cfg or PrefillDecodeConfig()
         self.world_size = _resolve_world_size()
-        self.prefill_ranks = _resolve_prefill_ranks(self.world_size)
+        self.prefill_ranks = _resolve_prefill_ranks(self.world_size, prefill_ranks)
         self.decode_ranks = self.world_size - self.prefill_ranks
         if self.decode_ranks < 1:
             raise RuntimeError("decode_ranks must be >= 1 for disaggregated prefill/decode")
@@ -459,12 +483,11 @@ class _PrefillDecodeMultiGPUBenchmark(VerificationPayloadMixin, BaseBenchmark):
         )
 
     def get_torchrun_spec(self, config: Optional[BenchmarkConfig] = None) -> TorchrunLaunchSpec:
+        script_args = ["--prefill-ranks", str(self.prefill_ranks)]
         return TorchrunLaunchSpec(
             script_path=Path(__file__).resolve(),
-            script_args=[],
+            script_args=script_args,
             env={
-                _ENV_WORLD_SIZE: str(self.world_size),
-                _ENV_PREFILL_RANKS: str(self.prefill_ranks),
                 "NCCL_DEBUG": "WARN",
                 "NCCL_P2P_LEVEL": "NVL",
                 "NCCL_P2P_DISABLE": "0",
@@ -494,6 +517,12 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--iters", type=int, default=4)
     parser.add_argument("--warmup", type=int, default=3)
+    parser.add_argument(
+        "--prefill-ranks",
+        type=int,
+        default=None,
+        help="Number of prefill ranks (defaults to world_size//2 when even).",
+    )
     return parser.parse_args()
 
 
@@ -505,6 +534,7 @@ def main() -> None:
         label="baseline_prefill_decode_disagg_multigpu",
         iters=int(args.iters),
         warmup=int(args.warmup),
+        prefill_ranks=args.prefill_ranks,
     )
 
 

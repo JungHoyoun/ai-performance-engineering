@@ -1816,8 +1816,9 @@ benchmark.teardown()
         )
         ncu_command.insert(1, "--force-overwrite")
         
-        # ncu profiling timeout: align with BenchmarkDefaults.ncu_timeout_seconds
+        # ncu profiling timeout: align with BenchmarkConfig.ncu_timeout_seconds
         # ncu is slower than nsys and needs more time for metric collection
+        ncu_timeout_seconds = config.get_effective_timeout("ncu") or NCU_TIMEOUT_SECONDS
         timed_out = False
         process = subprocess.Popen(
             ncu_command,
@@ -1830,10 +1831,10 @@ benchmark.teardown()
         stdout_text = ""
         stderr_text = ""
         try:
-            stdout_text, stderr_text = process.communicate(timeout=NCU_TIMEOUT_SECONDS)
+            stdout_text, stderr_text = process.communicate(timeout=ncu_timeout_seconds)
         except subprocess.TimeoutExpired:
             timed_out = True
-            _terminate_process_group(process, f"{benchmark_name}_{variant}", timeout_seconds=NCU_TIMEOUT_SECONDS)
+            _terminate_process_group(process, f"{benchmark_name}_{variant}", timeout_seconds=ncu_timeout_seconds)
             try:
                 stdout_text, stderr_text = process.communicate(timeout=2)
             except Exception:
@@ -1911,8 +1912,9 @@ def profile_cuda_executable_ncu(
     ncu_command.insert(1, "--force-overwrite")
     
     try:
-        # ncu profiling timeout: align with BenchmarkDefaults.ncu_timeout_seconds
+        # ncu profiling timeout: align with BenchmarkConfig.ncu_timeout_seconds
         # ncu is slower than nsys and needs more time for metric collection
+        ncu_timeout_seconds = config.get_effective_timeout("ncu") or NCU_TIMEOUT_SECONDS
         timed_out = False
         process = subprocess.Popen(
             ncu_command,
@@ -1925,10 +1927,10 @@ def profile_cuda_executable_ncu(
         stdout_text = ""
         stderr_text = ""
         try:
-            stdout_text, stderr_text = process.communicate(timeout=NCU_TIMEOUT_SECONDS)
+            stdout_text, stderr_text = process.communicate(timeout=ncu_timeout_seconds)
         except subprocess.TimeoutExpired:
             timed_out = True
-            _terminate_process_group(process, f"{exec_name}_{variant}", timeout_seconds=NCU_TIMEOUT_SECONDS)
+            _terminate_process_group(process, f"{exec_name}_{variant}", timeout_seconds=ncu_timeout_seconds)
             try:
                 stdout_text, stderr_text = process.communicate(timeout=2)
             except Exception:
@@ -5979,7 +5981,7 @@ def main():
     parser.add_argument(
         '--ncu-metric-set',
         choices=['auto', 'minimal', 'deep_dive', 'roofline'],
-        default='minimal',
+        default='auto',
         help='Nsight Compute metric preset (auto/minimal/deep_dive/roofline). Auto follows the profile preset.'
     )
     parser.add_argument(

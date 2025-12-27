@@ -1,9 +1,8 @@
-"""Optimized disaggregated prefill/decode benchmark (multi-GPU torchrun).
+"""Optimized TTFT-focused disaggregated prefill/decode benchmark (multi-GPU torchrun).
 
 Chapter 17: Scaling Disaggregated Prefill and Decode Pipelines
 
-Optimizations:
-- Overlap prefill and decode by pipelining transfers per request.
+TTFT focus: overlap transfers with decode for shorter time to first token.
 """
 
 from __future__ import annotations
@@ -11,22 +10,26 @@ from __future__ import annotations
 import argparse
 
 from ch17.baseline_prefill_decode_disagg_multigpu import (  # noqa: E402
-    PrefillDecodeConfig,
     _PrefillDecodeMultiGPUBenchmark,
     _run_torchrun_worker,
 )
+from ch17.baseline_prefill_decode_disagg_ttft_multigpu import TTFT_CONFIG  # noqa: E402
 from core.harness.benchmark_harness import BaseBenchmark  # noqa: E402
 
 
-class OptimizedPrefillDecodeDisaggMultiGPUBenchmark(_PrefillDecodeMultiGPUBenchmark):
-    """Pipelined prefill/decode overlap across multi-GPU ranks."""
+class OptimizedPrefillDecodeDisaggTTFTMultiGPUBenchmark(_PrefillDecodeMultiGPUBenchmark):
+    """Pipelined prefill/decode overlap (TTFT-focused)."""
 
     def __init__(self) -> None:
-        super().__init__(overlap=True, label="optimized_prefill_decode_disagg_multigpu")
+        super().__init__(
+            overlap=True,
+            label="optimized_prefill_decode_disagg_ttft_multigpu",
+            cfg=TTFT_CONFIG,
+        )
 
 
 def get_benchmark() -> BaseBenchmark:
-    return OptimizedPrefillDecodeDisaggMultiGPUBenchmark()
+    return OptimizedPrefillDecodeDisaggTTFTMultiGPUBenchmark()
 
 
 def _parse_args() -> argparse.Namespace:
@@ -45,9 +48,9 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     _run_torchrun_worker(
-        PrefillDecodeConfig(),
+        TTFT_CONFIG,
         overlap=True,
-        label="optimized_prefill_decode_disagg_multigpu",
+        label="optimized_prefill_decode_disagg_ttft_multigpu",
         iters=int(args.iters),
         warmup=int(args.warmup),
         prefill_ranks=args.prefill_ranks,

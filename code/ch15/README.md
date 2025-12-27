@@ -29,7 +29,8 @@ python -m cli.aisp bench run --targets ch15 --profile minimal
 ```
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
 - Expectation baselines live next to each chapter in `expectations_b200.json`; refresh with `--update-expectations` after validating new hardware.
-- Use `AISP_DISAGG_WORLD_SIZE=<num_gpus>` to run the disaggregated inference pipeline on the desired GPU count (defaults to all visible GPUs, even count).
+- Use `torchrun --nproc_per_node <num_gpus>` to run the disaggregated inference pipeline on the desired GPU count (defaults to all visible GPUs, even count).
+- For odd GPU counts, pick an even `--nproc_per_node` to keep the 1:1 prefill/decode pairing valid.
 
 ## Demos (Non-Benchmark)
 These are runnable parallelism/speculative-decoding companions (not baseline/optimized benchmark pairs). Run them via `aisp demos`:

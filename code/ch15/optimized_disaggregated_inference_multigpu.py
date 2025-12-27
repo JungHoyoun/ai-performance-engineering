@@ -17,7 +17,6 @@ from ch15.baseline_disaggregated_inference_multigpu import (  # noqa: E402
     DisaggConfig,
     _DisaggregatedInferenceMultiGPUBenchmark,
     _run_torchrun_worker,
-    _ENV_WORLD_SIZE,
 )
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, TorchrunLaunchSpec  # noqa: E402
 
@@ -33,7 +32,6 @@ class OptimizedDisaggregatedInferenceMultiGPUBenchmark(_DisaggregatedInferenceMu
             script_path=Path(__file__).resolve(),
             script_args=[],
             env={
-                _ENV_WORLD_SIZE: str(self.world_size),
                 "NCCL_DEBUG": "WARN",
                 "NCCL_P2P_LEVEL": "NVL",
                 "NCCL_P2P_DISABLE": "0",
