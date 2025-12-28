@@ -743,22 +743,99 @@ def _extract_nsys_kernel_stats(nsys_path: Path) -> Dict[str, Any]:
         return {}
 
 
-def generate_flamegraph_comparison(profiles_dir: Path) -> Optional[Dict[str, Any]]:
+def _strip_profile_suffix(name: str) -> str:
+    if name.endswith(".nsys-rep"):
+        return name[:-9]
+    if name.endswith(".sqlite"):
+        return name[:-7]
+    return name
+
+
+def _snake_case(name: str) -> str:
+    name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
+    name = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", name)
+    return name
+
+
+def _normalize_profile_name(name: str) -> str:
+    name = _strip_profile_suffix(name)
+    if name.startswith("nsys_"):
+        name = name[5:]
+    name = re.sub(r"^(baseline|optimized)_", "", name, flags=re.IGNORECASE)
+    name = re.sub(r"(baseline|optimized)$", "", name, flags=re.IGNORECASE)
+    name = name.replace("Baseline", "").replace("Optimized", "").replace("Benchmark", "")
+    name = _snake_case(name)
+    name = re.sub(r"baseline|optimized", "", name, flags=re.IGNORECASE)
+    name = re.sub(r"[_]+", "_", name)
+    return name.strip("_").lower()
+
+
+def _tokenize_profile_name(name: str) -> List[str]:
+    normalized = _normalize_profile_name(name)
+    tokens = [token for token in normalized.split("_") if token]
+    return tokens
+
+
+def _select_flamegraph_pair(
+    profiles_dir: Path,
+    pair_key: Optional[str] = None,
+) -> Optional[tuple[Path, Path]]:
+    baseline_nsys = sorted(profiles_dir.glob("*baseline*.nsys-rep"))
+    optimized_nsys = sorted(profiles_dir.glob("*optimized*.nsys-rep"))
+
+    if not baseline_nsys or not optimized_nsys:
+        return None
+
+    key_tokens: Optional[set[str]] = None
+    if pair_key:
+        key_tokens = set(_tokenize_profile_name(pair_key))
+
+    best: Optional[tuple[float, float, Path, Path]] = None
+    for baseline_path in baseline_nsys:
+        baseline_tokens = set(_tokenize_profile_name(baseline_path.name))
+        for optimized_path in optimized_nsys:
+            optimized_tokens = set(_tokenize_profile_name(optimized_path.name))
+            overlap = len(baseline_tokens & optimized_tokens)
+            if overlap == 0:
+                continue
+            score = (2.0 * overlap) / (len(baseline_tokens) + len(optimized_tokens))
+            baseline_norm = _normalize_profile_name(baseline_path.name)
+            optimized_norm = _normalize_profile_name(optimized_path.name)
+            if baseline_norm == optimized_norm:
+                score += 1.0
+            if key_tokens is not None:
+                if key_tokens.issubset(baseline_tokens | optimized_tokens):
+                    score += 1.0
+                else:
+                    score -= 0.5
+            mtime = max(baseline_path.stat().st_mtime, optimized_path.stat().st_mtime)
+            candidate = (score, mtime, baseline_path, optimized_path)
+            if best is None or candidate[:2] > best[:2]:
+                best = candidate
+
+    if best is None:
+        return baseline_nsys[0], optimized_nsys[0]
+    return best[2], best[3]
+
+
+def generate_flamegraph_comparison(
+    profiles_dir: Path,
+    pair_key: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """Generate flame graph comparison data for baseline vs optimized profiles.
     
     Returns structured data for the FlameGraphComparison React component.
     """
-    baseline_nsys = list(profiles_dir.glob("*baseline*.nsys-rep"))
-    optimized_nsys = list(profiles_dir.glob("*optimized*.nsys-rep"))
-    
-    if not baseline_nsys or not optimized_nsys:
+    pair = _select_flamegraph_pair(profiles_dir, pair_key=pair_key)
+    if pair is None:
         return None
+    baseline_path, optimized_path = pair
     
     try:
-        baseline_api = _extract_nsys_cuda_api_stats(baseline_nsys[0])
-        optimized_api = _extract_nsys_cuda_api_stats(optimized_nsys[0])
-        baseline_kernels = _extract_nsys_kernel_stats(baseline_nsys[0])
-        optimized_kernels = _extract_nsys_kernel_stats(optimized_nsys[0])
+        baseline_api = _extract_nsys_cuda_api_stats(baseline_path)
+        optimized_api = _extract_nsys_cuda_api_stats(optimized_path)
+        baseline_kernels = _extract_nsys_kernel_stats(baseline_path)
+        optimized_kernels = _extract_nsys_kernel_stats(optimized_path)
         
         # Calculate total times
         baseline_total_ns = sum(s.get('total_time_ns', 0) for s in baseline_api.values())
@@ -823,13 +900,13 @@ def generate_flamegraph_comparison(profiles_dir: Path) -> Optional[Dict[str, Any
         
         return {
             'baseline': {
-                'file': baseline_nsys[0].name,
+                'file': baseline_path.name,
                 'total_time_ms': baseline_total_ns / 1_000_000,
                 'api_bars': build_api_bars(baseline_api),
                 'kernel_bars': build_kernel_bars(baseline_kernels),
             },
             'optimized': {
-                'file': optimized_nsys[0].name,
+                'file': optimized_path.name,
                 'total_time_ms': optimized_total_ns / 1_000_000,
                 'api_bars': build_api_bars(optimized_api),
                 'kernel_bars': build_kernel_bars(optimized_kernels),

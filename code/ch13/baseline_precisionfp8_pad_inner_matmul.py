@@ -94,7 +94,7 @@ class BaselinePrecisionFP8PadInnerMatmulBenchmark(VerificationPayloadMixin, Base
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
-            iterations=50,
+            iterations=100,
             warmup=10,
             enable_memory_tracking=False,
             enable_profiling=False,

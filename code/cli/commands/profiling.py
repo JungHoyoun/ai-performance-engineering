@@ -29,6 +29,7 @@ def compare_profiles(args) -> None:
     chapter = getattr(args, 'chapter', None)
     output = getattr(args, 'output', 'comparison_flamegraph.html')
     json_out = getattr(args, 'json_out', None)
+    pair_key = getattr(args, 'pair', None)
     
     if not chapter:
         # List available profile pairs
@@ -72,7 +73,7 @@ def compare_profiles(args) -> None:
     
     console.print(f"[cyan]Analyzing profiles in: {profile_dir}[/cyan]")
     
-    result = generate_flamegraph_comparison(profile_dir)
+    result = generate_flamegraph_comparison(profile_dir, pair_key=pair_key)
     
     if not result:
         console.print("[red]No baseline/optimized nsys profiles found.[/red]")

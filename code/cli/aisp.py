@@ -794,9 +794,10 @@ if typer and profile_app is not None:
         chapter: Optional[str] = typer.Argument(None, help="Chapter name or path to profile directory"),
         output: str = typer.Option("comparison_flamegraph.html", "--output", "-o", help="Output HTML file"),
         json_out: Optional[str] = typer.Option(None, "--json", "-j", help="Also output JSON data"),
+        pair: Optional[str] = typer.Option(None, "--pair", help="Substring or key to select a specific profile pair"),
     ) -> None:
         from cli.commands import profiling
-        _run(profiling.compare_profiles, ctx, chapter=chapter, output=output, json_out=json_out)
+        _run(profiling.compare_profiles, ctx, chapter=chapter, output=output, json_out=json_out, pair=pair)
 
     @profile_app.command("diff", help="Differential analysis between baseline/optimized")
     def profile_diff(
