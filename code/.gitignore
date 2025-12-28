@@ -58,6 +58,7 @@ proof_of_benefit.csv
 reports/
 tmp*.py
 artifacts_tmp*.json
+comparison_*.html
 
 # Python
 __pycache__/
