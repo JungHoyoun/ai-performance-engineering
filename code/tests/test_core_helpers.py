@@ -228,3 +228,27 @@ def test_profile_insights_ncu_requires_pair_key(tmp_path: Path):
     assert comparison is not None
     assert comparison.get("error")
     assert comparison.get("candidates")
+
+
+def test_profile_insights_ncu_pair_key_selects_csv(tmp_path: Path):
+    baseline_csv = tmp_path / "pair_one_baseline_ncu.csv"
+    optimized_csv = tmp_path / "pair_one_optimized_ncu.csv"
+    baseline_csv.write_text("Metric Name,Metric Value\nsm__throughput,50\n")
+    optimized_csv.write_text("Metric Name,Metric Value\nsm__throughput,70\n")
+
+    baseline_csv_two = tmp_path / "pair_two_baseline_ncu.csv"
+    optimized_csv_two = tmp_path / "pair_two_optimized_ncu.csv"
+    baseline_csv_two.write_text("Metric Name,Metric Value\nsm__throughput,40\n")
+    optimized_csv_two.write_text("Metric Name,Metric Value\nsm__throughput,60\n")
+
+    comparison = profile_insights.compare_ncu_files(
+        tmp_path,
+        pair_key="pair_one",
+        include_ncu_details=True,
+    )
+    assert comparison is not None
+    assert comparison.get("metrics")
+    metrics = {m["name"]: m for m in comparison["metrics"]}
+    assert metrics["sm__throughput"]["baseline"] == "50"
+    assert metrics["sm__throughput"]["optimized"] == "70"
+    assert "baseline_sources" not in comparison

@@ -82,6 +82,8 @@ def compare_profiles(args) -> None:
     
     if result.get("error"):
         console.print(f"[red]Error: {result['error']}[/red]")
+        if result.get("candidates"):
+            console.print(f"[yellow]Available pairs:[/yellow] {result['candidates']}")
         return
     
     # NEW: Get metric-level analysis (improvements, regressions, bottleneck shifts)

@@ -1,12 +1,12 @@
 // optimized_cutlass_gemm_fp4_perchannel.cu -- CUTLASS NVFP4 GEMM with per-channel output scaling
 //
-// Optimized uses a larger CUTLASS tile/cluster configuration to exploit SM100
-// block-scaled tensor core throughput.
+// Optimized uses a tuned CUTLASS tile/cluster configuration for SM100 NVFP4.
 
 #include <cuda_runtime.h>
 
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <random>
 #include <vector>
@@ -26,7 +26,6 @@
 
 #include "cute/tensor.hpp"
 
-#include "helper.h"
 #include "../core/common/headers/cuda_verify.cuh"
 
 using namespace cute;
@@ -35,7 +34,7 @@ constexpr int kM = 4096;
 constexpr int kN = 4096;
 constexpr int kK = 4096;
 constexpr int kIterations = 10;
-constexpr int kSwizzle = 2;
+constexpr int kSwizzle = 0;
 
 struct Options {
     int m;
@@ -49,6 +48,58 @@ struct Options {
     double gflops(double runtime_s) const {
         uint64_t flop = uint64_t(2) * m * n * k;
         return (double(flop) / 1.0e9) / runtime_s;
+    }
+};
+
+#define CUDA_CHECK(call)                                                         \
+  do {                                                                           \
+    cudaError_t status = (call);                                                 \
+    if (status != cudaSuccess) {                                                 \
+      std::cerr << "CUDA error " << __FILE__ << ":" << __LINE__ << " "           \
+                << cudaGetErrorString(status) << std::endl;                      \
+      std::exit(EXIT_FAILURE);                                                   \
+    }                                                                            \
+  } while (0)
+
+#define CUTLASS_CHECK(status)                                                    \
+  do {                                                                           \
+    cutlass::Status error = (status);                                            \
+    if (error != cutlass::Status::kSuccess) {                                    \
+      std::cerr << "CUTLASS error " << __FILE__ << ":" << __LINE__ << " "        \
+                << cutlassGetStatusString(error) << std::endl;                   \
+      std::exit(EXIT_FAILURE);                                                   \
+    }                                                                            \
+  } while (0)
+
+struct GpuTimer {
+    cudaStream_t stream = 0;
+    cudaEvent_t start_event{};
+    cudaEvent_t stop_event{};
+
+    GpuTimer() {
+        CUDA_CHECK(cudaEventCreate(&start_event));
+        CUDA_CHECK(cudaEventCreate(&stop_event));
+    }
+
+    ~GpuTimer() {
+        CUDA_CHECK(cudaEventDestroy(start_event));
+        CUDA_CHECK(cudaEventDestroy(stop_event));
+    }
+
+    void start(cudaStream_t stream_id = 0) {
+        stream = stream_id;
+        CUDA_CHECK(cudaEventRecord(start_event, stream));
+    }
+
+    void stop() {
+        CUDA_CHECK(cudaEventRecord(stop_event, stream));
+    }
+
+    float elapsed_millis() {
+        float elapsed = 0.0f;
+        CUDA_CHECK(cudaEventSynchronize(stop_event));
+        CUDA_CHECK(cudaEventElapsedTime(&elapsed, start_event, stop_event));
+        return elapsed;
     }
 };
 
@@ -86,8 +137,8 @@ using ElementAccumulator = float;
 using ArchTag = cutlass::arch::Sm100;
 using OperatorClass = cutlass::arch::OpClassBlockScaledTensorOp;
 
-using MmaTileShape = Shape<_256, _256, _256>;
-using ClusterShape = Shape<_2, _4, _1>;
+using MmaTileShape = Shape<_128, _128, _256>;
+using ClusterShape = Shape<_1, _1, _1>;
 
 using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBuilder<
     ArchTag, OperatorClass,
@@ -174,6 +225,11 @@ bool initialize_block(cutlass::TensorView<Element, Layout> view, uint64_t seed_v
     return true;
 }
 
+template <typename Element, typename Layout>
+void initialize_scale(cutlass::TensorView<Element, Layout> view, float value) {
+    cutlass::reference::host::TensorFill(view, Element(value));
+}
+
 void initialize(const Options& options) {
     using Sm1xxBlkScaledConfig = typename Gemm::GemmKernel::CollectiveMainloop::Sm1xxBlkScaledConfig;
 
@@ -198,9 +254,9 @@ void initialize(const Options& options) {
 
     initialize_block(block_A.host_view(), seed + 2021);
     initialize_block(block_B.host_view(), seed + 2022);
-    initialize_block(block_C.host_view(), seed + 2023);
-    initialize_block(block_SFA.host_view(), seed + 2024);
-    initialize_block(block_SFB.host_view(), seed + 2025);
+    cutlass::reference::host::TensorFill(block_C.host_view(), ElementC(0));
+    initialize_scale(block_SFA.host_view(), 1.0f);
+    initialize_scale(block_SFB.host_view(), 1.0f);
 
     block_A.sync_device();
     block_B.sync_device();

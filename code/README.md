@@ -371,6 +371,7 @@ python -m cli.aisp bench list-targets --chapter ch01
 python -m cli.aisp bench run --targets ch01 --profile minimal
 ```
 - `setup.sh` installs system prerequisites (drivers, CUDA, Nsight) and should be rerun after driver upgrades.
+- Expectation baselines are stored per hardware key in `expectations_{hardware_key}.json` (for example, `expectations_b200.json` for 1x B200 and `expectations_4x_b200.json` for 4x B200). `--update-expectations` writes the file for the active hardware key.
 - Use `python core/harness/run_benchmarks.py --targets ch*` for automated regression suites.
 - `python core/analysis/analyze_expectations.py --artifacts-dir artifacts` compares new runs to stored thresholds.
 - Expectation baselines are per-hardware: `expectations_{hardware_key}.json` (example: `expectations_4x_b200.json`).

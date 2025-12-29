@@ -14,8 +14,9 @@
 - The Amazon book link in `README.md` is expected to fail automated link checks due to bot protection; treat it as an allowlisted exception.
 
 ## Deprecations (CRITICAL)
-- Do not add or keep deprecated entrypoints, shims, or compatibility wrappers.
-- When a deprecation exists, remove it entirely (code + docs + READMEs) and replace it with the latest entrypoint(s) in the same change.
+- Do not add or keep deprecated entrypoints, shims, compatibility wrappers, or transitional aliases.
+- Deprecations are not allowed to persist anywhere: remove them immediately from code, docs, READMEs, and tests.
+- When removing a deprecation, replace all references with the latest entrypoint(s) or APIs in the same change.
 
 ## Benchmark Stability (CRITICAL)
 - ALWAYS lock GPU clocks before any benchmark/profiling run; focus on relative performance rather than absolute numbers.
@@ -27,7 +28,7 @@
 
 ## Expectations Files (CRITICAL)
 - Expectation baselines live next to each chapter as `expectations_{hardware_key}.json`.
-- The hardware key includes GPU count + model slug (example: `expectations_4x_b200.json`).
+- The hardware key includes GPU count + model slug (examples: `expectations_b200.json` for 1x B200, `expectations_4x_b200.json` for 4x B200).
 - Always refresh with `--update-expectations` on the active hardware key.
 
 ## Queueing & Monitoring (CRITICAL)
