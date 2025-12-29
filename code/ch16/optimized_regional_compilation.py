@@ -30,13 +30,10 @@ from core.harness.benchmark_harness import (
     WorkloadMetadata,
 )
 from core.profiling.nvtx_helper import nvtx_range, get_nvtx_enabled
-from ch16.baseline_regional_compilation import DummyTransformer
-
-MODEL_CANDIDATES: List[Dict[str, int]] = [
-    {"n_layers": 4, "d_model": 1024, "d_ff": 4096},
-    {"n_layers": 8, "d_model": 2048, "d_ff": 8192},
-]
-
+from ch16.baseline_regional_compilation import (
+    DummyTransformer,
+    select_regional_compilation_choice,
+)
 
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
@@ -107,9 +104,10 @@ class OptimizedRegionalCompilationBenchmark(VerificationPayloadMixin, BaseBenchm
         super().__init__()
         self.device = resolve_device()
         self.model: Optional[DummyTransformer] = None
-        self.sequence_schedule = [768]
-        self.max_seq_len = 768
-        self.d_model = MODEL_CANDIDATES[0]["d_model"]
+        self.choice = select_regional_compilation_choice()
+        self.sequence_schedule = [self.choice["seq_len"]]
+        self.max_seq_len = self.choice["seq_len"]
+        self.d_model = self.choice["d_model"]
         self._iteration = 0
         self.compiled_layers = 0
         self.output: Optional[torch.Tensor] = None
@@ -130,8 +128,10 @@ class OptimizedRegionalCompilationBenchmark(VerificationPayloadMixin, BaseBenchm
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
         # Use the larger preset so region capture speedups have room to show.
-        candidate = MODEL_CANDIDATES[0]
+        candidate = self.choice
         self.d_model = candidate["d_model"]
+        self.max_seq_len = candidate["seq_len"]
+        self.sequence_schedule = [self.max_seq_len]
         model = DummyTransformer(
             n_layers=candidate["n_layers"],
             d_model=self.d_model,

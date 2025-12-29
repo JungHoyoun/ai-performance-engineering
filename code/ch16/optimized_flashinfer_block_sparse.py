@@ -27,11 +27,11 @@ class OptimizedFlashInferBlockSparseBenchmark(VerificationPayloadMixin, BaseBenc
 
     def __init__(self) -> None:
         super().__init__()
-        self.seq_len = 1024
+        self.seq_len = 4096
         self.heads = 8
         self.head_dim = 128
-        self.block_size = 16
-        self.window_blocks = 2
+        self.block_size = 64
+        self.window_blocks = 1
         self.q: Optional[torch.Tensor] = None
         self.k: Optional[torch.Tensor] = None
         self.v: Optional[torch.Tensor] = None
@@ -60,7 +60,7 @@ class OptimizedFlashInferBlockSparseBenchmark(VerificationPayloadMixin, BaseBenc
             window_blocks=self.window_blocks,
         )
         indptr, indices, self.sparsity_ratio = build_bsr_from_block_mask(block_mask, device=self.device)
-        workspace = torch.empty(128 * 1024 * 1024, dtype=torch.uint8, device=self.device)
+        workspace = torch.empty(256 * 1024 * 1024, dtype=torch.uint8, device=self.device)
         self.wrapper = flashinfer.BlockSparseAttentionWrapper(workspace)
         sm_scale = 1.0 / math.sqrt(self.head_dim)
         self.wrapper.plan(

@@ -148,6 +148,18 @@ def test_profile_insights_nsys_comparison(tmp_path: Path):
     assert comparison.get("metrics"), "nsys comparison should yield metrics when NVTX ranges exist"
 
 
+def test_profile_insights_nsys_requires_pair_key(tmp_path: Path):
+    (tmp_path / "baseline_one.nsys-rep").write_text("stub", encoding="utf-8")
+    (tmp_path / "optimized_one.nsys-rep").write_text("stub", encoding="utf-8")
+    (tmp_path / "baseline_two.nsys-rep").write_text("stub", encoding="utf-8")
+    (tmp_path / "optimized_two.nsys-rep").write_text("stub", encoding="utf-8")
+
+    comparison = profile_insights.compare_nsys_files(tmp_path)
+    assert comparison is not None
+    assert comparison.get("error")
+    assert comparison.get("candidates")
+
+
 def test_profile_insights_ncu_comparison_from_rep(tmp_path: Path):
     script = tmp_path / "ncu_script.py"
     script.write_text(
@@ -199,3 +211,20 @@ def test_profile_insights_ncu_comparison_from_rep(tmp_path: Path):
     comparison = profile_insights.compare_ncu_files(tmp_path)
     assert comparison is not None
     assert comparison.get("kernel_comparison"), "ncu comparison should yield kernel comparisons"
+
+
+def test_profile_insights_ncu_requires_pair_key(tmp_path: Path):
+    baseline_csv = tmp_path / "pair_one_baseline_ncu.csv"
+    optimized_csv = tmp_path / "pair_one_optimized_ncu.csv"
+    baseline_csv.write_text("Metric Name,Metric Value\nsm__throughput,50\n")
+    optimized_csv.write_text("Metric Name,Metric Value\nsm__throughput,70\n")
+
+    baseline_csv_two = tmp_path / "pair_two_baseline_ncu.csv"
+    optimized_csv_two = tmp_path / "pair_two_optimized_ncu.csv"
+    baseline_csv_two.write_text("Metric Name,Metric Value\nsm__throughput,40\n")
+    optimized_csv_two.write_text("Metric Name,Metric Value\nsm__throughput,60\n")
+
+    comparison = profile_insights.compare_ncu_files(tmp_path)
+    assert comparison is not None
+    assert comparison.get("error")
+    assert comparison.get("candidates")

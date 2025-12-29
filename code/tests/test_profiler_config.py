@@ -122,7 +122,7 @@ class TestProfilerConfig:
         config = ProfilerConfig()
         assert config.metric_set == "minimal"
         assert config.preset == "minimal"
-        assert config.ncu_replay_mode == "kernel"
+        assert config.ncu_replay_mode == "application"
     
     def test_nsys_command_generation(self):
         """nsys command should be properly formatted."""

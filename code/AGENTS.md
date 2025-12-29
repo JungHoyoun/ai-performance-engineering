@@ -10,13 +10,34 @@
 - NEVER delete anything (tracked or untracked, modified or not) unless I explicitly ask.
 - If you notice unexpected local file modifications, always call them out and ask for guidance; default to keeping them as-is and including them in the changes unless I explicitly say otherwise.
 - When you detect modified or untracked files, please treat them as part of this task.
+- If a file is already modified or open in the editor, keep its current contents as-is and include it in the final change list; ask before making any further edits to it.
 - The Amazon book link in `README.md` is expected to fail automated link checks due to bot protection; treat it as an allowlisted exception.
+
+## Deprecations (CRITICAL)
+- Do not add or keep deprecated entrypoints, shims, or compatibility wrappers.
+- When a deprecation exists, remove it entirely (code + docs + READMEs) and replace it with the latest entrypoint(s) in the same change.
 
 ## Benchmark Stability (CRITICAL)
 - ALWAYS lock GPU clocks before any benchmark/profiling run; focus on relative performance rather than absolute numbers.
+- Prioritize relative speedup between baseline/optimized pairs over absolute performance numbers.
 - Fix as many variables as possible (persistence mode, power limits, thermal state) and keep them stable across baseline/optimized runs.
 - Use the repo’s clock-locking mechanism (`lock_gpu_clocks` in the harness); do not manually invoke `nvidia-smi` to lock clocks.
+- Confirm app_clock (SM/memory) is present in both console telemetry and the run manifest for every benchmark run; treat missing app_clock as invalid.
 - NEVER disable Nsight tools (ncu/nsys); profiling runs must use both and they must succeed.
+
+## Expectations Files (CRITICAL)
+- Expectation baselines live next to each chapter as `expectations_{hardware_key}.json`.
+- The hardware key includes GPU count + model slug (example: `expectations_4x_b200.json`).
+- Always refresh with `--update-expectations` on the active hardware key.
+
+## Queueing & Monitoring (CRITICAL)
+- Use a single queue runner under `artifacts/parallel_runs/` to serialize `aisp bench run` and profiling runs; avoid parallel queues. Append targets to the active queue script instead of creating ad-hoc loops.
+- Queue logic must wait for all active benchmark/profiling processes to finish before starting the next run, and must detect overlapping runs; if another run starts during a queued run, re-queue that target after the system is idle.
+- Busy detection must ignore waiting queue shell processes and treat the current run’s process group as “self” so child processes do not trigger false reruns.
+- Never terminate `ncu`/`nsys` processes; allow them to finish and treat them as busy for idle checks.
+- Queue scripts must log start/end timestamps and exit codes to a dedicated log file in `artifacts/parallel_runs/`.
+- Failure recovery: a failed run must not abort the queue; log the failure and continue. Only re-run on overlap or explicit user request.
+- Monitoring: watch the queue log and report when a run starts, completes, or fails.
 
 ## Explicitness (CRITICAL)
 - Prefer explicit flags/parameters over changing global defaults; if a default must change, ask first and document why.
@@ -96,6 +117,7 @@
 ### Benchmark Example Pairs (Baseline vs. Optimized)
 - Before making changes to these benchmark pairs (baseline_* and optimized_*), be sure to understand the intent of the optimization/comparison before making any changes.  
 - You must preserve the intent of the comparison  (e.g. comparing 32-bit to 16-bit data types)
+- Never fall back to another precision in precision-focused examples (FP4/FP8/NVFP4/etc.); fail fast if the target precision is unavailable so the example intent remains intact.
 - And you must not introduce additional operations in the measured hot path of a variant just to satisfy requirements of the harness, for instance (e.g. cast from 16-bit to 32-bit to satisfy an output comparison/verification). 
 - Instead, keep as much as possible outside of the timed areas so as to not artifically inflate any variant.  (e.g. cast outside the timed area or compare with a tolerance large enough to still maintain the intent of the comparison)
 - AVOID SKIPPING EXAMPLES WHENEVER POSSIBLE

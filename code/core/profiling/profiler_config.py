@@ -399,7 +399,7 @@ class ProfilerConfig:
     nsys_cudabacktrace: bool = True
     nsys_stats: bool = True
     nsys_backtrace: str = "none"
-    ncu_replay_mode: str = "kernel"  # "kernel" or "application"
+    ncu_replay_mode: str = "application"  # "kernel" or "application"
     honor_replay_mode_in_minimal: bool = False
     pm_sampling_interval: Optional[int] = None
     
@@ -744,11 +744,13 @@ def build_profiler_config_from_benchmark(
     # If the caller wants NVTX filtering, they must explicitly pass
     # BenchmarkConfig.nsys_nvtx_include (MCP/CLI can surface this as a parameter).
     nvtx_includes = list(explicit_includes or [])
+    replay_mode_value = str(replay_mode).lower() if replay_mode else "application"
+    honor_replay_mode_in_minimal = replay_mode_override or (replay_mode_value != "application")
     return ProfilerConfig(
         metric_set=str(metric_set),
         preset=preset,
         nvtx_includes=nvtx_includes or None,
         pm_sampling_interval=sampling_interval,
-        ncu_replay_mode=str(replay_mode) if replay_mode else "kernel",
-        honor_replay_mode_in_minimal=replay_mode_override,
+        ncu_replay_mode=replay_mode_value,
+        honor_replay_mode_in_minimal=honor_replay_mode_in_minimal,
     )

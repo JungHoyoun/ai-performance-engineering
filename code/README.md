@@ -373,6 +373,8 @@ python -m cli.aisp bench run --targets ch01 --profile minimal
 - `setup.sh` installs system prerequisites (drivers, CUDA, Nsight) and should be rerun after driver upgrades.
 - Use `python core/harness/run_benchmarks.py --targets ch*` for automated regression suites.
 - `python core/analysis/analyze_expectations.py --artifacts-dir artifacts` compares new runs to stored thresholds.
+- Expectation baselines are per-hardware: `expectations_{hardware_key}.json` (example: `expectations_4x_b200.json`).
+- `--update-expectations` updates the file matching the active hardware key.
 
 ## Validation Checklist
 - `pytest tests/integration` succeeds to confirm harness discovery and CLI plumbing.

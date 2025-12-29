@@ -529,6 +529,8 @@ class BenchmarkConfig:
     env_passthrough: List[str] = field(default_factory=lambda: (_get_default_value("env_passthrough", ["CUDA_VISIBLE_DEVICES"]) or []).copy())
     target_extra_args: Dict[str, List[str]] = field(default_factory=lambda: (_get_default_value("target_extra_args", {}) or {}).copy())
     multi_gpu_required: bool = field(default_factory=lambda: bool(_get_default_value("multi_gpu_required", False)))
+    required_world_size: Optional[int] = field(default_factory=lambda: _get_default_value("required_world_size", None))
+    single_gpu: bool = field(default_factory=lambda: bool(_get_default_value("single_gpu", False)))
     target_label: Optional[str] = None
     _execution_mode_overridden: bool = field(init=False, repr=False, default=False)
     
@@ -542,7 +544,7 @@ class BenchmarkConfig:
     profiling_timeout_seconds: Optional[int] = field(default_factory=lambda: _get_default_value("profiling_timeout_seconds", None))
     ncu_metric_set: str = field(default_factory=lambda: _get_default_value("ncu_metric_set", "auto"))
     pm_sampling_interval: Optional[int] = field(default_factory=lambda: _get_default_value("pm_sampling_interval", None))
-    ncu_replay_mode: str = field(default_factory=lambda: _get_default_value("ncu_replay_mode", "kernel"))
+    ncu_replay_mode: str = field(default_factory=lambda: _get_default_value("ncu_replay_mode", "application"))
     ncu_replay_mode_override: bool = field(default_factory=lambda: _get_default_value("ncu_replay_mode_override", False))
 
     # Triton-style best practices (based on triton/testing.py)
@@ -1001,6 +1003,8 @@ class BaseBenchmark:
     """
     
     allow_cpu: bool = False
+    multi_gpu_required: bool = False
+    required_world_size: Optional[int] = None
 
     def __init__(self):
         """Initialize benchmark with device resolution.
@@ -1509,6 +1513,87 @@ class BenchmarkHarness:
                 world_size = torch.cuda.device_count()
         return world_size
 
+    def _visible_gpu_count(self) -> int:
+        """Return number of visible GPUs based on CUDA_VISIBLE_DEVICES or CUDA runtime."""
+        visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+        if visible is not None:
+            tokens = [tok.strip() for tok in visible.split(",") if tok.strip()]
+            return len(tokens)
+        if torch.cuda.is_available():
+            return torch.cuda.device_count()
+        return 0
+
+    def _select_single_gpu_visible(self) -> str:
+        """Choose a single GPU ID from CUDA_VISIBLE_DEVICES or default to '0'."""
+        visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+        if visible:
+            tokens = [tok.strip() for tok in visible.split(",") if tok.strip()]
+            if tokens:
+                return tokens[0]
+        return "0"
+
+    def _resolve_world_size_requirement(
+        self,
+        benchmark: BaseBenchmark,
+        config: BenchmarkConfig,
+    ) -> Tuple[int, bool]:
+        """Resolve required world size and whether it is exact."""
+        required = getattr(config, "required_world_size", None)
+        if required is None:
+            required = getattr(benchmark, "required_world_size", None)
+        if required is not None:
+            required = int(required)
+            if required <= 0:
+                raise ValueError(f"required_world_size must be positive, got {required}")
+            return required, True
+        multi_gpu_required = bool(
+            getattr(config, "multi_gpu_required", False) or getattr(benchmark, "multi_gpu_required", False)
+        )
+        if multi_gpu_required:
+            return 2, False
+        return 1, True
+
+    def _enforce_world_size_requirement(self, benchmark: BaseBenchmark, config: BenchmarkConfig) -> None:
+        """Fail fast if world size/visible GPUs do not match requirements."""
+        if getattr(benchmark, "allow_cpu", False) and getattr(benchmark, "device", None) is not None:
+            if getattr(benchmark, "device").type != "cuda":
+                return
+        required, exact = self._resolve_world_size_requirement(benchmark, config)
+        if getattr(config, "single_gpu", False) and required != 1:
+            raise RuntimeError(
+                f"single_gpu=True conflicts with required_world_size={required}. "
+                "Unset --single-gpu or adjust required_world_size."
+            )
+
+        visible = self._visible_gpu_count()
+        effective_visible = visible
+        if getattr(config, "single_gpu", False) and getattr(config, "use_subprocess", False):
+            effective_visible = 1
+
+        world_size_hint = self._world_size_hint(config)
+        if exact:
+            if effective_visible and effective_visible != required:
+                raise RuntimeError(
+                    f"World size mismatch: requires exactly {required} visible GPU(s), "
+                    f"found {effective_visible}. Set CUDA_VISIBLE_DEVICES accordingly."
+                )
+            if world_size_hint and world_size_hint != required:
+                raise RuntimeError(
+                    f"World size mismatch: requires exactly {required} rank(s), "
+                    f"configured world_size={world_size_hint}."
+                )
+        else:
+            if effective_visible and effective_visible < required:
+                raise RuntimeError(
+                    f"World size mismatch: requires >= {required} visible GPU(s), "
+                    f"found {effective_visible}. Set CUDA_VISIBLE_DEVICES accordingly."
+                )
+            if world_size_hint and world_size_hint < required:
+                raise RuntimeError(
+                    f"World size mismatch: requires >= {required} rank(s), "
+                    f"configured world_size={world_size_hint}."
+                )
+
     def _annotate_launch_metadata(
         self,
         result: PydanticBenchmarkResult,
@@ -1758,6 +1843,8 @@ class BenchmarkHarness:
                 env[key] = os.environ[key]
         print(f"[harness] torchrun env passthrough: {getattr(config, 'env_passthrough', [])}", flush=True)
         env.update(spec.env)
+        if getattr(config, "single_gpu", False):
+            env["CUDA_VISIBLE_DEVICES"] = self._select_single_gpu_visible()
         if getattr(config, "lock_gpu_clocks", False) and torch.cuda.is_available():
             env["AISP_LOCK_GPU_CLOCKS"] = "1"
             if getattr(config, "gpu_sm_clock_mhz", None) is not None:
@@ -2078,6 +2165,9 @@ class BenchmarkHarness:
         # or where the config was created before __post_init__ could fix it
         if config.percentiles is None or not isinstance(config.percentiles, list):
             config.percentiles = [25, 50, 75, 99]
+
+        if isinstance(benchmark, BaseBenchmark):
+            self._enforce_world_size_requirement(benchmark, config)
 
         # Make merged config visible to benchmarks, but prevent runtime mutation.
         # Benchmarks read this via get_config() / self._config.
@@ -2449,12 +2539,16 @@ class BenchmarkHarness:
         
         try:
             import signal
+            env = os.environ.copy()
+            if getattr(config, "single_gpu", False):
+                env["CUDA_VISIBLE_DEVICES"] = self._select_single_gpu_visible()
             process = subprocess.Popen(
                 [sys.executable, str(runner_script)],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                env=env,
                 preexec_fn=os.setsid  # Create new process group for reliable killing
             )
             

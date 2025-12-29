@@ -444,7 +444,10 @@ def calculate_optimization_score(
     }
 
 
-def compare_nsys_files(profiles_dir: Path) -> Optional[Dict[str, Any]]:
+def compare_nsys_files(
+    profiles_dir: Path,
+    pair_key: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """Extract and compare nsys metrics between baseline and optimized."""
     baseline_nsys = list(profiles_dir.glob("*baseline*.nsys-rep"))
     optimized_nsys = list(profiles_dir.glob("*optimized*.nsys-rep"))
@@ -452,18 +455,31 @@ def compare_nsys_files(profiles_dir: Path) -> Optional[Dict[str, Any]]:
     if not baseline_nsys or not optimized_nsys:
         return None
 
+    pair, _, error = _select_profile_pair(
+        baseline_nsys,
+        optimized_nsys,
+        pair_key=pair_key,
+        label="nsys",
+    )
+    if error:
+        return error
+    if not pair:
+        return None
+
+    baseline_path, optimized_path = pair
+
     try:
         from core.profiling.extract_nsys_summary import harvest
 
-        baseline_metrics = harvest(baseline_nsys[0])
-        optimized_metrics = harvest(optimized_nsys[0])
+        baseline_metrics = harvest(baseline_path)
+        optimized_metrics = harvest(optimized_path)
 
         comparison = {
-            "baseline_file": baseline_nsys[0].name,
-            "optimized_file": optimized_nsys[0].name,
+            "baseline_file": baseline_path.name,
+            "optimized_file": optimized_path.name,
             "metrics": [],
-            "baseline_sources": _extract_nsys_sources(baseline_nsys[0]),
-            "optimized_sources": _extract_nsys_sources(optimized_nsys[0]),
+            "baseline_sources": _extract_nsys_sources(baseline_path),
+            "optimized_sources": _extract_nsys_sources(optimized_path),
         }
 
         opt_lookup = {m.get("metric", ""): m.get("value", "") for m in optimized_metrics}
@@ -498,7 +514,11 @@ def compare_nsys_files(profiles_dir: Path) -> Optional[Dict[str, Any]]:
         return {"error": str(exc)}
 
 
-def compare_ncu_files(profiles_dir: Path) -> Optional[Dict[str, Any]]:
+def compare_ncu_files(
+    profiles_dir: Path,
+    pair_key: Optional[str] = None,
+    include_ncu_details: bool = False,
+) -> Optional[Dict[str, Any]]:
     """Extract and compare ncu metrics between baseline and optimized."""
     baseline_ncu = list(profiles_dir.glob("*baseline*.ncu-rep"))
     optimized_ncu = list(profiles_dir.glob("*optimized*.ncu-rep"))
@@ -507,6 +527,20 @@ def compare_ncu_files(profiles_dir: Path) -> Optional[Dict[str, Any]]:
     optimized_csv = list(profiles_dir.glob("*optimized*ncu*.csv"))
 
     if baseline_csv and optimized_csv:
+        pair, selected_key, error = _select_profile_pair(
+            baseline_csv,
+            optimized_csv,
+            pair_key=pair_key,
+            label="ncu csv",
+        )
+        if error:
+            return error
+        if not pair:
+            return None
+
+        baseline_csv_path, optimized_csv_path = pair
+        selected_pair_key = pair_key or selected_key
+
         try:
             def read_ncu_csv(path: Path) -> Dict[str, Any]:
                 metrics: Dict[str, Any] = {}
@@ -519,19 +553,29 @@ def compare_ncu_files(profiles_dir: Path) -> Optional[Dict[str, Any]]:
                             metrics[name] = value
                 return metrics
 
-            baseline_metrics = read_ncu_csv(baseline_csv[0])
-            optimized_metrics = read_ncu_csv(optimized_csv[0])
+            baseline_metrics = read_ncu_csv(baseline_csv_path)
+            optimized_metrics = read_ncu_csv(optimized_csv_path)
 
             comparison = {
-                "baseline_file": baseline_csv[0].name,
-                "optimized_file": optimized_csv[0].name,
+                "baseline_file": baseline_csv_path.name,
+                "optimized_file": optimized_csv_path.name,
                 "metrics": [],
             }
-            if baseline_ncu and optimized_ncu:
-                comparison["baseline_sources"] = _extract_ncu_sources(baseline_ncu[0])
-                comparison["optimized_sources"] = _extract_ncu_sources(optimized_ncu[0])
-                comparison["baseline_disassembly"] = _extract_ncu_disassembly(baseline_ncu[0])
-                comparison["optimized_disassembly"] = _extract_ncu_disassembly(optimized_ncu[0])
+            if include_ncu_details and baseline_ncu and optimized_ncu:
+                rep_pair, _, rep_error = _select_profile_pair(
+                    baseline_ncu,
+                    optimized_ncu,
+                    pair_key=selected_pair_key,
+                    label="ncu",
+                )
+                if rep_error:
+                    return rep_error
+                if rep_pair:
+                    baseline_rep, optimized_rep = rep_pair
+                    comparison["baseline_sources"] = _extract_ncu_sources(baseline_rep)
+                    comparison["optimized_sources"] = _extract_ncu_sources(optimized_rep)
+                    comparison["baseline_disassembly"] = _extract_ncu_disassembly(baseline_rep)
+                    comparison["optimized_disassembly"] = _extract_ncu_disassembly(optimized_rep)
 
             all_keys = set(baseline_metrics.keys()) | set(optimized_metrics.keys())
             for key in sorted(all_keys):
@@ -616,9 +660,22 @@ def compare_ncu_files(profiles_dir: Path) -> Optional[Dict[str, Any]]:
             per_kernel.setdefault(kernel, {})[metric] = value
         return per_kernel
 
+    pair, _, error = _select_profile_pair(
+        baseline_ncu,
+        optimized_ncu,
+        pair_key=pair_key,
+        label="ncu",
+    )
+    if error:
+        return error
+    if not pair:
+        return None
+
+    baseline_path, optimized_path = pair
+
     try:
-        baseline_per_kernel = _load_metrics(baseline_ncu[0])
-        optimized_per_kernel = _load_metrics(optimized_ncu[0])
+        baseline_per_kernel = _load_metrics(baseline_path)
+        optimized_per_kernel = _load_metrics(optimized_path)
     except Exception as exc:  # pragma: no cover - tool availability varies
         return {"error": f"NCU extraction failed: {exc}"}
 
@@ -652,15 +709,17 @@ def compare_ncu_files(profiles_dir: Path) -> Optional[Dict[str, Any]]:
             diffs[key] = {"baseline": bv, "optimized": ov, "delta": delta, "ratio": ratio}
         return {"kernel": name, "metrics": diffs}
 
-    return {
-        "baseline_file": baseline_ncu[0].name,
-        "optimized_file": optimized_ncu[0].name,
+    comparison = {
+        "baseline_file": baseline_path.name,
+        "optimized_file": optimized_path.name,
         "kernel_comparison": [_kernel_payload(k) for k in ranked],
-        "baseline_sources": _extract_ncu_sources(baseline_ncu[0]),
-        "optimized_sources": _extract_ncu_sources(optimized_ncu[0]),
-        "baseline_disassembly": _extract_ncu_disassembly(baseline_ncu[0]),
-        "optimized_disassembly": _extract_ncu_disassembly(optimized_ncu[0]),
     }
+    if include_ncu_details:
+        comparison["baseline_sources"] = _extract_ncu_sources(baseline_path)
+        comparison["optimized_sources"] = _extract_ncu_sources(optimized_path)
+        comparison["baseline_disassembly"] = _extract_ncu_disassembly(baseline_path)
+        comparison["optimized_disassembly"] = _extract_ncu_disassembly(optimized_path)
+    return comparison
 
     return None
 
@@ -746,6 +805,10 @@ def _extract_nsys_kernel_stats(nsys_path: Path) -> Dict[str, Any]:
 def _strip_profile_suffix(name: str) -> str:
     if name.endswith(".nsys-rep"):
         return name[:-9]
+    if name.endswith(".ncu-rep"):
+        return name[:-8]
+    if name.endswith(".csv"):
+        return name[:-4]
     if name.endswith(".sqlite"):
         return name[:-7]
     return name
@@ -776,47 +839,126 @@ def _tokenize_profile_name(name: str) -> List[str]:
     return tokens
 
 
+def _group_profile_pairs(
+    baseline_files: List[Path],
+    optimized_files: List[Path],
+) -> Dict[str, Dict[str, List[Path]]]:
+    grouped: Dict[str, Dict[str, List[Path]]] = {}
+
+    def _key_from_path(path: Path) -> str:
+        key = _normalize_profile_name(path.name)
+        if not key:
+            key = _strip_profile_suffix(path.name).lower()
+        return key
+
+    for path in baseline_files:
+        key = _key_from_path(path)
+        grouped.setdefault(key, {}).setdefault("baseline", []).append(path)
+    for path in optimized_files:
+        key = _key_from_path(path)
+        grouped.setdefault(key, {}).setdefault("optimized", []).append(path)
+    return {
+        key: value
+        for key, value in grouped.items()
+        if value.get("baseline") and value.get("optimized")
+    }
+
+
+def _select_profile_pair(
+    baseline_files: List[Path],
+    optimized_files: List[Path],
+    pair_key: Optional[str],
+    label: str,
+) -> tuple[Optional[tuple[Path, Path]], Optional[str], Optional[Dict[str, Any]]]:
+    if not baseline_files or not optimized_files:
+        return None, None, None
+
+    candidates = _group_profile_pairs(baseline_files, optimized_files)
+    if not candidates:
+        return None, None, None
+
+    candidate_keys = sorted(candidates.keys())
+    if pair_key is None:
+        if len(candidate_keys) > 1:
+            return (
+                None,
+                None,
+                {
+                    "error": (
+                        f"Multiple {label} profile pairs found; provide --pair to select one."
+                    ),
+                    "candidates": candidate_keys,
+                },
+            )
+        selected_key = candidate_keys[0]
+        return (
+            (
+                max(candidates[selected_key]["baseline"], key=lambda p: p.stat().st_mtime),
+                max(candidates[selected_key]["optimized"], key=lambda p: p.stat().st_mtime),
+            ),
+            selected_key,
+            None,
+        )
+
+    key_tokens = set(_tokenize_profile_name(pair_key))
+    pair_key_norm = _normalize_profile_name(pair_key) or pair_key.lower()
+
+    best_key: Optional[str] = None
+    best_score = -1.0
+    for key in candidate_keys:
+        candidate_tokens = set(_tokenize_profile_name(key))
+        overlap = len(key_tokens & candidate_tokens)
+        if overlap == 0 and pair_key_norm not in key:
+            continue
+        score = 0.0
+        if key == pair_key_norm:
+            score += 1.5
+        if pair_key_norm in key:
+            score += 1.0
+        if overlap:
+            score += (2.0 * overlap) / (len(key_tokens) + len(candidate_tokens))
+        if score > best_score:
+            best_score = score
+            best_key = key
+
+    if best_key is None:
+        return (
+            None,
+            None,
+            {
+                "error": f"No matching {label} profile pair found for --pair={pair_key}.",
+                "candidates": candidate_keys,
+            },
+        )
+
+    return (
+        (
+            max(candidates[best_key]["baseline"], key=lambda p: p.stat().st_mtime),
+            max(candidates[best_key]["optimized"], key=lambda p: p.stat().st_mtime),
+        ),
+        best_key,
+        None,
+    )
+
+
 def _select_flamegraph_pair(
     profiles_dir: Path,
     pair_key: Optional[str] = None,
-) -> Optional[tuple[Path, Path]]:
+) -> tuple[Optional[tuple[Path, Path]], Optional[Dict[str, Any]]]:
     nsys_files = sorted(profiles_dir.glob("*.nsys-rep"))
     baseline_nsys = [path for path in nsys_files if "baseline" in path.name.lower()]
     optimized_nsys = [path for path in nsys_files if "optimized" in path.name.lower()]
 
     if not baseline_nsys or not optimized_nsys:
-        return None
+        return None, None
 
-    key_tokens: Optional[set[str]] = None
-    if pair_key:
-        key_tokens = set(_tokenize_profile_name(pair_key))
-
-    best: Optional[tuple[float, float, Path, Path]] = None
-    for baseline_path in baseline_nsys:
-        baseline_tokens = set(_tokenize_profile_name(baseline_path.name))
-        for optimized_path in optimized_nsys:
-            optimized_tokens = set(_tokenize_profile_name(optimized_path.name))
-            overlap = len(baseline_tokens & optimized_tokens)
-            if overlap == 0:
-                continue
-            score = (2.0 * overlap) / (len(baseline_tokens) + len(optimized_tokens))
-            baseline_norm = _normalize_profile_name(baseline_path.name)
-            optimized_norm = _normalize_profile_name(optimized_path.name)
-            if baseline_norm == optimized_norm:
-                score += 1.0
-            if key_tokens is not None:
-                if key_tokens.issubset(baseline_tokens | optimized_tokens):
-                    score += 1.0
-                else:
-                    score -= 0.5
-            mtime = max(baseline_path.stat().st_mtime, optimized_path.stat().st_mtime)
-            candidate = (score, mtime, baseline_path, optimized_path)
-            if best is None or candidate[:2] > best[:2]:
-                best = candidate
-
-    if best is None:
-        return baseline_nsys[0], optimized_nsys[0]
-    return best[2], best[3]
+    pair, _, error = _select_profile_pair(
+        baseline_nsys,
+        optimized_nsys,
+        pair_key=pair_key,
+        label="nsys",
+    )
+    return pair, error
 
 
 def generate_flamegraph_comparison(
@@ -827,7 +969,9 @@ def generate_flamegraph_comparison(
     
     Returns structured data for the FlameGraphComparison React component.
     """
-    pair = _select_flamegraph_pair(profiles_dir, pair_key=pair_key)
+    pair, error = _select_flamegraph_pair(profiles_dir, pair_key=pair_key)
+    if error:
+        return error
     if pair is None:
         return None
     baseline_path, optimized_path = pair

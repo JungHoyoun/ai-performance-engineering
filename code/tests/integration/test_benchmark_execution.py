@@ -4,6 +4,7 @@ Tests that benchmarks can be executed end-to-end with manifest generation,
 artifact management, and error handling.
 """
 
+import os
 import pytest
 import sys
 import json
@@ -64,6 +65,7 @@ class TestBenchmarkExecutionPipeline:
             enable_memory_tracking=True,
             adaptive_iterations=False,
             enforce_environment_validation=False,
+            single_gpu=True,
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
         
@@ -110,6 +112,7 @@ class TestBenchmarkExecutionPipeline:
             enable_memory_tracking=True,
             adaptive_iterations=False,
             enforce_environment_validation=False,
+            single_gpu=True,
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
         
@@ -153,6 +156,7 @@ class TestBenchmarkExecutionPipeline:
             warmup=5,
             enable_profiling=False,
             enforce_environment_validation=False,
+            single_gpu=True,
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
         
@@ -207,6 +211,7 @@ class TestBenchmarkExecutionPipeline:
             warmup=5,
             enable_profiling=False,
             enforce_environment_validation=False,
+            single_gpu=True,
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
         
@@ -222,3 +227,42 @@ class TestBenchmarkExecutionPipeline:
         assert 'result' in data
         assert 'run_id' in data
         assert data['run_id'] == "test_serialization"
+
+    def test_world_size_mismatch_fails_fast(self):
+        """Require single GPU and ensure mismatch raises before execution."""
+        from core.harness.benchmark_harness import BaseBenchmark
+
+        class SimpleBenchmark(BaseBenchmark):
+            def setup(self):
+                pass
+
+            def benchmark_fn(self):
+                pass
+
+            def get_verify_inputs(self):
+                return {"input": torch.tensor([0.0], device=self.device)}
+
+            def get_verify_output(self):
+                raise RuntimeError("benchmark_fn() must set output")
+
+            def get_output_tolerance(self):
+                return (1e-5, 1e-8)
+
+        old_visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+        os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
+        try:
+            config = BenchmarkConfig(
+                iterations=1,
+                warmup=1,
+                enable_profiling=False,
+                enforce_environment_validation=False,
+                single_gpu=False,
+            )
+            harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
+            with pytest.raises(RuntimeError, match="World size mismatch"):
+                harness.benchmark(SimpleBenchmark())
+        finally:
+            if old_visible is None:
+                os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+            else:
+                os.environ["CUDA_VISIBLE_DEVICES"] = old_visible

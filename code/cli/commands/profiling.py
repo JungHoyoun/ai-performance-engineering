@@ -30,6 +30,7 @@ def compare_profiles(args) -> None:
     output = getattr(args, 'output', 'comparison_flamegraph.html')
     json_out = getattr(args, 'json_out', None)
     pair_key = getattr(args, 'pair', None)
+    include_ncu_details = bool(getattr(args, 'include_ncu_details', False))
     
     if not chapter:
         # List available profile pairs
@@ -83,6 +84,18 @@ def compare_profiles(args) -> None:
         console.print(f"[red]Error: {result['error']}[/red]")
         return
     
+    # NEW: Get metric-level analysis (improvements, regressions, bottleneck shifts)
+    metric_comparison = core.compare_profiles(
+        chapter,
+        pair_key=pair_key,
+        include_ncu_details=include_ncu_details,
+    )
+    if metric_comparison and metric_comparison.get("error"):
+        console.print(f"[red]Error: {metric_comparison['error']}[/red]")
+        if metric_comparison.get("candidates"):
+            console.print(f"[yellow]Available pairs:[/yellow] {metric_comparison['candidates']}")
+        return
+
     # Display summary
     baseline = result.get("baseline", {})
     optimized = result.get("optimized", {})
@@ -105,8 +118,6 @@ def compare_profiles(args) -> None:
     if result.get("insight"):
         console.print(f"\n[yellow]Insight:[/yellow] {result['insight']}")
     
-    # NEW: Get metric-level analysis (improvements, regressions, bottleneck shifts)
-    metric_comparison = core.compare_profiles(chapter)
     if metric_comparison and not metric_comparison.get("error"):
         metric_analysis = metric_comparison.get("metric_analysis")
         if metric_analysis:

@@ -36,6 +36,16 @@ MODEL_CANDIDATES: List[Dict[str, Any]] = [
     {"label": "2B (8x2048)", "n_layers": 8, "d_model": 2048, "d_ff": 8192, "seq_len": 1024},
     {"label": "1B (4x1024)", "n_layers": 4, "d_model": 1024, "d_ff": 4096, "seq_len": 768},
 ]
+REGIONAL_COMPILATION_CHOICE_LABEL = "3B (16x3072)"
+
+
+def select_regional_compilation_choice(
+    label: str = REGIONAL_COMPILATION_CHOICE_LABEL,
+) -> Dict[str, Any]:
+    for candidate in MODEL_CANDIDATES:
+        if candidate["label"] == label:
+            return candidate
+    raise RuntimeError(f"Missing model config for regional compilation: {label}")
 
 
 class DummyTransformer(nn.Module):
@@ -75,8 +85,8 @@ class BaselineRegionalCompilationBenchmark(VerificationPayloadMixin, BaseBenchma
         self.inputs: Optional[torch.Tensor] = None
         self._verify_input: Optional[torch.Tensor] = None
         self.parameter_count: int = 0
-        # Use a mid-sized config so the full-graph compilation cost is noticeable.
-        self.choice = MODEL_CANDIDATES[-1]  # 1B-style config (4x1024)
+        # Use a mid-sized config so CUDA-graph replay overhead is amortized.
+        self.choice = select_regional_compilation_choice()
         tokens = self.choice["seq_len"] * self.choice["d_model"]
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,

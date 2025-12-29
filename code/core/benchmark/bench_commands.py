@@ -88,6 +88,14 @@ from core.discovery import chapter_slug, discover_all_chapters, resolve_target_c
 apply_env_defaults()
 
 
+def _select_single_gpu_visible(existing: Optional[str]) -> str:
+    if existing:
+        tokens = [tok.strip() for tok in existing.split(",") if tok.strip()]
+        if tokens:
+            return tokens[0]
+    return "0"
+
+
 def _get_analyzer(data_file: Optional[Path] = None) -> PerformanceAnalyzer:
     """Shared analysis helper for CLI commands."""
     loader = (lambda: load_benchmark_results(data_file)) if data_file else load_benchmark_results
@@ -297,6 +305,7 @@ def _execute_benchmarks(
     artifacts_dir: Optional[str] = None,
     log_level: str = "INFO",
     log_file: Optional[str] = None,
+    single_gpu: bool = False,
     accept_regressions: bool = False,
     update_expectations: bool = False,
     ncu_metric_set: str = "auto",
@@ -328,6 +337,9 @@ def _execute_benchmarks(
     """Execute selected benchmarks with optional profiling."""
     parsed_extra_args = _parse_target_extra_args(target_extra_args)
     active_bench_root = Path(bench_root).resolve() if bench_root else repo_root
+
+    if single_gpu:
+        os.environ["CUDA_VISIBLE_DEVICES"] = _select_single_gpu_visible(os.environ.get("CUDA_VISIBLE_DEVICES"))
 
     try:
         from core.harness.cuda_capabilities import set_force_pipeline
@@ -402,6 +414,7 @@ def _execute_benchmarks(
             cold_start=cold_start,
             iterations=iterations,
             warmup=warmup,
+            single_gpu=single_gpu,
             enforce_environment_validation=not allow_invalid_environment,
             allow_virtualization=allow_virtualization,
             only_examples=only_examples,
@@ -434,6 +447,15 @@ def _execute_benchmarks(
             llm_explain=llm_explain,
         )
         all_results.append(result)
+
+    manifests = []
+    for result in all_results:
+        manifests.extend(result.get("manifests", []))
+
+    if manifests:
+        with open(artifact_manager.manifest_path, "w") as f:
+            json.dump({"timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"), "manifests": manifests}, f, indent=2)
+        logger.info(f"Manifest saved to: {artifact_manager.manifest_path}")
 
     output_json = artifact_manager.get_result_path("benchmark_test_results.json")
     output_md = artifact_manager.get_report_path("benchmark_test_results.md")
@@ -490,6 +512,7 @@ if TYPER_AVAILABLE:
         artifacts_dir: Optional[str] = Option(None, "--artifacts-dir", help="Directory for artifacts (default: ./artifacts)"),
         log_level: str = Option("INFO", "--log-level", help="Log level: DEBUG, INFO, WARNING, ERROR"),
         log_file: Optional[str] = Option(None, "--log-file", help="Path to log file (default: artifacts/<run_id>/logs/benchmark.log)"),
+        single_gpu: bool = Option(False, "--single-gpu", help="Force single-GPU visibility (sets CUDA_VISIBLE_DEVICES=0 for this run)."),
         ncu_metric_set: str = Option("auto", "--ncu-metric-set", help="Nsight Compute metric preset: auto, minimal, deep_dive, or roofline. If auto, the profile type governs metric selection.", callback=_validate_ncu_metric_set),
         ncu_replay_mode: Optional[str] = Option(
             None,
@@ -567,6 +590,7 @@ if TYPER_AVAILABLE:
                 "output_format": output_format,
                 "suite_timeout": effective_timeout,
                 "verify_phase": verify_phase,
+                "single_gpu": single_gpu,
                 "allow_invalid_environment": allow_invalid_environment,
                 "allow_virtualization": allow_virtualization,
             }
@@ -589,6 +613,7 @@ if TYPER_AVAILABLE:
             artifacts_dir=artifacts_dir,
             log_level=log_level,
             log_file=log_file,
+            single_gpu=single_gpu,
             accept_regressions=accept_regressions,
             update_expectations=update_expectations,
             ncu_metric_set=ncu_metric_set,

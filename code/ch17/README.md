@@ -13,6 +13,7 @@ Blends router design, disaggregated inference, and profiling discipline so Black
 | Path | Description |
 | --- | --- |
 | `baseline_dynamic_routing.py`, `optimized_dynamic_routing.py`, `dynamic_routing.py`, `early_rejection.py` | Routing controllers that evolve from static heuristics to telemetry-driven admission and rejection policies. |
+| `baseline_nvfp4_mlp.py`, `optimized_nvfp4_mlp.py` | BF16 vs NVFP4 MLP benchmark for prefill-heavy throughput comparisons. |
 | `baseline_inference_full.py`, `optimized_inference_full.py`, `baseline_prefill_decode_disagg.py`, `optimized_prefill_decode_disagg.py`, `baseline_prefill_decode_disagg_multigpu.py`, `optimized_prefill_decode_disagg_multigpu.py`, `baseline_prefill_decode_disagg_ttft_multigpu.py`, `optimized_prefill_decode_disagg_ttft_multigpu.py`, `baseline_prefill_decode_disagg_tpot_long_multigpu.py`, `optimized_prefill_decode_disagg_tpot_long_multigpu.py` | End-to-end inference flows modeling separate prefill and decode pools, including TTFT-focused and long-output TPOT-focused multi-GPU pairs. |
 | `baseline_pipeline_parallelism.py`, `optimized_pipeline_parallelism.py` | Pipeline parallel workloads combining compute and KV-transfer scheduling. |
 | `baseline_moe_router_uniform.py`, `optimized_moe_router_uniform_topology.py` | Comparable MoE router benchmark pair contrasting uniform vs topology-aware routing while keeping outputs invariant via shared expert weights. |

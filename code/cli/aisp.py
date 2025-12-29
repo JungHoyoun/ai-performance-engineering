@@ -795,9 +795,22 @@ if typer and profile_app is not None:
         output: str = typer.Option("comparison_flamegraph.html", "--output", "-o", help="Output HTML file"),
         json_out: Optional[str] = typer.Option(None, "--json", "-j", help="Also output JSON data"),
         pair: Optional[str] = typer.Option(None, "--pair", help="Substring or key to select a specific profile pair"),
+        include_ncu_details: bool = typer.Option(
+            False,
+            "--include-ncu-details",
+            help="Include NCU source/disassembly details in the comparison (slower).",
+        ),
     ) -> None:
         from cli.commands import profiling
-        _run(profiling.compare_profiles, ctx, chapter=chapter, output=output, json_out=json_out, pair=pair)
+        _run(
+            profiling.compare_profiles,
+            ctx,
+            chapter=chapter,
+            output=output,
+            json_out=json_out,
+            pair=pair,
+            include_ncu_details=include_ncu_details,
+        )
 
     @profile_app.command("diff", help="Differential analysis between baseline/optimized")
     def profile_diff(

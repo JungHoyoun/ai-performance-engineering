@@ -4,6 +4,8 @@ include ../core/common/cuda_arch.mk
 
 NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS)
 SUFFIX = $(TARGET_SUFFIX)
+CUTLASS_ROOT := ../third_party/pytorch-src/third_party/cutlass
+CUTLASS_INCLUDES := -I$(CUTLASS_ROOT)/include -I$(CUTLASS_ROOT)/tools/util/include -I$(CUTLASS_ROOT)/examples/common
 
 # Build NVCC binaries for all CUDA sources (exclude PyTorch extension sources)
 CUDA_SOURCES = $(filter-out tcgen05_basic.cu tcgen05_pipelined.cu, $(wildcard *.cu))
@@ -22,10 +24,13 @@ $(addsuffix $(SUFFIX), $(BASE_TARGETS)): %$(SUFFIX): %.cu
 	@echo "Building $@..."
 	@if [ "$*" = "cutlass_gemm_example" ] || [ "$*" = "micro_tiling_matmul" ]; then \
 		$(NVCC) $(NVCC_FLAGS) -lcublas -lcuda -o $@ $<; \
+	elif [ "$*" = "baseline_cutlass_gemm_fp4_perchannel" ] || [ "$*" = "optimized_cutlass_gemm_fp4_perchannel" ]; then \
+		$(NVCC) $(NVCC_FLAGS) $(CUTLASS_INCLUDES) -lcuda -o $@ $<; \
 	elif [ "$*" = "baseline_cutlass_gemm" ] || [ "$*" = "optimized_cutlass_gemm" ] || \
 	     [ "$*" = "baseline_cutlass_gemm_fp16" ] || [ "$*" = "optimized_cutlass_gemm_fp16" ] || \
 	     [ "$*" = "baseline_cutlass_gemm_fp8" ] || [ "$*" = "optimized_cutlass_gemm_fp8" ] || \
-	     [ "$*" = "baseline_cutlass_gemm_fp4" ] || [ "$*" = "optimized_cutlass_gemm_fp4" ]; then \
+	     [ "$*" = "baseline_cutlass_gemm_fp4" ] || [ "$*" = "optimized_cutlass_gemm_fp4" ] || \
+	     [ "$*" = "baseline_cublas_gemm_fp4_perchannel" ] || [ "$*" = "optimized_cublas_gemm_fp4_perchannel" ]; then \
 		$(NVCC) $(NVCC_FLAGS) -lcublas -lcublasLt -lcuda -o $@ $<; \
 	else \
 		$(NVCC) $(NVCC_FLAGS) -lcuda -o $@ $<; \
@@ -35,10 +40,13 @@ $(VERIFY_TARGETS): %_verify$(SUFFIX): %.cu
 	@echo "Building $@ (verify)..."
 	@if [ "$*" = "cutlass_gemm_example" ] || [ "$*" = "micro_tiling_matmul" ]; then \
 		$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -lcublas -lcuda -o $@ $<; \
+	elif [ "$*" = "baseline_cutlass_gemm_fp4_perchannel" ] || [ "$*" = "optimized_cutlass_gemm_fp4_perchannel" ]; then \
+		$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 $(CUTLASS_INCLUDES) -lcuda -o $@ $<; \
 	elif [ "$*" = "baseline_cutlass_gemm" ] || [ "$*" = "optimized_cutlass_gemm" ] || \
 	     [ "$*" = "baseline_cutlass_gemm_fp16" ] || [ "$*" = "optimized_cutlass_gemm_fp16" ] || \
 	     [ "$*" = "baseline_cutlass_gemm_fp8" ] || [ "$*" = "optimized_cutlass_gemm_fp8" ] || \
-	     [ "$*" = "baseline_cutlass_gemm_fp4" ] || [ "$*" = "optimized_cutlass_gemm_fp4" ]; then \
+	     [ "$*" = "baseline_cutlass_gemm_fp4" ] || [ "$*" = "optimized_cutlass_gemm_fp4" ] || \
+	     [ "$*" = "baseline_cublas_gemm_fp4_perchannel" ] || [ "$*" = "optimized_cublas_gemm_fp4_perchannel" ]; then \
 		$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -lcublas -lcublasLt -lcuda -o $@ $<; \
 	else \
 		$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -lcuda -o $@ $<; \

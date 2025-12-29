@@ -13,6 +13,7 @@ Combines kernel, memory, pipeline, and inference optimizations into holistic cas
 | Path | Description |
 | --- | --- |
 | `baseline_multiple_unoptimized.py`, `optimized_multiple_unoptimized.py`, `ai_kernel_generator.py`, `inductor_guard.py` | Composite workloads that stack several bottlenecks plus helpers for generating candidate kernels safely. |
+| `baseline_nvfp4_mlp.py`, `optimized_nvfp4_mlp.py` | BF16 vs NVFP4 MLP benchmark illustrating precision-driven efficiency gains. |
 | `baseline_pipeline_sequential.py`, `optimized_pipeline_sequential.py`, `baseline_end_to_end_bandwidth.py`, `optimized_end_to_end_bandwidth.py` | Pipeline and bandwidth case studies showing how optimizations interact across stages. |
 | `baseline_integrated_kv_cache.py`, `optimized_integrated_kv_cache.py` | Integrated KV-cache demos that merge allocator, overlap, and NVLink pooling tricks. |
 | `baseline_memory_standard.py`, `optimized_memory_standard.py` | Memory-focused harness verifying allocator changes at system level. |

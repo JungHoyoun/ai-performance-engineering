@@ -12,6 +12,7 @@ Establishes the baseline benchmarking discipline with a simple training-loop goo
 | Path | Description |
 | --- | --- |
 | `baseline_performance.py`, `optimized_performance.py`, `optimized_performance_fp16.py`, `optimized_performance_fusion.py` | Goodput-focused training loop suite: FP32 baseline (microbatches + gradient accumulation), FP16-only, fusion-only (FP32), and combined FP16+fusion. |
+| `baseline_nvfp4_mlp.py`, `optimized_nvfp4_mlp.py` | BF16 vs NVFP4 MLP comparison that highlights precision-driven throughput gains on Blackwell. |
 | `baseline_gemm.cu`, `optimized_gemm_batched.cu`, `optimized_gemm_strided.cu` | CUDA GEMM variants (single, batched, strided) used to illustrate launch amortization and memory coalescing. |
 | `compare.py`, `workload_config.py`, `arch_config.py`, `expectations_b200.json` | Harness entrypoint, workload shapes, architecture overrides, and stored expectation thresholds. |
 

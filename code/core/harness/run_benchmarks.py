@@ -2236,6 +2236,7 @@ def _test_chapter_impl(
     cold_start: bool = False,
     iterations: Optional[int] = None,
     warmup: Optional[int] = None,
+    single_gpu: bool = False,
     enforce_environment_validation: bool = True,
     allow_virtualization: bool = True,
     only_examples: Optional[List[str]] = None,
@@ -2289,6 +2290,13 @@ def _test_chapter_impl(
         target_extra_args: Optional per-target arg overrides (target -> list of CLI args)
     """
     logger.info("launch_via arg=%s nproc_per_node=%s nnodes=%s", launch_via, nproc_per_node, nnodes)
+    if single_gpu:
+        visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+        if visible:
+            tokens = [tok.strip() for tok in visible.split(",") if tok.strip()]
+            os.environ["CUDA_VISIBLE_DEVICES"] = tokens[0] if tokens else "0"
+        else:
+            os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     dump_environment_and_capabilities()
 
     chapter_id = chapter_slug(chapter_dir, repo_root)
@@ -2468,6 +2476,7 @@ def _test_chapter_impl(
         enable_profiling=enable_profiling,  # Respect profiling flag (opt-in via CLI)
         enable_nsys=enable_profiling,  # nsys profiling (gracefully degrades if unavailable)
         enable_ncu=enable_profiling,  # ncu profiling (gracefully degrades if unavailable)
+        single_gpu=single_gpu,
         seed=42 if reproducible else None,  # Set seed for reproducibility
         deterministic=reproducible,  # Enable deterministic algorithms for reproducibility
         enforce_environment_validation=enforce_environment_validation,
@@ -2584,6 +2593,7 @@ def _test_chapter_impl(
         return out
     
     benchmark_results = []
+    manifest_entries: List[Dict[str, Any]] = []
     successful = 0
     failed_error = 0
     failed_regression = 0
@@ -2597,6 +2607,27 @@ def _test_chapter_impl(
     num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
     
     done_count = 0
+
+    def _record_manifest(
+        run: Any,
+        *,
+        variant: str,
+        file_name: str,
+        target_label: str,
+        technique: Optional[str] = None,
+    ) -> None:
+        manifest = getattr(run, "manifest", None)
+        if manifest is None:
+            raise RuntimeError(f"Missing manifest for {target_label} ({variant})")
+        manifest_entries.append({
+            "run_id": getattr(run, "run_id", None),
+            "timestamp": getattr(run, "timestamp", None),
+            "target_label": target_label,
+            "variant": variant,
+            "file": file_name,
+            "technique": technique,
+            "manifest": manifest.model_dump(mode="json"),
+        })
 
     def mark_progress(example_label: str) -> None:
         nonlocal done_count
@@ -2724,6 +2755,12 @@ def _test_chapter_impl(
                         reset_gpu_state()
                     mark_progress(example_name)
                     continue
+                _record_manifest(
+                    baseline_run,
+                    variant="baseline",
+                    file_name=baseline_path.name,
+                    target_label=f"{chapter_name}:{example_name}",
+                )
                 baseline_timing = baseline_result.timing
                 baseline_memory = baseline_result.memory
                 baseline_custom_metrics = getattr(baseline_result, "custom_metrics", None) or {}
@@ -3027,6 +3064,13 @@ def _test_chapter_impl(
                         if cold_start:
                             reset_gpu_state()
                         continue
+                    _record_manifest(
+                        optimized_run,
+                        variant="optimized",
+                        file_name=opt_name,
+                        target_label=f"{chapter_name}:{example_name}",
+                        technique=technique,
+                    )
                     optimized_timing = optimized_result.timing
                     optimized_memory = optimized_result.memory
                     optimized_custom_metrics = getattr(optimized_result, "custom_metrics", None) or {}
@@ -4214,6 +4258,7 @@ def _test_chapter_impl(
         'chapter': chapter_name,
         'status': 'completed',
         'benchmarks': benchmark_results,
+        'manifests': manifest_entries,
         'summary': {
             'total_benchmarks': len(benchmark_results),
             'successful': successful,
@@ -5620,6 +5665,7 @@ def test_chapter(
     cold_start: bool = False,
     iterations: Optional[int] = None,
     warmup: Optional[int] = None,
+    single_gpu: bool = False,
     enforce_environment_validation: bool = True,
     allow_virtualization: bool = True,
     only_examples: Optional[List[str]] = None,
@@ -5662,6 +5708,7 @@ def test_chapter(
         cold_start=cold_start,
         iterations=iterations,
         warmup=warmup,
+        single_gpu=single_gpu,
         enforce_environment_validation=enforce_environment_validation,
         allow_virtualization=allow_virtualization,
         graph_capture_ratio_threshold=graph_capture_ratio_threshold,

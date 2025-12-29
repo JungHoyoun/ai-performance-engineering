@@ -80,7 +80,7 @@ def _chapter_run_commands(slug: str) -> RunSection:
     ]
     notes = [
         "Override `--profile` or `--iterations` per workload when capturing Nsight traces.",
-        "Expectation baselines live next to each chapter in `expectations_b200.json`; refresh with `--update-expectations` after validating new hardware.",
+        "Expectation baselines live next to each chapter in `expectations_{hardware_key}.json`; refresh with `--update-expectations` after validating new hardware.",
     ]
     return RunSection(commands=commands, notes=notes)
 
@@ -203,7 +203,7 @@ ENTRIES["ch01"] = chapter_entry(
     contents=[
         ("`baseline_performance.py`, `optimized_performance.py`", "Goodput-focused training loop pair comparing FP32 eager vs FP16 + fused microbatches (batch fusion)."),
         ("`baseline_gemm.cu`, `optimized_gemm_batched.cu`, `optimized_gemm_strided.cu`", "CUDA GEMM variants (single, batched, strided) used to illustrate launch amortization and memory coalescing."),
-        ("`compare.py`, `workload_config.py`, `arch_config.py`, `expectations_b200.json`", "Harness entrypoint, workload shapes, architecture overrides, and stored expectation thresholds."),
+        ("`compare.py`, `workload_config.py`, `arch_config.py`, `expectations_{hardware_key}.json`", "Harness entrypoint, workload shapes, architecture overrides, and stored expectation thresholds."),
     ],
     validation=[
         "`python compare.py` reports optimized_performance achieving >=2x tokens/sec vs the baseline on default microbatch sizes.",
@@ -233,7 +233,7 @@ ENTRIES["ch02"] = chapter_entry(
         ("`nvlink_c2c_bandwidth_benchmark.py`, `baseline_memory_transfer.py`, `optimized_memory_transfer.py`, `optimized_memory_transfer_nvlink.cu`, `optimized_memory_transfer_zero_copy.cu`", "Peer-to-peer and zero-copy experiments for quantifying NVLink, PCIe, and coherent memory performance."),
         ("`cpu_gpu_grace_blackwell_coherency.cu`, `cpu_gpu_grace_blackwell_coherency_sm121`", "Grace-Blackwell cache-coherent samples that compare explicit transfers vs shared mappings."),
         ("`baseline_cublas.py`, `optimized_cublas.py`", "cuBLAS GEMM benchmark pair that toggles TF32, tensor op math, and stream affinity to highlight architecture knobs."),
-        ("`compare.py`, `Makefile`, `expectations_b200.json`", "Harness driver, CUDA build rules, and expectation file for automated pass/fail checks."),
+        ("`compare.py`, `Makefile`, `expectations_{hardware_key}.json`", "Harness driver, CUDA build rules, and expectation file for automated pass/fail checks."),
     ],
     validation=[
         "`python hardware_info.py --json artifacts/hw_snapshot.json` records the correct device name, SM count, and HBM size for every GPU in the system.",
@@ -265,7 +265,7 @@ ENTRIES["ch03"] = chapter_entry(
         ("`baseline_kubernetes.py`, `optimized_kubernetes.py`, `kubernetes_mig_pod.yaml`, `kubernetes_topology_pod.yaml`", "Kubernetes manifests demonstrating topology-aware scheduling and MIG partitioning for multi-tenant fleets."),
         ("`cpu_gpu_numa_optimizations.sh`, `system_tuning.sh`, `gpu_setup_commands.sh`", "Workflow scripts for aligning CPU governors, cgroup limits, persistence mode, and driver settings with the benchmark harness."),
         ("`baseline_gemm.py`, `optimized_gemm.py`, `train.py`", "Simple GEMM + training loops that surface the impact of system tuning changes in measurable FLOP/s."),
-        ("`compare.py`, `requirements.txt`, `expectations_b200.json`", "Harness entry, Python deps, and regression thresholds."),
+        ("`compare.py`, `requirements.txt`, `expectations_{hardware_key}.json`", "Harness entry, Python deps, and regression thresholds."),
     ],
     validation=[
         "Run `python baseline_numa_unaware.py --diagnostics` before and after `bind_numa_affinity.py` to ensure cross-socket memory traffic drops to near zero.",
@@ -298,7 +298,7 @@ ENTRIES["ch04"] = chapter_entry(
         ("`baseline_continuous_batching_multigpu.py`, `optimized_continuous_batching_multigpu.py`, `baseline_disaggregated.py`, `optimized_disaggregated.py`", "Continuous batching + disaggregated inference demos that showcase NVLink pooling and remote KV reuse."),
         ("`baseline_nvshmem_pipeline_parallel_multigpu.py`, `optimized_nvshmem_pipeline_parallel_multigpu.py`, `baseline_nvshmem_training_example_multigpu.py`, `optimized_nvshmem_training_example_multigpu.py`", "NVSHMEM pipeline and training samples highlighting device-driven synchronization benefits."),
         ("`baseline_symmetric_memory_multigpu.py`, `optimized_symmetric_memory_multigpu.py`, `baseline_symmetric_memory_perf.py`, `optimized_symmetric_memory_perf.py`", "Symmetric memory utilities for distributed KV cache and optimizer shards."),
-        ("`compare.py`, `requirements.txt`, `expectations_b200.json`, `bandwidth_benchmark_suite_multigpu.py`, `nccl_benchmark.py`", "Harness driver plus standalone NCCL/NVLink sweepers for topology bring-up."),
+        ("`compare.py`, `requirements.txt`, `expectations_{hardware_key}.json`, `bandwidth_benchmark_suite_multigpu.py`, `nccl_benchmark.py`", "Harness driver plus standalone NCCL/NVLink sweepers for topology bring-up."),
     ],
     validation=[
         "`python compare.py --examples dataparallel` shows the optimized pair overlapping compute and communication with lower latency.",
@@ -330,7 +330,7 @@ ENTRIES["ch05"] = chapter_entry(
         ("`baseline_ai.py`, `optimized_ai.py`, `storage_io_optimization.py`", "LLM-style token pipelines showcasing overlapping compute with streaming reads and prefetch."),
         ("`baseline_distributed.py`, `optimized_distributed.py`", "Multi-node reader pair demonstrating sharded datasets and rendezvous barriers."),
         ("`gds_cufile_minimal.py`, `gpudirect_storage_example.py`", "GPUDirect Storage samples for verifying cuFile setup, buffer alignment, and throughput."),
-        ("`compare.py`, `requirements.txt`, `expectations_b200.json`", "Harness entrypoint plus expectation baselines for spotting regressions."),
+        ("`compare.py`, `requirements.txt`, `expectations_{hardware_key}.json`", "Harness entrypoint plus expectation baselines for spotting regressions."),
     ],
     validation=[
         "`python baseline_storage_cpu.py --inspect` exposes CPU wait time > GPU time; `optimized_storage_cpu.py` reverses the ratio with >=80% GPU utilization.",
@@ -363,7 +363,7 @@ ENTRIES["ch06"] = chapter_entry(
         ("`baseline_bank_conflicts.cu`, `optimized_bank_conflicts.cu`, `baseline_launch_bounds*.{py,cu}`, `optimized_launch_bounds*.{py,cu}`", "Bank conflict and launch-bound exercises to highlight shared memory layouts and CTA sizing."),
         ("`baseline_autotuning.py`, `optimized_autotuning.py`, `memory_pool_tuning.cu`, `stream_ordered_allocator/`", "Autotuning harness plus allocator experiments for controlling fragmentation and stream ordering."),
         ("`unified_memory.cu`, `occupancy_api.cu`, `baseline_quantization_ilp.py`, `optimized_quantization_ilp.py`", "Unified memory demo, occupancy calculator sample, and quantization-focused ILP workloads."),
-        ("`compare.py`, `Makefile`, `expectations_b200.json`, `workload_config.py`", "Harness entry, build scripts, expectation baselines, and workload settings."),
+        ("`compare.py`, `Makefile`, `expectations_{hardware_key}.json`, `workload_config.py`", "Harness entry, build scripts, expectation baselines, and workload settings."),
     ],
     validation=[
         "`nvcc -o baseline_add_sm121 baseline_add.cu` vs the optimized vectorized version shows a clear bandwidth delta when inspected with Nsight Compute.",
@@ -396,7 +396,7 @@ ENTRIES["ch07"] = chapter_entry(
         ("`baseline_matmul.cu`, `baseline_matmul_cuda.py`, `optimized_matmul_cuda.py`, `optimized_matmul_tiled.cu`", "Matmul implementations to contrast naive global-memory access with shared-memory tiling and warp-level reuse."),
         ("`baseline_lookup.cu`, `baseline_lookup.py`, `optimized_lookup.cu`, `lookup_pytorch.py`", "Cache-sensitive lookup workloads demonstrating how to reorganize tables for better locality."),
         ("`baseline_transpose.cu`, `baseline_transpose.py`, `optimized_copy_scalar_vectorized.cu`, `optimized_transpose.py`", "Transpose and gather/scatter experiments that show how to minimize bank conflicts."),
-        ("`compare.py`, `Makefile`, `expectations_b200.json`, `memory_access_pytorch.py`", "Harness entry, build recipes, expectation thresholds, and PyTorch validation scripts."),
+        ("`compare.py`, `Makefile`, `expectations_{hardware_key}.json`, `memory_access_pytorch.py`", "Harness entry, build recipes, expectation thresholds, and PyTorch validation scripts."),
     ],
     validation=[
         "`python baseline_hbm3ecopy.py --bytes 1073741824` reports noticeably lower GB/s than `optimized_hbm3ecopy.py`, proving vectorization plus async copies work.",
@@ -429,7 +429,7 @@ ENTRIES["ch08"] = chapter_entry(
         ("`baseline_loop_unrolling.cu`, `baseline_loop_unrolling.py`, `optimized_loop_unrolling.cu`, `optimized_loop_unrolling.py`, `loop_unrolling_kernels.cu`", "Loop unrolling case studies targeting various ILP regimes."),
         ("`baseline_threshold.py`, `baseline_thresholdtma.py`, `optimized_threshold.py`, `optimized_thresholdtma.py`, `threshold_kernels.cu`, `threshold_tma_benchmark_base.py`", "Threshold operators implemented with scalar, vectorized, and TMA-backed pipelines."),
         ("`baseline_tiling.py`, `baseline_tiling_tcgen05.py`, `optimized_tiling.py`, `optimized_tiling_tcgen05.py`, `tiling_kernels.cu`, `tiling_extension_tcgen05.py`", "Tile schedulers for tcgen05 matmuls, including safe fallbacks when tcgen05 isn't available."),
-        ("`compare.py`, `requirements.txt`, `expectations_b200.json`, `ai_optimization_kernels.cu`", "Harness entry, dependencies, regression thresholds, and AI-optimization helper kernels."),
+        ("`compare.py`, `requirements.txt`, `expectations_{hardware_key}.json`, `ai_optimization_kernels.cu`", "Harness entry, dependencies, regression thresholds, and AI-optimization helper kernels."),
     ],
     validation=[
         "Nsight Compute traces for `optimized_double_buffering_pipelined.cu` should show overlapping smem/ldgst transactions with minimal idle cycles.",
@@ -462,7 +462,7 @@ ENTRIES["ch09"] = chapter_entry(
         ("`baseline_fused_l2norm.cu`, `baseline_fused_l2norm.py`, `optimized_fused_l2norm.cu`, `optimized_fused_l2norm.py`, `fusedL2Norm/`", "Fusion examples that merge L2 norm + scaling while staying numerically stable."),
         ("`baseline_triton.py`, `optimized_triton.py`, `warp_specialized_triton.py`", "Triton counterparts for quick prototyping and verifying compiler-generated PTX on Blackwell."),
         ("`baseline_warp_specialization_producer_consumer.py`, `optimized_warp_specialization_producer_consumer.py`, `two_stage_pipeline.cu`", "Warp cooperation samples emphasizing producer/consumer pipelines and inline PTX hooks."),
-        ("`compare.py`, `requirements.txt`, `expectations_b200.json`", "Harness hooks plus regression thresholds for every example."),
+        ("`compare.py`, `requirements.txt`, `expectations_{hardware_key}.json`", "Harness hooks plus regression thresholds for every example."),
     ],
     validation=[
         "`python baseline_compute_bound.py --summaries` reports much higher arithmetic intensity than `baseline_memory_bound.py`, matching the roofline plots.",
@@ -528,7 +528,7 @@ ENTRIES["ch11"] = chapter_entry(
         ("`baseline_gemm_streams.py`, `optimized_gemm_streams.py`, `baseline_tensor_cores_streams.py`, `optimized_tensor_cores_streams.py`", "GEMM pipelines that schedule tensor-core kernels across multiple streams to decouple math vs IO phases."),
         ("`baseline_distributed_streams.py`, `optimized_distributed_streams.py`, `baseline_adaptive_streams.py`, `optimized_adaptive_streams.py`", "Adaptive streaming controllers that balance NCCL, compute, and IO tasks on large systems."),
         ("`baseline_warp_specialization_multistream.*`, `optimized_warp_specialized_multistream.*`, `warp_specialized_cluster_pipeline_multistream.cu`", "Warp-specialized multistream kernels demonstrating DSMEM usage and per-stream specialization."),
-        ("`compare.py`, `Makefile`, `expectations_b200.json`", "Harness driver plus expectation data for concurrency regressions."),
+        ("`compare.py`, `Makefile`, `expectations_{hardware_key}.json`", "Harness driver plus expectation data for concurrency regressions."),
     ],
     validation=[
         "`python optimized_streams.py --trace` captures overlapping NVTX ranges in Nsight Systems, proving concurrency is active.",
@@ -561,7 +561,7 @@ ENTRIES["ch12"] = chapter_entry(
         ("`baseline_work_queue.{py,cu}`, `optimized_work_queue.{py,cu}`, `work_queue_common.cuh`", "GPU work queues for irregular batch sizes, including NVTX instrumentation."),
         ("`baseline_uneven_partition.cu`, `optimized_uneven_partition.cu`, `baseline_uneven_static.cu`, `optimized_uneven_static.cu`", "Uneven workload partitioners that rebalance CTA assignments at runtime."),
         ("`baseline_kernel_fusion.py`, `optimized_kernel_fusion.py`, `kernel_fusion_cuda_demo.cu`", "Kernel fusion exercises within graph capture so you can remove CPU synchronization entirely. (`kernel_fusion_cuda_demo.cu` is a standalone tool; not a benchmark target.)"),
-        ("`compare.py`, `cuda_extensions/`, `expectations_b200.json`", "Harness entry, extension stubs, and expectation thresholds."),
+        ("`compare.py`, `cuda_extensions/`, `expectations_{hardware_key}.json`", "Harness entry, extension stubs, and expectation thresholds."),
     ],
     validation=[
         "`python optimized_cuda_graphs.py --iterations 100` should report lower wall-clock time than the baseline while matching outputs.",
@@ -594,7 +594,7 @@ ENTRIES["ch13"] = chapter_entry(
         ("`context_parallelism.py`, `fsdp_example.py`", "Context and FSDP sharding demos for scaling beyond a single GPU. (Tools; not benchmark targets.)"),
         ("`baseline_precisionfp8*.py`, `optimized_precisionfp8*.py`, `baseline_precisionmixed.py`, `optimized_precisionmixed.py`, `compiled_autograd.py`", "Precision-management suites covering Transformer Engine and compiled autograd recipes."),
         ("`baseline_quantization.py`, `optimized_quantization.py`, `baseline_kv_cache_naive.py`, `optimized_kv_cache_naive.py`, `optimized_kv_cache_naive_pool.py`", "Quantization and KV-cache pipelines for inference/training memory savings."),
-        ("`compare.py`, `compare_perf.py`, `requirements.txt`, `expectations_b200.json`, `workload_config.py`", "Harness entry, performance comparison helper, dependencies, and regression baselines."),
+        ("`compare.py`, `compare_perf.py`, `requirements.txt`, `expectations_{hardware_key}.json`, `workload_config.py`", "Harness entry, performance comparison helper, dependencies, and regression baselines."),
     ],
     validation=[
         "`python compare.py --examples training_standard` shows optimized training runs producing higher goodput with identical metrics.",
@@ -626,7 +626,7 @@ ENTRIES["ch14"] = chapter_entry(
         ("`baseline_flex_attention.py`, `optimized_flex_attention.py`, `test_flex_attention.py`", "FlexAttention workloads that validate custom score mods, masks, and compile speedups."),
         ("`baseline_nccl_quantization.py`, `optimized_nccl_quantization.py`, `deepseek_innovation_l2_bypass.py`", "Quantization-aware communication and the DeepSeek-inspired L2 bypass experiment."),
         ("`baseline_regional_triton.py`, `optimized_regional_triton.py`, `inspect_compiled_code.py`, `benchmark_tma_configs.py`", "Regional compilation and TMA parameter sweeps for auto-tuning generated kernels."),
-        ("`compare.py`, `requirements.txt`, `expectations_b200.json`, `train.py`, `transformer.py`", "Harness entry plus model definitions and dependency pins."),
+        ("`compare.py`, `requirements.txt`, `expectations_{hardware_key}.json`, `train.py`, `transformer.py`", "Harness entry plus model definitions and dependency pins."),
     ],
     validation=[
         "`python optimized_model_eager.py --profile minimal` produces compile-time summaries followed by steady-state throughput gains vs the baseline.",
@@ -659,7 +659,7 @@ ENTRIES["ch15"] = chapter_entry(
         ("`baseline_continuous_batching.py`, `optimized_continuous_batching.py`", "Continuous batching scheduler demonstrating TTFT-aware queueing."),
         ("`baseline_moe_inference.py`, `optimized_moe_inference.py`", "Inference-specific MoE workloads that pair router load with communication control."),
         ("`baseline_moe_overlap.py`, `optimized_moe_overlap_shared_expert.py`, `baseline_wide_ep.py`, `optimized_wide_ep.py`, `baseline_moe_routing_simple.py`, `optimized_moe_routing_simple_topology_aware.py`", "MoE expert-parallel microbenchmarks illustrating overlap, packing/unpacking, and topology-aware routing dispatch."),
-        ("`compare.py`, `requirements.txt`, `expectations_b200.json`, `Makefile`", "Harness entry and dependencies for inference-focused validation."),
+        ("`compare.py`, `requirements.txt`, `expectations_{hardware_key}.json`, `Makefile`", "Harness entry and dependencies for inference-focused validation."),
     ],
     validation=[
         "`python -m cli.aisp bench run --targets ch15:disaggregated_inference_multigpu --profile minimal` shows reduced fabric stalls compared to the baseline while maintaining accuracy parity.",
@@ -693,7 +693,7 @@ ENTRIES["ch16"] = chapter_entry(
         ("`fp8_transformer_engine.py`, `test_fp8_quantization_real.py`, `symmetric_memory_inference.py`, `multi_gpu_validation.py`", "Serving-time FP8 and symmetric-memory validations to guarantee accuracy and NVLink efficiency."),
         ("`moe_performance_benchmark.py`, `synthetic_moe_inference_benchmark.py`, `moe_workload.py`", "MoE inference harnesses that stress router placement and per-expert batching."),
         ("`cache_monitoring.py`, `dcgm_prometheus_exporter.py`, `scheduler.py`, `perplexity_eval.py`", "Telemetry, scheduling, and accuracy utilities wired into the inference pipeline."),
-        ("`compare.py`, `requirements.txt`, `Makefile`, `expectations_b200.json`", "Harness entry and dependencies for inference-focused verification."),
+        ("`compare.py`, `requirements.txt`, `Makefile`, `expectations_{hardware_key}.json`", "Harness entry and dependencies for inference-focused verification."),
     ],
     validation=[
         "`python optimized_paged_attention.py --profile minimal` yields fewer page faults and improved throughput relative to the baseline script.",
@@ -727,7 +727,7 @@ ENTRIES["ch17"] = chapter_entry(
         ("`moe_router_uniform_demo.py`, `moe_router_topology_demo.py`", "MoE routing demos (non-benchmark) contrasting uniform vs topology-aware expert selection."),
         ("`baseline_routing_static.py`, `optimized_routing_static.py`", "Router variants for static/dynamic sharding decisions (comparable benchmarks)."),
         ("`baseline_memory.py`, `optimized_memory.py`, `blackwell_profiling_guide.py`", "Memory-bound case studies plus profiling guides tailored to routing workloads (use `aisp tools roofline` for roofline analysis)."),
-        ("`compare.py`, `Makefile`, `expectations_b200.json`, `dynamo_config.yaml`", "Harness entry, build rules, expectation baselines, and Dynamo config knobs."),
+        ("`compare.py`, `Makefile`, `expectations_{hardware_key}.json`, `dynamo_config.yaml`", "Harness entry, build rules, expectation baselines, and Dynamo config knobs."),
     ],
     validation=[
         "`python optimized_dynamic_routing.py --trace` logs TTFT/TPOT trends that settle faster than the baseline's oscillations.",
@@ -759,7 +759,7 @@ ENTRIES["ch18"] = chapter_entry(
         ("`flex_attention_native.py`, `flex_attention_enhanced.py`, `flex_attention_large_model.py`, `kv_cache_integration_example.py`", "FlexAttention examples ranging from toy sizes to large models with KV-cache reuse."),
         ("`baseline_vllm_v1_integration.py`, `optimized_vllm_v1_integration.py`, `baseline_vllm_decode_graphs.py`, `optimized_vllm_decode_graphs.py`, `configs/`, `workload_config.py`", "Serving integrations and config presets for pushing workloads through vLLM or custom harnesses."),
         ("`speculative_decode/spec_config_sweep.py`", "Tooling to sweep speculative-decoding configs and summarize latency/throughput tradeoffs."),
-        ("`compare.py`, `expectations_b200.json`, `test_flex_attention.py`", "Harness entry, regression thresholds, and pytest coverage for FlexAttention APIs."),
+        ("`compare.py`, `expectations_{hardware_key}.json`, `test_flex_attention.py`", "Harness entry, regression thresholds, and pytest coverage for FlexAttention APIs."),
     ],
     validation=[
         "`python optimized_flexdecoding.py --profiling` reports significantly fewer kernels and lower latency than the baseline while matching decoded tokens.",
@@ -791,7 +791,7 @@ ENTRIES["ch19"] = chapter_entry(
         ("`baseline_kv_prefetch_overlap.cu`, `optimized_kv_prefetch_overlap.cu`, `kv_prefetch_overlap_sm121` binaries", "CUDA kernels proving that quantized KV prefetch can overlap with compute when using cp.async pipelines."),
         ("`baseline_dynamic_quantized_cache.py`, `optimized_dynamic_quantized_cache.py`, `dynamic_quantized_cache.py`, `token_precision_switching.py`, `dynamic_precision_switching.py`", "Quantized cache management for dynamically switching between precisions based on accuracy budgets."),
         ("`baseline_fp4_hardware_kernel.cu`, `optimized_fp4_hardware_kernel.cu`, `fp8_hardware_kernel.cu`, `custom_allocator_retry.py`, `adaptive_parallelism_strategy.py`, `adaptive_parallelism_worker_pool.py`", "Hardware-level kernels and adaptive scheduling helpers for heterogeneous precision fleets."),
-        ("`compare.py`, `arch_config.py`, `expectations_b200.json`", "Harness entry, architecture toggles, and stored expectation data."),
+        ("`compare.py`, `arch_config.py`, `expectations_{hardware_key}.json`", "Harness entry, architecture toggles, and stored expectation data."),
     ],
     validation=[
         "`python optimized_nvfp4_training.py --calibrate` warms up with FP8, then switches to NVFP4 and matches the baseline's accuracy thresholds.",
@@ -823,7 +823,7 @@ ENTRIES["ch20"] = chapter_entry(
         ("`baseline_integrated_kv_cache.py`, `optimized_integrated_kv_cache.py`", "Integrated KV-cache demos that merge allocator, overlap, and NVLink pooling tricks."),
         ("`baseline_memory_standard.py`, `optimized_memory_standard.py`", "Memory-focused harness verifying allocator changes at system level."),
         ("`baseline_training_single.py`, `optimized_training_single.py`, `test.cu`, `Makefile`", "Single-device training case study plus CUDA kernels used in the final report."),
-        ("`compare.py`, `arch_config.py`, `expectations_b200.json`", "Harness driver, architecture settings, and expectation baselines."),
+        ("`compare.py`, `arch_config.py`, `expectations_{hardware_key}.json`", "Harness driver, architecture settings, and expectation baselines."),
     ],
     validation=[
         "`python compare.py` emits per-stage summaries that show each optimized variant meeting or exceeding stored expectations.",
@@ -917,11 +917,11 @@ ENTRIES["labs/cudnn_sdpa_bench"] = lab_entry(
     goals=[
         "Compare cuDNN fused SDPA to Flash and math backends on identical shapes.",
         "Capture Nsight traces per backend to inspect kernel fusion and launch counts.",
-        "Keep regression thresholds per architecture in `expectations_b200.json`.",
+        "Keep regression thresholds per architecture in `expectations_{hardware_key}.json`.",
     ],
     contents=[
         ("`baseline_flash_sdp.py`, `optimized_flash_sdp.py`", "Shared attention microbenchmarks; backend chosen via `--backend {auto,cudnn,flash,math}` passed with `--target-extra-arg`."),
-        ("`expectations_b200.json`", "Current golden timings on B200 for regression checking."),
+        ("`expectations_{hardware_key}.json`", "Current golden timings for the active hardware key."),
     ],
     validation=[
         "`python -m cli.aisp bench run --targets labs/cudnn_sdpa_bench:flash_sdp --profile minimal --target-extra-arg labs/cudnn_sdpa_bench:flash_sdp=\"--backend cudnn\"` captures cuDNN with Nsight traces.",
@@ -984,7 +984,7 @@ ENTRIES["labs/flexattention"] = lab_entry(
     contents=[
         ("`baseline_flex_attention.py`, `optimized_flex_attention.py`", "FlexAttention DSL workloads toggling `torch.compile` for fused kernels."),
         ("`flex_attention_cute.py`", "CuTe/FlashAttention tool for hardware without FlexAttention bindings."),
-        ("`flexattention_common.py`, `expectations_b200.json`", "Shared input builders, score modifiers, and regression thresholds."),
+        ("`flexattention_common.py`, `expectations_{hardware_key}.json`", "Shared input builders, score modifiers, and regression thresholds."),
     ],
     validation=[
         "`python -m cli.aisp bench run --targets labs/flexattention:flex_attention --profile minimal` captures the eager vs compiled delta and stores artifacts.",
@@ -1014,7 +1014,7 @@ ENTRIES["labs/fullstack_cluster"] = lab_entry(
         ("`baseline_01_system_foundations.py` ... `baseline_09_end_to_end.py`, `optimized_01_system_foundations.py` ... `optimized_09_end_to_end.py`, `scenario_benchmark.py`", "Scenario scripts that orchestrate system, kernel, compiler, memory, serving, and end-to-end phases."),
         ("`baseline_cluster_gemm.py`, `optimized_cluster_gemm.py`, `baseline_cluster_gemm_tcgen05.py`, `optimized_cluster_gemm_tcgen05.py`", "Python entrypoints for the cluster GEMM kernels with tcgen05 fallbacks."),
         ("`capstone_extension.py`, `capstone_kernels.cu`, `capstone_kernels_tcgen05.cu`, `capstone_benchmarks.py`", "PyTorch extension, CUDA kernels, and harness hooks for the GEMM showcase."),
-        ("`run_lab_fullstack_cluster.py`, `gpu_requirements.py`, `expectations_b200.json`", "Standalone runner, hardware requirement helper, and expectation file."),
+        ("`run_lab_fullstack_cluster.py`, `gpu_requirements.py`, `expectations_{hardware_key}.json`", "Standalone runner, hardware requirement helper, and expectation file."),
     ],
     validation=[
         "`python -m cli.aisp bench run --targets labs/fullstack_cluster --profile minimal` records per-phase metrics for the entire scenario suite.",
@@ -1045,7 +1045,7 @@ ENTRIES["labs/moe_cuda"] = lab_entry(
         ("`baseline_decode_kernel.py`, `optimized_decode_kernel.py`, `decode_kernels.cu`, `kernels/`", "CUDA kernels and wrappers for the decode core."),
         ("`baseline_kv_transfer.py`, `optimized_kv_transfer.py`, `optimized_kv_transfer_graphs.py`", "KV-transfer samples comparing eager vs CUDA Graph orchestration."),
         ("`baseline_router.py`, `optimized_router.py`, `optimized_router_vectorized.py`", "MoE router logic fit for device execution."),
-        ("`expectations_b200.json`, `__init__.py`", "Metadata and module exports needed by the harness."),
+        ("`expectations_{hardware_key}.json`, `__init__.py`", "Metadata and module exports needed by the harness."),
     ],
     validation=[
         "`python -m cli.aisp bench run --targets labs/moe_cuda --profile minimal` runs every baseline/optimized pair and captures NVTX traces.",
@@ -1111,7 +1111,7 @@ ENTRIES["labs/occupancy_tuning"] = lab_entry(
     ],
     notes=[
         "Add new schedules to `triton_matmul_schedules.py` and regenerate the harness targets by rerunning the sweep script.",
-        "`expectations_b200.json` records FLOP/s per schedule so improvements show up in CI.",
+        "`expectations_{hardware_key}.json` records FLOP/s per schedule so improvements show up in CI.",
     ],
 )
 
@@ -1132,7 +1132,7 @@ ENTRIES["labs/persistent_decode"] = lab_entry(
         ("`baseline_persistent_decode.py`, `optimized_persistent_decode_cuda.py`, `optimized_persistent_decode_graphs.py`, `optimized_persistent_decode_triton.py`", "Persistent decode variants spanning CUDA, graphs, and Triton."),
         ("`baseline_tma_prefill_decode.py`, `optimized_tma_prefill_decode.py`, `baseline_native_tma_prefill_decode.py`, `optimized_native_tma_prefill_decode.py`", "Prefill workloads illustrating cp.async vs native TMA scheduling."),
         ("`kv_locality_microbench.py`", "Pinned/pageable/NUMA host slab copy microbench (HBM vs local/remote pinned vs pageable)."),
-        ("`persistent_decode_common.py`, `tma_extension.py`, `expectations_b200.json`", "Shared helpers, CUDA extension wrappers, and expectation thresholds."),
+        ("`persistent_decode_common.py`, `tma_extension.py`, `expectations_{hardware_key}.json`", "Shared helpers, CUDA extension wrappers, and expectation thresholds."),
     ],
     validation=[
         "`python -m cli.aisp bench run --targets labs/persistent_decode --profile minimal` compares all persistent/TMA variants in one sweep.",

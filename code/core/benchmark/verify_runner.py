@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import pickle
 import subprocess
 import time
@@ -977,9 +978,34 @@ class VerifyRunner:
             getattr(cfg, "multi_gpu_required", False)
             or getattr(benchmark, "multi_gpu_required", False)
         )
-        if multi_gpu_required:
-            if not torch.cuda.is_available() or torch.cuda.device_count() < 2:
+        required_world_size = getattr(cfg, "required_world_size", None)
+        if required_world_size is None:
+            required_world_size = getattr(benchmark, "required_world_size", None)
+        required_world_size = int(required_world_size) if required_world_size is not None else None
+
+        visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+        if visible is not None:
+            tokens = [tok.strip() for tok in visible.split(",") if tok.strip()]
+            visible_count = len(tokens)
+        else:
+            visible_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
+
+        if required_world_size is not None:
+            if required_world_size <= 0:
+                raise RuntimeError(f"required_world_size must be positive, got {required_world_size}")
+            if visible_count and visible_count != required_world_size:
+                raise RuntimeError(
+                    f"World size mismatch: requires exactly {required_world_size} visible GPU(s), "
+                    f"found {visible_count}."
+                )
+        elif multi_gpu_required:
+            if not torch.cuda.is_available() or visible_count < 2:
                 raise RuntimeError("SKIPPED: requires >=2 GPUs")
+        else:
+            if visible_count and visible_count != 1:
+                raise RuntimeError(
+                    f"World size mismatch: requires exactly 1 visible GPU, found {visible_count}."
+                )
 
         skip_input = False
         skip_output = False

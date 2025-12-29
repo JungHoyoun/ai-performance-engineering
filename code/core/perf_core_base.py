@@ -1882,7 +1882,12 @@ class PerformanceCoreBase:
         
         return {"pairs": pairs, "count": len(pairs)}
 
-    def compare_profiles(self, chapter: str) -> dict:
+    def compare_profiles(
+        self,
+        chapter: str,
+        pair_key: Optional[str] = None,
+        include_ncu_details: bool = False,
+    ) -> dict:
         """Compare baseline vs optimized profiles for a chapter.
         
         Integrates file-level comparison with metric-level analysis to provide:
@@ -1900,10 +1905,20 @@ class PerformanceCoreBase:
             return {"error": f"Chapter not found: {chapter}", "chapter": chapter}
         
         # Get nsys comparison
-        nsys_comparison = profile_insights.compare_nsys_files(chapter_dir)
+        nsys_comparison = profile_insights.compare_nsys_files(chapter_dir, pair_key=pair_key)
+        if nsys_comparison and nsys_comparison.get("error"):
+            nsys_comparison["chapter"] = chapter
+            return nsys_comparison
         
         # Get ncu comparison
-        ncu_comparison = profile_insights.compare_ncu_files(chapter_dir)
+        ncu_comparison = profile_insights.compare_ncu_files(
+            chapter_dir,
+            pair_key=pair_key,
+            include_ncu_details=include_ncu_details,
+        )
+        if ncu_comparison and ncu_comparison.get("error"):
+            ncu_comparison["chapter"] = chapter
+            return ncu_comparison
         
         # Generate recommendations
         result = {

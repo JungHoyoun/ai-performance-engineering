@@ -13,6 +13,7 @@ Concentrates on resource balancing: adjust block sizes, registers, and shared me
 | Path | Description |
 | --- | --- |
 | `baseline_occupancy_tuning.py`, `optimized_occupancy_tuning.py`, `occupancy_tuning_tool.py`, `occupancy_api_example.cu`, `occupancy_tuning.cu` | Occupancy studies that tune CTA shapes, register caps, and API-computed limits (plus a sweep tool for quick preset exploration). |
+| `baseline_nvfp4_mlp.py`, `optimized_nvfp4_mlp.py` | BF16 vs NVFP4 MLP benchmark to show compute-bound speedups from lower precision. |
 | `baseline_double_buffering.cu`, `baseline_double_buffering.py`, `optimized_double_buffering_pipelined.cu`, `optimized_double_buffering.py`, `double_buffering_kernels.cu` | Double-buffered kernels and their Python drivers showing how to keep tensor cores busy. |
 | `baseline_hbm.cu`, `baseline_hbm.py`, `optimized_hbm.py`, `optimized_hbm_vectorized.cu`, `hbm_kernels.cu` | HBM streaming workloads that compare scalar, vectorized, and asynchronous fetch patterns. |
 | `baseline_loop_unrolling.cu`, `baseline_loop_unrolling.py`, `optimized_loop_unrolling.cu`, `optimized_loop_unrolling.py`, `loop_unrolling_kernels.cu` | Loop unrolling case studies targeting various ILP regimes. |

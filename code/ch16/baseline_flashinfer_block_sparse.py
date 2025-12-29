@@ -28,11 +28,11 @@ class BaselineFlashInferBlockSparseBenchmark(VerificationPayloadMixin, BaseBench
 
     def __init__(self) -> None:
         super().__init__()
-        self.seq_len = 1024
+        self.seq_len = 4096
         self.heads = 8
         self.head_dim = 128
-        self.block_size = 16
-        self.window_blocks = 2
+        self.block_size = 64
+        self.window_blocks = 1
         self.q: Optional[torch.Tensor] = None
         self.k: Optional[torch.Tensor] = None
         self.v: Optional[torch.Tensor] = None

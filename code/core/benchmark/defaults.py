@@ -113,6 +113,8 @@ class BenchmarkDefaults:
     env_passthrough: List[str] = field(default_factory=lambda: ["CUDA_VISIBLE_DEVICES"])
     target_extra_args: dict = field(default_factory=dict)
     multi_gpu_required: bool = False
+    required_world_size: Optional[int] = None
+    single_gpu: bool = False
     profile_type: str = "minimal"
     nsys_nvtx_include: Optional[List[str]] = None
     backend_policy: str = "performance"
@@ -146,7 +148,7 @@ class BenchmarkDefaults:
     # Output defaults
     profiling_output_dir: Optional[str] = None
     ncu_metric_set: str = "auto"  # 'auto', 'deep_dive', 'roofline', 'minimal'
-    ncu_replay_mode: str = "kernel"  # 'kernel' or 'application'
+    ncu_replay_mode: str = "application"  # 'kernel' or 'application'
     ncu_replay_mode_override: bool = False  # Honor ncu_replay_mode when profiling preset is minimal
     
     @classmethod
@@ -193,6 +195,8 @@ class BenchmarkDefaults:
             "env_passthrough": self.env_passthrough,
             "target_extra_args": self.target_extra_args,
             "multi_gpu_required": self.multi_gpu_required,
+            "required_world_size": self.required_world_size,
+            "single_gpu": self.single_gpu,
             "profile_type": self.profile_type,
             "nsys_nvtx_include": self.nsys_nvtx_include,
             "backend_policy": self.backend_policy,

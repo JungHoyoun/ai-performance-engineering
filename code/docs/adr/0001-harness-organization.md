@@ -7,7 +7,7 @@ Accepted (2025-12-17)
 The benchmarking harness is production-grade and feature rich, but several modules are large:
 
 - `core/harness/benchmark_harness.py` is the core execution engine and includes config, execution paths, and profiling integration.
-- `core/harness/run_benchmarks.py` and `core/harness/run_all_benchmarks.py` combine orchestration, reporting, and environment management.
+- `core/harness/run_benchmarks.py` combines orchestration, reporting, and environment management.
 - `BenchmarkConfig` has grown large to support many cross-cutting concerns (timing, profiling, distributed launch, validation, artifact capture).
 
 These “monolithic” shapes are common in harnesses where:
@@ -25,7 +25,6 @@ These “monolithic” shapes are common in harnesses where:
 
 ## Follow-ups (Roadmap)
 - Split `BenchmarkConfig` into focused groups (e.g., `TimingConfig`, `ProfilingConfig`, `DistributedConfig`, `ValidationConfig`) while keeping a compatibility layer for existing call sites.
-- Extract `run_benchmarks.py` orchestration into cohesive modules (e.g., runner, result collector, report renderer) while keeping the CLI entrypoints stable.
+- Extract `run_benchmarks.py` orchestration into cohesive modules (e.g., runner, result collector, report renderer) while keeping the entrypoint stable.
 - Replace process-wide “quick wins” globals with an explicit, idempotent configurator owned by `BenchmarkHarness` initialization.
 - Centralize GPU state operations behind a `GPUStateManager` (single place for reset, cache clear, and telemetry snapshots).
-

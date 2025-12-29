@@ -13,6 +13,7 @@ Addresses large-scale inference concerns: disaggregated compute/storage, KV-cach
 | Path | Description |
 | --- | --- |
 | `baseline_inference_monolithic.py`, `optimized_inference_monolithic.py`, `disaggregated_inference_multigpu.py` | Single-box inference loops that establish the baseline before disaggregation. |
+| `baseline_nvfp4_mlp.py`, `optimized_nvfp4_mlp.py` | BF16 vs NVFP4 MLP benchmark for reduced-precision inference throughput. |
 | `baseline_disaggregated_inference_multigpu.py`, `optimized_disaggregated_inference_multigpu.py`, `baseline_prefill_decode_disagg.py`, `optimized_prefill_decode_disagg.py` | Disaggregated pipelines modeling remote prefills, decode overlap, and NVLink pooling. |
 | `baseline_kv_cache_management.py`, `optimized_kv_cache_management.py`, `optimized_kv_cache_management_math.py`, `optimized_kv_cache_nvlink_pool.py`, `baseline_kv_cache_local_only.py` | KV-cache orchestration utilities with local-only, math-only, and NVLink-pooled variants. |
 | `baseline_continuous_batching.py`, `optimized_continuous_batching.py` | Continuous batching scheduler demonstrating TTFT-aware queueing. |

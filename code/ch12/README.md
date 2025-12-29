@@ -13,6 +13,7 @@ Covers modern CUDA Graph capabilities-conditional capture, graph memory tuning, 
 | Path | Description |
 | --- | --- |
 | `baseline_cuda_graphs.py`, `optimized_cuda_graphs.py`, `baseline_cuda_graphs_conditional*.cu`, `optimized_cuda_graphs_conditional*.cu` | Graph capture demos that evolve from simple replay to conditional and DSM-aware execution. |
+| `baseline_nvfp4_mlp.py`, `optimized_nvfp4_mlp.py` | BF16 vs NVFP4 MLP benchmark to quantify precision-driven throughput in steady-state runs. |
 | `baseline_graph_bandwidth.{py,cu}`, `optimized_graph_bandwidth.{py,cu}`, `baseline_kernel_launches.py`, `optimized_kernel_launches.py` | Launch- and bandwidth-focused studies illustrating how graphs reduce CPU overhead. |
 | `baseline_dynamic_parallelism_host.cu`, `baseline_dynamic_parallelism_device.cu`, `optimized_dynamic_parallelism_host.cu`, `optimized_dynamic_parallelism_device.cu`, `dynamic_parallelism_sm121/` | Device-side launch samples showing when dynamic parallelism helps or hurts. |
 | `baseline_work_queue.{py,cu}`, `optimized_work_queue.{py,cu}`, `work_queue_common.cuh` | GPU work queues for irregular batch sizes, including NVTX instrumentation. |
