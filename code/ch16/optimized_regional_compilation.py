@@ -187,16 +187,15 @@ class OptimizedRegionalCompilationBenchmark(VerificationPayloadMixin, BaseBenchm
                 if seq_len == self.max_seq_len
                 else self._verify_input[:, :seq_len]
             )
-            static_output = torch.empty_like(static_input)
             # Warm-up and capture under inference mode to avoid autograd state.
             with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-                static_output.copy_(self.model(static_input))
+                static_output = self.model(static_input)
             torch.cuda.synchronize()
 
             graph = torch.cuda.CUDAGraph()
             with torch.cuda.graph(graph):
                 with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-                    static_output.copy_(self.model(static_input))
+                    static_output = self.model(static_input)
             self.graph_cache[seq_len] = (graph, static_input, static_output)
         self.compiled_layers = len(self.graph_cache)
 

@@ -42,8 +42,8 @@ constexpr int kM = 4096;
 constexpr int kN = 4096;
 constexpr int kK = 4096;
 constexpr int kIterations = 10;
-constexpr int kBatchCount = 8;
-constexpr size_t kWorkspaceBytes = 8ull * 1024ull * 1024ull;
+constexpr int kBatchCount = 1;
+constexpr size_t kWorkspaceBytes = 0ull;
 
 __global__ void apply_per_channel_scale(__half* __restrict__ output,
                                         const float* __restrict__ scales,
@@ -203,6 +203,11 @@ int main() {
                                                          CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
                                                          &kWorkspaceBytes,
                                                          sizeof(kWorkspaceBytes)));
+    float max_waves = 1.0f;
+    CUBLASLT_CHECK(cublasLtMatmulPreferenceSetAttribute(preference,
+                                                         CUBLASLT_MATMUL_PREF_MAX_WAVES_COUNT,
+                                                         &max_waves,
+                                                         sizeof(max_waves)));
 
     cublasLtMatmulHeuristicResult_t heuristicResult{};
     int returnedResults = 0;

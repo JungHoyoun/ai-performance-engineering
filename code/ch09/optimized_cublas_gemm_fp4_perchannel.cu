@@ -42,7 +42,7 @@ constexpr int kM = 4096;
 constexpr int kN = 4096;
 constexpr int kK = 4096;
 constexpr int kIterations = 10;
-constexpr int kBatchCount = 8;
+constexpr int kBatchCount = 1;
 constexpr size_t kWorkspaceBytes = 64ull * 1024ull * 1024ull;
 
 __global__ void apply_per_channel_scale(__half* __restrict__ output,
