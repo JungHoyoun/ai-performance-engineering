@@ -648,7 +648,7 @@ class SymmetricMemoryOptimizer:
                 param.grad.zero_()
 
 
-def demo_custom_optimizer() -> None:
+def demo_custom_optimizer(*, steps: int, batch_size: int, hidden_dim: int, output_dim: int) -> None:
     """
     Demonstrate custom optimizer with symmetric memory.
     
@@ -661,20 +661,18 @@ def demo_custom_optimizer() -> None:
     
     # Create model
     model = nn.Sequential(
-        nn.Linear(2048, 2048),
+        nn.Linear(hidden_dim, hidden_dim),
         nn.ReLU(),
-        nn.Linear(2048, 1000),
+        nn.Linear(hidden_dim, output_dim),
     ).to(device)
     
     # Initialize custom optimizer
     optimizer = SymmetricMemoryOptimizer(list(model.parameters()), lr=0.01, world_size=world_size)
     
     # Training loop
-    num_steps = 10
-    
-    for step in range(num_steps):
+    for step in range(steps):
         # Forward + backward
-        inputs = torch.randn(32, 2048, device=device)
+        inputs = torch.randn(batch_size, hidden_dim, device=device)
         outputs = model(inputs)
         loss = outputs.sum()
         loss.backward()
@@ -687,7 +685,7 @@ def demo_custom_optimizer() -> None:
         optimizer.synchronize_parameters(rank)
     
     if rank == 0:
-        print(f"[optimizer] Completed {num_steps} steps with symmetric memory optimizer")
+        print(f"[optimizer] Completed {steps} steps with symmetric memory optimizer")
         print(f"[optimizer] No broadcasts needed: {symmetric_memory_available()}")
 
 
@@ -827,6 +825,10 @@ def main() -> None:
         action="store_true",
         help="Force disable symmetric memory and use fallback paths (baseline comparison).",
     )
+    parser.add_argument("--steps", type=int, default=20, help="Training steps per demo.")
+    parser.add_argument("--batch-size", type=int, default=64, help="Batch size for optimizer demo.")
+    parser.add_argument("--hidden-dim", type=int, default=4096, help="Hidden dimension for optimizer demo.")
+    parser.add_argument("--output-dim", type=int, default=2048, help="Output dimension for optimizer demo.")
     args = parser.parse_args()
     
     if args.disable_symmetric:
@@ -839,7 +841,12 @@ def main() -> None:
     elif args.demo == "lockfree":
         demo_lockfree_accumulation()
     elif args.demo == "optimizer":
-        demo_custom_optimizer()
+        demo_custom_optimizer(
+            steps=args.steps,
+            batch_size=args.batch_size,
+            hidden_dim=args.hidden_dim,
+            output_dim=args.output_dim,
+        )
     elif args.demo == "zero":
         demo_zero_style_sharding()
     

@@ -6,13 +6,13 @@ Microbenchmarks cuDNN fused scaled-dot-product attention against Flash and math 
 ## Learning Goals
 - Compare cuDNN fused SDPA to Flash and math backends on identical shapes.
 - Capture Nsight traces per backend to inspect kernel fusion and launch counts.
-- Keep regression thresholds per architecture in `expectations_b200.json`.
+- Keep regression thresholds per architecture in `expectations_{hardware_key}.json`.
 
 ## Directory Layout
 | Path | Description |
 | --- | --- |
 | `baseline_flash_sdp.py`, `optimized_flash_sdp.py` | Shared attention microbenchmarks; backend chosen via `--backend {auto,cudnn,flash,math}` passed with `--target-extra-arg`. |
-| `expectations_b200.json` | Current golden timings on B200 for regression checking. |
+| `expectations_{hardware_key}.json` | Current golden timings for the active hardware key. |
 
 ## Running the Benchmarks
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.

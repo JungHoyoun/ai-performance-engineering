@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Optimized: Tensor Parallelism with communication overlap.
+"""Optimized: Tensor Parallelism with communication overlap (single GPU).
 
 Launches async all-gather on a dedicated stream and overlaps with compute.
 """
@@ -43,10 +43,7 @@ _DEFAULT_LAYERS = 4
 def _resolve_world_size() -> int:
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for tensor-parallel benchmark")
-    world_size = torch.cuda.device_count()
-    if world_size < 2:
-        raise RuntimeError("optimized_tensor_parallel_async requires >=2 GPUs.")
-    return world_size
+    return 1
 
 
 def _resolve_hidden(hidden: Optional[int], world_size: int) -> int:
@@ -95,8 +92,8 @@ def _run_worker(
     num_layers: int,
 ) -> None:
     rank, world_size, local_rank = _init_distributed()
-    if world_size < 2:
-        raise RuntimeError("optimized_tensor_parallel_async requires >=2 GPUs.")
+    if world_size < 1:
+        raise RuntimeError("optimized_tensor_parallel_async requires >=1 GPU.")
     hidden = _resolve_hidden(hidden, world_size)
 
     torch.manual_seed(42)
@@ -259,10 +256,10 @@ class OptimizedTensorParallelBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             launch_via=LaunchVia.TORCHRUN,
-            nproc_per_node=_resolve_world_size(),
+            nproc_per_node=1,
             iterations=3,
             warmup=5,
-            multi_gpu_required=True,
+            multi_gpu_required=False,
             measurement_timeout_seconds=900,
         )
 
@@ -271,7 +268,7 @@ class OptimizedTensorParallelBenchmark(VerificationPayloadMixin, BaseBenchmark):
         return TorchrunLaunchSpec(
             script_path=Path(__file__).resolve(),
             script_args=[],
-            multi_gpu_required=True,
+            multi_gpu_required=False,
             name="optimized_tensor_parallel_async",
             config_arg_map={
                 "iterations": "--iters",

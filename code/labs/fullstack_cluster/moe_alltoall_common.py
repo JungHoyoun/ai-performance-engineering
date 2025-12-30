@@ -119,6 +119,13 @@ def init_distributed(backend: str = "nccl") -> Tuple[int, int, int, bool]:
 
 
 def _collect_latencies(latencies_ms: List[float], world_size: int) -> Tuple[float, float]:
+    if world_size <= 1 or not dist.is_initialized():
+        lat_tensor = torch.tensor(latencies_ms, dtype=torch.float32)
+        global_lats_sorted, _ = torch.sort(lat_tensor)
+        p50 = percentile(global_lats_sorted, 50.0)
+        p99 = percentile(global_lats_sorted, 99.0)
+        return p50, p99
+
     lat_tensor = torch.tensor(latencies_ms, dtype=torch.float32, device="cuda")
     gather_list = [torch.zeros_like(lat_tensor) for _ in range(world_size)]
     dist.all_gather(gather_list, lat_tensor)
@@ -136,48 +143,99 @@ def run_alltoall_single(
     num_iters: int,
     world_size: int,
     dtype: torch.dtype,
+    impl: str,
+    allocate_each_iter: bool = False,
 ) -> AllToAllResult:
     elem_size = torch.tensor([], dtype=dtype).element_size()
     total_elems = msg_bytes // elem_size
     if total_elems == 0:
         raise ValueError(f"msg_bytes {msg_bytes} too small for dtype {dtype}")
 
-    send_counts = make_zipf_counts(world_size, total_elems, skew_alpha)
-    send_counts_t = torch.tensor(send_counts, dtype=torch.int64, device="cuda")
-    gathered_counts = [torch.empty_like(send_counts_t) for _ in range(world_size)]
-    dist.all_gather(gathered_counts, send_counts_t)
-    recv_counts = [int(gathered_counts[src][dist.get_rank()].item()) for src in range(world_size)]
+    rank = dist.get_rank() if dist.is_initialized() else 0
+    use_dist = world_size > 1 and dist.is_initialized()
+
+    if use_dist:
+        send_counts = make_zipf_counts(world_size, total_elems, skew_alpha)
+        send_counts_t = torch.tensor(send_counts, dtype=torch.int64, device="cuda")
+        gathered_counts = [torch.empty_like(send_counts_t) for _ in range(world_size)]
+        dist.all_gather(gathered_counts, send_counts_t)
+        recv_counts = [int(gathered_counts[src][rank].item()) for src in range(world_size)]
+    else:
+        send_counts = [total_elems]
+        recv_counts = [total_elems]
 
     send_splits = send_counts
     recv_splits = recv_counts
 
-    send_buf = torch.randn(total_elems, dtype=dtype, device="cuda")
     recv_total = int(sum(recv_counts))
-    recv_buf = torch.empty(recv_total, dtype=dtype, device="cuda")
+    send_buf: torch.Tensor | None = None
+    recv_buf: torch.Tensor | None = None
+    send_list: List[torch.Tensor] | None = None
+    recv_list: List[torch.Tensor] | None = None
 
     counts_t = torch.tensor(send_counts, dtype=torch.float32)
     gini = gini_coefficient(counts_t)
     max_over_mean = float(counts_t.max().item() / (counts_t.mean().item() + 1e-6))
 
+    def _split_send(buf: torch.Tensor) -> List[torch.Tensor]:
+        send_list_local = []
+        offset = 0
+        for count in send_splits:
+            send_list_local.append(buf[offset:offset + count])
+            offset += count
+        return send_list_local
+
+    def _init_buffers() -> None:
+        nonlocal send_buf, recv_buf, send_list, recv_list
+        send_buf = torch.randn(total_elems, dtype=dtype, device="cuda")
+        if impl == "single":
+            recv_buf = torch.empty(recv_total, dtype=dtype, device="cuda")
+            send_list = None
+            recv_list = None
+            return
+        if impl != "list":
+            raise ValueError(f"Unsupported all-to-all impl: {impl}")
+        send_list = _split_send(send_buf)
+        recv_list = [torch.empty(count, dtype=dtype, device="cuda") for count in recv_splits]
+        recv_buf = None
+
+    if not allocate_each_iter:
+        _init_buffers()
+
+    def _all_to_all_once() -> None:
+        if allocate_each_iter:
+            _init_buffers()
+        if impl == "single":
+            if send_buf is None or recv_buf is None:
+                raise RuntimeError("Buffers not initialized for all_to_all_single")
+            if use_dist:
+                dist.all_to_all_single(
+                    recv_buf,
+                    send_buf,
+                    output_split_sizes=recv_splits,
+                    input_split_sizes=send_splits,
+                )
+            else:
+                recv_buf.copy_(send_buf)
+            return
+        if impl != "list":
+            raise ValueError(f"Unsupported all-to-all impl: {impl}")
+        if send_list is None or recv_list is None:
+            raise RuntimeError("Buffers not initialized for all_to_all list")
+        if use_dist:
+            dist.all_to_all(recv_list, send_list)
+        else:
+            recv_list[0].copy_(send_list[0])
+
     for _ in range(5):
-        dist.all_to_all_single(
-            recv_buf,
-            send_buf,
-            output_split_sizes=recv_splits,
-            input_split_sizes=send_splits,
-        )
+        _all_to_all_once()
     torch.cuda.synchronize()
 
     latencies_ms: List[float] = []
     for _ in range(num_iters):
         torch.cuda.synchronize()
         t0 = time.perf_counter()
-        dist.all_to_all_single(
-            recv_buf,
-            send_buf,
-            output_split_sizes=recv_splits,
-            input_split_sizes=send_splits,
-        )
+        _all_to_all_once()
         torch.cuda.synchronize()
         latencies_ms.append((time.perf_counter() - t0) * 1000.0)
 
@@ -238,6 +296,13 @@ def add_base_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--message-sizes", type=str, default="64k,1m", help="Comma-separated per-rank message sizes.")
     parser.add_argument("--skews", type=str, default="1.0", help="Comma-separated Zipf alpha values.")
     parser.add_argument("--iters", type=int, default=20, help="Timed iterations per point.")
+    parser.add_argument(
+        "--impl",
+        type=str,
+        default="single",
+        choices=["single", "list"],
+        help="All-to-all implementation: single uses all_to_all_single, list uses all_to_all lists.",
+    )
     parser.add_argument("--dtype", type=str, default="fp16", choices=["fp16", "bf16", "fp32"], help="Payload dtype.")
     parser.add_argument("--output-dir", type=str, default=None, help="Optional directory for reports.")
     parser.add_argument("--max-p99-ms", type=float, default=6.0, help="Latency budget for pass/fail.")

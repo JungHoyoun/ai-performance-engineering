@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any, Optional, Union, TYPE_CHECKING, cast
 
 try:
@@ -30,6 +31,8 @@ ProcessGroup = _ProcessGroup
 
 def symmetric_memory_available() -> bool:
     """Return True when NVSHMEM-backed symmetric memory is available."""
+    if os.environ.get("AISP_DISABLE_SYMMETRIC_MEMORY", "").lower() in {"1", "true", "yes"}:
+        return False
     if torch is None or dist is None or _symm_mem is None:
         return False
     if not torch.cuda.is_available():

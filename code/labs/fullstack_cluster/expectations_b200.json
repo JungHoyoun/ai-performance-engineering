@@ -162,11 +162,11 @@
       },
       "type": "python"
     },
-    "moe_readiness": {
-      "example": "moe_readiness",
+    "moe_readiness_multigpu": {
+      "example": "moe_readiness_multigpu",
       "metadata": {
-        "best_optimization": "optimized_moe_readiness",
-        "best_optimization_file": "optimized_moe_readiness.py",
+        "best_optimization": "optimized_moe_readiness_multigpu",
+        "best_optimization_file": "optimized_moe_readiness_multigpu.py",
         "best_optimization_speedup": 1.0960903633714134,
         "best_optimization_time_ms": 6220.498085021973,
         "git_commit": "75cbbbcfaaac628797e7636c22f2adb10d4d072f",

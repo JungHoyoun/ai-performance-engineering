@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Optimized: Pipeline Parallelism (1F1B schedule).
+"""Optimized: Pipeline Parallelism (1F1B schedule, single GPU).
 
 Interleaves forward and backward micro-batches to reduce pipeline bubbles.
 Launched via torchrun.
@@ -46,10 +46,7 @@ _DEFAULT_MICRO_BATCHES = 8
 def _resolve_world_size() -> int:
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for pipeline-parallel benchmark")
-    world_size = torch.cuda.device_count()
-    if world_size < 2:
-        raise RuntimeError("optimized_pipeline_parallel_1f1b requires >=2 GPUs.")
-    return world_size
+    return 1
 
 
 def _resolve_num_layers(num_layers: Optional[int], world_size: int) -> int:
@@ -113,8 +110,8 @@ def _run_worker(
     num_micro_batches: Optional[int],
 ) -> None:
     rank, world_size, local_rank = _init_distributed()
-    if world_size < 2:
-        raise RuntimeError("optimized_pipeline_parallel_1f1b requires >=2 GPUs.")
+    if world_size < 1:
+        raise RuntimeError("optimized_pipeline_parallel_1f1b requires >=1 GPU.")
     num_layers = _resolve_num_layers(num_layers, world_size)
     batch_size, num_micro_batches = _resolve_batch_config(batch_size, num_micro_batches, world_size)
 
@@ -360,10 +357,10 @@ class OptimizedPipelineParallelBenchmark(VerificationPayloadMixin, BaseBenchmark
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             launch_via=LaunchVia.TORCHRUN,
-            nproc_per_node=_resolve_world_size(),
+            nproc_per_node=1,
             iterations=3,
             warmup=5,
-            multi_gpu_required=True,
+            multi_gpu_required=False,
             measurement_timeout_seconds=900,
         )
 
@@ -372,7 +369,7 @@ class OptimizedPipelineParallelBenchmark(VerificationPayloadMixin, BaseBenchmark
         return TorchrunLaunchSpec(
             script_path=Path(__file__).resolve(),
             script_args=[],
-            multi_gpu_required=True,
+            multi_gpu_required=False,
             name="optimized_pipeline_parallel_1f1b",
             config_arg_map={
                 "iterations": "--iters",

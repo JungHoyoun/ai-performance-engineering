@@ -16,7 +16,7 @@ Implements mixture-of-experts decode helpers directly in CUDA: decode kernels, K
 | `baseline_decode_kernel.py`, `optimized_decode_kernel.py`, `decode_kernels.cu`, `kernels/` | CUDA kernels and wrappers for the decode core. |
 | `baseline_kv_transfer.py`, `optimized_kv_transfer.py`, `optimized_kv_transfer_graphs.py` | KV-transfer samples comparing eager vs CUDA Graph orchestration. |
 | `baseline_router.py`, `optimized_router.py`, `optimized_router_vectorized.py` | MoE router logic fit for device execution. |
-| `expectations_b200.json`, `__init__.py` | Metadata and module exports needed by the harness. |
+| `expectations_{hardware_key}.json`, `__init__.py` | Metadata and module exports needed by the harness. |
 
 ## Running the Benchmarks
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.

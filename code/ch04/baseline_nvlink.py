@@ -1,4 +1,4 @@
-"""baseline_nvlink.py - Multi-GPU baseline without NVLink in distributed training context."""
+"""baseline_nvlink.py - Single-GPU baseline transfer without peer-optimized path."""
 
 from __future__ import annotations
 
@@ -24,11 +24,7 @@ from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
 class BaselineNVLinkBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Baseline: PCIe-based communication (no NVLink).
-    
-    NVLink: This baseline does not use NVLink for high-speed GPU-to-GPU communication.
-    Uses PCIe-based communication which is slower.
-    """
+    """Baseline: synchronous device copy on a single GPU."""
     
     def __init__(self):
         super().__init__()
@@ -45,24 +41,17 @@ class BaselineNVLinkBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
-        if torch.cuda.device_count() < 2:
-            raise RuntimeError("SKIPPED: requires >=2 GPUs")
+        if not torch.cuda.is_available():
+            raise RuntimeError("SKIPPED: requires CUDA")
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-        # Baseline: PCIe-based communication (no NVLink)
-        # NVLink provides high-speed GPU-to-GPU communication
-        # This baseline uses PCIe (slower)
-        
-        # Multi-GPU: use PCIe (not NVLink)
-        self.data_gpu0 = torch.randn(self.N, device=torch.device("cuda:0"), dtype=torch.float32)
-        self.data_gpu1 = torch.randn(self.N, device=torch.device("cuda:1"), dtype=torch.float32)
+        self.data_gpu0 = torch.randn(self.N, device=self.device, dtype=torch.float32)
+        self.data_gpu1 = torch.empty_like(self.data_gpu0)
         torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
         """Benchmark: PCIe-based communication (no NVLink)."""
         with self._nvtx_range("baseline_nvlink"):
-            # Multi-GPU: PCIe-based transfer (no NVLink)
-            # Transfer through PCIe bus (slower than NVLink)
             self.data_gpu1.copy_(self.data_gpu0, non_blocking=False)
             torch.cuda.synchronize()
 

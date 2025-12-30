@@ -109,7 +109,7 @@
       "type": "python"
     },
     "add_cuda": {
-      "example": "add",
+      "example": "add_cuda",
       "metadata": {
         "best_optimization": "parallel",
         "best_optimization_file": "optimized_add_parallel.cu",
@@ -194,7 +194,7 @@
       "type": "python"
     },
     "add_tensors_cuda": {
-      "example": "add_tensors",
+      "example": "add_tensors_cuda",
       "metadata": {
         "best_optimization": "optimized_add_tensors",
         "best_optimization_file": "optimized_add_tensors.cu",
@@ -387,7 +387,7 @@
       "type": "python"
     },
     "bank_conflicts_cuda": {
-      "example": "bank_conflicts",
+      "example": "bank_conflicts_cuda",
       "metadata": {
         "best_optimization": "optimized_bank_conflicts",
         "best_optimization_file": "optimized_bank_conflicts.cu",
@@ -526,7 +526,7 @@
       "type": "python"
     },
     "launch_bounds_gmem_cuda": {
-      "example": "launch_bounds_gmem",
+      "example": "launch_bounds_gmem_cuda",
       "metadata": {
         "best_optimization": "optimized_launch_bounds_gmem",
         "best_optimization_file": "optimized_launch_bounds_gmem.cu",

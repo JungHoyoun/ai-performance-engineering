@@ -11,9 +11,11 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
+import argparse
 import torch
+import torch.distributed as dist
 
-from ch04.nvshmem_vs_nccl_benchmark import main as nvshmem_vs_nccl_main
+from ch04.nvshmem_vs_nccl_benchmark import benchmark, init_distributed
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -24,6 +26,7 @@ from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
 class NVSHMEMVsNCCLBenchmarkMultiGPU(VerificationPayloadMixin, BaseBenchmark):
+    multi_gpu_required = True
     def __init__(self) -> None:
         super().__init__()
         self.register_workload_metadata(requests_per_iteration=1.0)
@@ -37,7 +40,25 @@ class NVSHMEMVsNCCLBenchmarkMultiGPU(VerificationPayloadMixin, BaseBenchmark):
         self._verify_input = torch.randn(64, 64, device=self.device, dtype=torch.float32)
 
     def benchmark_fn(self) -> None:
-        nvshmem_vs_nccl_main(destroy_process_group=False)
+        args = argparse.Namespace(
+            min_bytes=4 * 1024,
+            max_bytes=4 * 1024 * 1024,
+            steps=6,
+            iterations=100,
+            mode="nccl",
+        )
+        original_disable = os.environ.get("AISP_DISABLE_SYMMETRIC_MEMORY")
+        init_distributed()
+        try:
+            os.environ["AISP_DISABLE_SYMMETRIC_MEMORY"] = "1"
+            benchmark(args)
+        finally:
+            if dist.is_initialized():
+                dist.barrier()
+            if original_disable is None:
+                os.environ.pop("AISP_DISABLE_SYMMETRIC_MEMORY", None)
+            else:
+                os.environ["AISP_DISABLE_SYMMETRIC_MEMORY"] = original_disable
 
     def capture_verification_payload(self) -> None:
         if self._verify_input is None:

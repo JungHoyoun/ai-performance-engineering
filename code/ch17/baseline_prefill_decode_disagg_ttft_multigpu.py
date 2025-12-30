@@ -17,13 +17,15 @@ from ch17.baseline_prefill_decode_disagg_multigpu import (  # noqa: E402
 from core.harness.benchmark_harness import BaseBenchmark  # noqa: E402
 
 TTFT_CONFIG = PrefillDecodeConfig(
-    context_window=2048,
-    decode_tokens=32,
+    context_window=4096,
+    decode_tokens=256,
 )
 
 
 class BaselinePrefillDecodeDisaggTTFTMultiGPUBenchmark(_PrefillDecodeMultiGPUBenchmark):
     """Serialized prefill then decode (TTFT-focused)."""
+
+    multi_gpu_required = True
 
     def __init__(self) -> None:
         super().__init__(

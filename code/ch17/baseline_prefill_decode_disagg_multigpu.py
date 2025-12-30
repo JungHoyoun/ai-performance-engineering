@@ -35,12 +35,12 @@ from core.harness.benchmark_harness import (
 
 @dataclass(frozen=True)
 class PrefillDecodeConfig:
-    hidden_size: int = 2048
-    num_layers: int = 4
-    batch_size: int = 1
-    requests_per_rank: int = 4
-    context_window: int = 256
-    decode_tokens: int = 128
+    hidden_size: int = 3072
+    num_layers: int = 6
+    batch_size: int = 2
+    requests_per_rank: int = 16
+    context_window: int = 512
+    decode_tokens: int = 256
     dtype: torch.dtype = torch.bfloat16
 
     @property
@@ -337,6 +337,8 @@ def _run_torchrun_worker(
 
 class _PrefillDecodeMultiGPUBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Shared multi-GPU disaggregated prefill/decode harness."""
+
+    multi_gpu_required = True
 
     def __init__(
         self,

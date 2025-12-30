@@ -1,4 +1,4 @@
-"""Shared gradient compression benchmark logic (single-process multi-GPU NCCL)."""
+"""Shared gradient compression benchmark logic (single- and multi-GPU)."""
 
 from __future__ import annotations
 
@@ -27,13 +27,16 @@ class GradientCompressionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         equivalence_group: str,
         output_tolerance: tuple[float, float],
         tensor_size_mb: int = 128,
+        multi_gpu: bool = True,
     ) -> None:
         super().__init__()
+        self.multi_gpu_required = bool(multi_gpu)
         self.signature_equivalence_group = equivalence_group
         self.signature_equivalence_ignore_fields = ("precision_flags",)
         self.compression = compression  # "none", "fp16", "int8"
         self.output_tolerance = output_tolerance
         self.tensor_size_mb = tensor_size_mb
+        self.multi_gpu = bool(multi_gpu)
         self.world_size = 0
         self.devices: List[torch.device] = []
         self.inputs: List[torch.Tensor] = []
@@ -52,10 +55,16 @@ class GradientCompressionBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def setup(self) -> None:
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-        self.world_size = torch.cuda.device_count()
-        if self.world_size < 2:
-            raise RuntimeError("SKIPPED: requires >=2 GPUs")
-        self.devices = [torch.device(f"cuda:{idx}") for idx in range(self.world_size)]
+        if self.multi_gpu:
+            self.world_size = torch.cuda.device_count()
+            if self.world_size < 2:
+                raise RuntimeError("SKIPPED: requires >=2 GPUs")
+            self.devices = [torch.device(f"cuda:{idx}") for idx in range(self.world_size)]
+        else:
+            if not torch.cuda.is_available():
+                raise RuntimeError("SKIPPED: requires CUDA")
+            self.world_size = 1
+            self.devices = [self.device]
         numel = (self.tensor_size_mb * 1024 * 1024) // 4  # FP32 bytes
         self.inputs = [
             torch.randn(numel, device=device, dtype=torch.float32) for device in self.devices
@@ -68,14 +77,21 @@ class GradientCompressionBenchmark(VerificationPayloadMixin, BaseBenchmark):
             raise RuntimeError("Inputs not initialized")
         with self._nvtx_range(f"gradient_compression_{self.compression}"):
             if self.compression == "none":
-                outputs = [torch.empty_like(t) for t in self.inputs]
-                torch.cuda.nccl.all_reduce(self.inputs, outputs=outputs)
-                self.output = outputs[0]
+                if self.multi_gpu:
+                    outputs = [torch.empty_like(t) for t in self.inputs]
+                    torch.cuda.nccl.all_reduce(self.inputs, outputs=outputs)
+                    self.output = outputs[0]
+                else:
+                    self.output = self.inputs[0].clone()
             elif self.compression == "fp16":
-                compressed = [t.to(torch.float16) for t in self.inputs]
-                outputs = [torch.empty_like(t) for t in compressed]
-                torch.cuda.nccl.all_reduce(compressed, outputs=outputs)
-                self.output = outputs[0].float()
+                if self.multi_gpu:
+                    compressed = [t.to(torch.float16) for t in self.inputs]
+                    outputs = [torch.empty_like(t) for t in compressed]
+                    torch.cuda.nccl.all_reduce(compressed, outputs=outputs)
+                    self.output = outputs[0].float()
+                else:
+                    compressed = self.inputs[0].to(torch.float16)
+                    self.output = compressed.float()
             elif self.compression == "int8":
                 self.output = self._int8_all_reduce()
             else:
@@ -86,19 +102,25 @@ class GradientCompressionBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def _int8_all_reduce(self) -> torch.Tensor:
         max_vals = [t.abs().max() for t in self.inputs]
-        max_tensors = [m.clone() for m in max_vals]
-        # NCCL op value 2 maps to MAX for torch.cuda.nccl.all_reduce.
-        torch.cuda.nccl.all_reduce(max_tensors, op=2)
-        # Keep summed int8 values within [-127, 127] after all-reduce.
-        limit = max(1, 127 // self.world_size)
-        scales = [m / float(limit) for m in max_tensors]
-        quantized = [
-            torch.clamp((t / scale).round(), -limit, limit).to(torch.int8)
-            for t, scale in zip(self.inputs, scales)
-        ]
-        outputs = [torch.empty_like(t) for t in quantized]
-        torch.cuda.nccl.all_reduce(quantized, outputs=outputs)
-        return outputs[0].float() * scales[0]
+        if self.multi_gpu:
+            max_tensors = [m.clone() for m in max_vals]
+            # NCCL op value 2 maps to MAX for torch.cuda.nccl.all_reduce.
+            torch.cuda.nccl.all_reduce(max_tensors, op=2)
+            limit = max(1, 127 // self.world_size)
+            scales = [m / float(limit) for m in max_tensors]
+            quantized = [
+                torch.clamp((t / scale).round(), -limit, limit).to(torch.int8)
+                for t, scale in zip(self.inputs, scales)
+            ]
+            outputs = [torch.empty_like(t) for t in quantized]
+            torch.cuda.nccl.all_reduce(quantized, outputs=outputs)
+            return outputs[0].float() * scales[0]
+
+        max_val = max_vals[0]
+        limit = 127
+        scale = max_val / float(limit)
+        quantized = torch.clamp((self.inputs[0] / scale).round(), -limit, limit).to(torch.int8)
+        return quantized.float() * scale
 
     def capture_verification_payload(self) -> None:
         if self._verify_input is None or self.output is None:

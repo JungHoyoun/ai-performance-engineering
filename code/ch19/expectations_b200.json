@@ -109,7 +109,7 @@
       "type": "python"
     },
     "fp4_hardware_kernel_cuda": {
-      "example": "fp4_hardware_kernel",
+      "example": "fp4_hardware_kernel_cuda",
       "metadata": {
         "best_optimization": "optimized_fp4_hardware_kernel",
         "best_optimization_file": "optimized_fp4_hardware_kernel.cu",
@@ -194,7 +194,7 @@
       "type": "python"
     },
     "kv_prefetch_overlap_cuda": {
-      "example": "kv_prefetch_overlap",
+      "example": "kv_prefetch_overlap_cuda",
       "metadata": {
         "best_optimization": "optimized_kv_prefetch_overlap",
         "best_optimization_file": "optimized_kv_prefetch_overlap.cu",

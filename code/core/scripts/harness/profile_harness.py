@@ -883,7 +883,7 @@ def generate_baseline_optimized_comparison(results: List[RunResult], session_dir
             if example_name.startswith("baseline_") or "_baseline_" in example_name.lower():
                 base_name = example_name.replace("baseline_", "").replace("_baseline", "").replace("baseline_", "")
             elif "/baseline_" in example_path:
-                # Extract from path: ch04/baseline_dataparallel.py -> dataparallel
+                # Extract from path: ch04/baseline_dataparallel_multigpu.py -> dataparallel
                 file_part = example_path.split("/baseline_")[-1].replace(".py", "")
                 base_name = file_part.split("_")[0] if "_" in file_part else file_part
             
@@ -899,7 +899,7 @@ def generate_baseline_optimized_comparison(results: List[RunResult], session_dir
             if example_name.startswith("optimized_") or "_optimized_" in example_name.lower():
                 base_name = example_name.replace("optimized_", "").replace("_optimized", "").replace("optimized_", "")
             elif "/optimized_" in example_path:
-                # Extract from path: ch04/optimized_dataparallel_ddp.py -> dataparallel
+                # Extract from path: ch04/optimized_dataparallel_multigpu_ddp.py -> dataparallel
                 file_part = example_path.split("/optimized_")[-1].replace(".py", "")
                 # Take first part before underscore (or whole if no underscore)
                 base_name = file_part.split("_")[0] if "_" in file_part and not file_part.startswith("ch") else file_part
@@ -929,7 +929,7 @@ def generate_baseline_optimized_comparison(results: List[RunResult], session_dir
                 metric = row.get("metric", "")
                 value = row.get("value", "")
                 if tag and metric and value:
-                    # Extract example name from tag (e.g., "nsys_baseline_dataparallel" -> "baseline_dataparallel")
+                    # Extract example name from tag (e.g., "nsys_baseline_dataparallel_multigpu" -> "baseline_dataparallel_multigpu")
                     tag_clean = tag.replace("nsys_", "")
                     key = f"{section}::{metric}" if section else metric
                     metrics_by_example[tag_clean][key] = value
@@ -943,7 +943,7 @@ def generate_baseline_optimized_comparison(results: List[RunResult], session_dir
             for source_type, sources in metrics_data.get("by_source", {}).items():
                 for source_name, metrics in sources.items():
                     # Try to extract example name from source_name
-                    # e.g., "nsys_baseline_dataparallel.nsys-rep" -> "baseline_dataparallel"
+                    # e.g., "nsys_baseline_dataparallel_multigpu.nsys-rep" -> "baseline_dataparallel_multigpu"
                     example_match = None
                     for base_name in all_base_names:
                         if f"baseline_{base_name}" in source_name.lower():

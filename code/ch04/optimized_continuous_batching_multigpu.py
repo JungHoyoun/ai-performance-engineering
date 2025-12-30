@@ -1,22 +1,29 @@
-"""Multi-GPU wrapper for optimized continuous batching; skips when GPUs < 2."""
+"""Chapter 4 optimized continuous batching benchmark (multi-GPU)."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
-
-from ch04.optimized_continuous_batching import OptimizedContinuousBatchingBenchmark
+from core.utils.continuous_batching import ContinuousBatchingBase
+from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
-def get_benchmark() -> OptimizedContinuousBatchingBenchmark:
-    return OptimizedContinuousBatchingBenchmark()
+class OptimizedContinuousBatchingMultiGPUBenchmark(VerificationPayloadMixin, ContinuousBatchingBase):
+    """Optimized: dynamic batching across all visible GPUs."""
+
+    multi_gpu_required = True
+
+    def __init__(self) -> None:
+        super().__init__(
+            dynamic=True,
+            multi_gpu=True,
+            label="optimized_continuous_batching_multigpu",
+        )
+
+
+def get_benchmark() -> OptimizedContinuousBatchingMultiGPUBenchmark:
+    return OptimizedContinuousBatchingMultiGPUBenchmark()
 
 
 if __name__ == "__main__":
     from core.harness.benchmark_harness import benchmark_main
-    benchmark_main(get_benchmark)
 
+    benchmark_main(get_benchmark)

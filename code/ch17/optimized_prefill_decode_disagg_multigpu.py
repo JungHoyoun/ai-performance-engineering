@@ -21,6 +21,8 @@ from core.harness.benchmark_harness import BaseBenchmark  # noqa: E402
 class OptimizedPrefillDecodeDisaggMultiGPUBenchmark(_PrefillDecodeMultiGPUBenchmark):
     """Pipelined prefill/decode overlap across multi-GPU ranks."""
 
+    multi_gpu_required = True
+
     def __init__(self) -> None:
         super().__init__(overlap=True, label="optimized_prefill_decode_disagg_multigpu")
 

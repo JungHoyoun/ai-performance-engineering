@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Baseline: FSDP2 with BF16 mixed precision.
-
-Demonstrates standard FSDP2 training without FP8 optimization.
-"""
+"""Baseline: FSDP2 with BF16 mixed precision (single GPU)."""
 
 from __future__ import annotations
 
@@ -69,10 +66,7 @@ def _init_distributed() -> tuple[int, int, int]:
 def _resolve_world_size() -> int:
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for FSDP2 benchmarks")
-    world_size = torch.cuda.device_count()
-    if world_size < 2:
-        raise RuntimeError("FSDP2 baseline requires >=2 GPUs.")
-    return world_size
+    return 1
 
 
 def _build_model(hidden_size: int, num_layers: int, device: torch.device) -> nn.ModuleList:
@@ -93,8 +87,8 @@ def _run_worker(
     num_layers: int,
 ) -> None:
     rank, world_size, local_rank = _init_distributed()
-    if world_size < 2:
-        raise RuntimeError("FSDP2 baseline requires >=2 GPUs.")
+    if world_size < 1:
+        raise RuntimeError("FSDP2 baseline requires >=1 GPU.")
 
     if batch_size % micro_batch_size != 0:
         raise ValueError("batch_size must be divisible by micro_batch_size")
@@ -258,10 +252,10 @@ class BaselineFSDP2Benchmark(VerificationPayloadMixin, BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             launch_via=LaunchVia.TORCHRUN,
-            nproc_per_node=self._world_size,
+            nproc_per_node=1,
             iterations=3,
             warmup=5,
-            multi_gpu_required=True,
+            multi_gpu_required=False,
             measurement_timeout_seconds=900,
         )
 
@@ -270,7 +264,7 @@ class BaselineFSDP2Benchmark(VerificationPayloadMixin, BaseBenchmark):
         return TorchrunLaunchSpec(
             script_path=Path(__file__).resolve(),
             script_args=[],
-            multi_gpu_required=True,
+            multi_gpu_required=False,
             name="baseline_fsdp2_standalone",
             config_arg_map={
                 "iterations": "--iters",

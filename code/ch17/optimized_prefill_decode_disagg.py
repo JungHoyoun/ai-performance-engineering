@@ -106,7 +106,7 @@ class OptimizedDisaggregatedBenchmark(VerificationPayloadMixin, BaseBenchmark):
             raise RuntimeError("Model/inputs/streams not initialized")
 
         enable_nvtx = get_nvtx_enabled(self.get_config())
-        with nvtx_range("optimized_disaggregated.prefill_decode", enable=enable_nvtx):
+        with nvtx_range("optimized_disaggregated_multigpu.prefill_decode", enable=enable_nvtx):
             with torch.no_grad():
                 request_start = self._record_start()
 

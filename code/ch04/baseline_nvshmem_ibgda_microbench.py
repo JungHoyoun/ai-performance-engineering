@@ -13,10 +13,10 @@ from ch04.nvshmem_ibgda_microbench import NvshmemIbgdaMicrobench
 
 _DEFAULT_KWARGS = dict(
     mode="p",
-    bytes_per_message=1024,
-    ctas=32,
+    bytes_per_message=512,
+    ctas=64,
     threads=256,
-    iters=500,
+    iters=1000,
 )
 
 

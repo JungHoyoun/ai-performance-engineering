@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
@@ -46,14 +47,21 @@ def _main_process_first(is_main_process: bool):
         dist.barrier()
 
 
-def load_tinystories(tokenizer: PreTrainedTokenizerBase, seq_len: int, *, is_main_process: bool) -> Dataset:
+def load_tinystories(
+    tokenizer: PreTrainedTokenizerBase,
+    seq_len: int,
+    *,
+    is_main_process: bool,
+    split: str | None = None,
+) -> Dataset:
     """Tokenize and pack TinyStories into contiguous blocks for LM training."""
     try:
         from datasets import load_dataset
     except ImportError as exc:
         raise RuntimeError("load_tinystories() requires the `datasets` package") from exc
     with _main_process_first(is_main_process):
-        raw_dataset = load_dataset("roneneldan/TinyStories", split="train[:5%]")
+        dataset_split = split or os.getenv("AISP_TINYSTORIES_SPLIT", "train[:5%]")
+        raw_dataset = load_dataset("roneneldan/TinyStories", split=dataset_split)
 
     def tokenize_function(examples):
         tokens = tokenizer(

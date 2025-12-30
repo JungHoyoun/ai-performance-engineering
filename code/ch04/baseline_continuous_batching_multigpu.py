@@ -1,22 +1,29 @@
-"""Multi-GPU wrapper for continuous batching baseline; skips when GPUs < 2."""
+"""Chapter 4 baseline continuous batching benchmark (multi-GPU)."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
-
-from ch04.baseline_continuous_batching import BaselineContinuousBatchingBenchmark
+from core.utils.continuous_batching import ContinuousBatchingBase
+from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
-def get_benchmark() -> BaselineContinuousBatchingBenchmark:
-    return BaselineContinuousBatchingBenchmark()
+class BaselineContinuousBatchingMultiGPUBenchmark(VerificationPayloadMixin, ContinuousBatchingBase):
+    """Baseline: padded static batching across all visible GPUs."""
+
+    multi_gpu_required = True
+
+    def __init__(self) -> None:
+        super().__init__(
+            dynamic=False,
+            multi_gpu=True,
+            label="baseline_continuous_batching_multigpu",
+        )
+
+
+def get_benchmark() -> BaselineContinuousBatchingMultiGPUBenchmark:
+    return BaselineContinuousBatchingMultiGPUBenchmark()
 
 
 if __name__ == "__main__":
     from core.harness.benchmark_harness import benchmark_main
-    benchmark_main(get_benchmark)
 
+    benchmark_main(get_benchmark)

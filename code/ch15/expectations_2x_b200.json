@@ -5,40 +5,40 @@
       "metadata": {
         "best_optimization": "optimized_disaggregated_inference_multigpu",
         "best_optimization_file": "optimized_disaggregated_inference_multigpu.py",
-        "best_optimization_speedup": 1.0496502530445608,
+        "best_optimization_speedup": 1.258544697819409,
         "best_optimization_technique": "optimized_disaggregated_inference_multigpu",
-        "best_optimization_time_ms": 6099.555313587189,
+        "best_optimization_time_ms": 6102.88393497467,
         "optimization_goal": "speed"
       },
       "metrics": {
-        "baseline_p75_ms": 6402.399778366089,
-        "baseline_time_ms": 6402.399778366089,
-        "best_optimized_p75_ms": 6099.555313587189,
-        "best_optimized_speedup": 1.0496502530445608,
-        "best_optimized_time_ms": 6099.555313587189,
-        "best_speedup": 1.0496502530445608,
+        "baseline_p75_ms": 7680.752217769623,
+        "baseline_time_ms": 7680.752217769623,
+        "best_optimized_p75_ms": 6102.88393497467,
+        "best_optimized_speedup": 1.258544697819409,
+        "best_optimized_time_ms": 6102.88393497467,
+        "best_speedup": 1.258544697819409,
         "is_regression": false
       },
       "provenance": {
-        "git_commit": "6ad824fd0ee440dc10ef6923ea7d84e9fb19520c",
+        "git_commit": "2ed7f7e02098df8478dd65a5fd779c28d1e60489",
         "hardware_key": "2x_b200",
         "iterations": 20,
         "profile_name": "none",
-        "timestamp": "2025-12-30T00:45:16.173475",
+        "timestamp": "2025-12-30T03:10:32.702894",
         "warmup_iterations": 5
       },
       "type": "python"
     },
-    "kv_cache_nvlink_pool": {
-      "example": "kv_cache_nvlink_pool",
+    "kv_cache_nvlink_pool_multigpu": {
+      "example": "kv_cache_nvlink_pool_multigpu",
       "metadata": {
         "best_memory_savings_pct": -0.0006375843205263897,
         "best_memory_savings_ratio": 0.9999936241974459,
-        "best_optimization": "optimized_kv_cache_nvlink_pool",
-        "best_optimization_file": "optimized_kv_cache_nvlink_pool.py",
+        "best_optimization": "optimized_kv_cache_nvlink_pool_multigpu",
+        "best_optimization_file": "optimized_kv_cache_nvlink_pool_multigpu.py",
         "best_optimization_memory_mb": 153.1669921875,
         "best_optimization_speedup": 0.984976127758497,
-        "best_optimization_technique": "optimized_kv_cache_nvlink_pool",
+        "best_optimization_technique": "optimized_kv_cache_nvlink_pool_multigpu",
         "best_optimization_time_ms": 8.942021131515503,
         "optimization_goal": "speed"
       },
@@ -83,16 +83,16 @@
       },
       "type": "python"
     },
-    "prefill_decode_disagg": {
-      "example": "prefill_decode_disagg",
+    "prefill_decode_disagg_multigpu": {
+      "example": "prefill_decode_disagg_multigpu",
       "metadata": {
         "best_memory_savings_pct": 0.0,
         "best_memory_savings_ratio": 1.0,
-        "best_optimization": "optimized_prefill_decode_disagg",
-        "best_optimization_file": "optimized_prefill_decode_disagg.py",
+        "best_optimization": "optimized_prefill_decode_disagg_multigpu",
+        "best_optimization_file": "optimized_prefill_decode_disagg_multigpu.py",
         "best_optimization_memory_mb": 196.125,
         "best_optimization_speedup": 1.1820024267921991,
-        "best_optimization_technique": "optimized_prefill_decode_disagg",
+        "best_optimization_technique": "optimized_prefill_decode_disagg_multigpu",
         "best_optimization_time_ms": 5.5403253767225475,
         "optimization_goal": "speed"
       },

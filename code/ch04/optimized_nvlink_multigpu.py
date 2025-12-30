@@ -1,31 +1,131 @@
-"""Multi-GPU wrapper for the optimized NVLink benchmark that skips on single-GPU hosts."""
+"""optimized_nvlink_multigpu.py - Peer copies across all visible GPUs."""
 
 from __future__ import annotations
 
-import argparse
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional, List, Tuple
 
 import torch
 
-from ch04.optimized_nvlink import OptimizedNVLinkBenchmark
+from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
+from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
-class MultiGPUOptimizedNVLinkBenchmark(OptimizedNVLinkBenchmark):
-    def setup(self) -> None:  # type: ignore[override]
+class OptimizedNVLinkBenchmark(VerificationPayloadMixin, BaseBenchmark):
+    """Optimized: direct P2P copies with peer access enabled."""
+
+    multi_gpu_required = True
+
+    def __init__(self):
+        super().__init__()
+        self.device_ids: List[int] = []
+        self.pairs: List[Tuple[int, int]] = []
+        self.src: List[torch.Tensor] = []
+        self.dst: List[torch.Tensor] = []
+        self.streams: List[torch.cuda.Stream] = []
+        self.output: Optional[torch.Tensor] = None
+        self.numel = 50_000_000
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(self.numel),
+        )
+
+    def _sync_all(self) -> None:
+        for device_id in self.device_ids:
+            torch.cuda.synchronize(device_id)
+
+    def setup(self) -> None:
         if torch.cuda.device_count() < 2:
             raise RuntimeError("SKIPPED: requires >=2 GPUs")
-        super().setup()
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+
+        self.device_ids = list(range(torch.cuda.device_count()))
+        self.pairs = [(idx, (idx + 1) % len(self.device_ids)) for idx in self.device_ids]
+
+        self.src = [
+            torch.randn(self.numel, device=f"cuda:{src}", dtype=torch.float32)
+            for src, _ in self.pairs
+        ]
+        self.dst = [
+            torch.empty(self.numel, device=f"cuda:{dst}", dtype=torch.float32)
+            for _, dst in self.pairs
+        ]
+        self.streams = [torch.cuda.Stream(device=dst) for _, dst in self.pairs]
+
+        total_tokens = self.numel * len(self.pairs)
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(len(self.pairs)),
+            tokens_per_iteration=float(total_tokens),
+        )
+        self.register_workload_metadata(
+            requests_per_iteration=float(len(self.pairs)),
+            tokens_per_iteration=float(total_tokens),
+        )
+        self._sync_all()
+
+    def benchmark_fn(self) -> None:
+        with self._nvtx_range("optimized_nvlink_multigpu"):
+            for stream, (src_id, dst_id), src, dst in zip(self.streams, self.pairs, self.src, self.dst):
+                with torch.cuda.device(dst_id), torch.cuda.stream(stream):
+                    dst.copy_(src, non_blocking=True)
+            for stream in self.streams:
+                stream.synchronize()
+        self.output = self.dst[0]
+
+    def capture_verification_payload(self) -> None:
+        if not self.src or not self.dst:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        probe = self.src[0][: 256 * 256].view(256, 256)
+        output = self.dst[0][: 256 * 256].view(256, 256)
+        self._set_verification_payload(
+            inputs={"src": probe},
+            output=output,
+            batch_size=int(probe.shape[0]),
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.0, 0.0),
+        )
+
+    def teardown(self) -> None:
+        self.src = []
+        self.dst = []
+        self.streams = []
+        torch.cuda.empty_cache()
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(iterations=20, warmup=5, multi_gpu_required=True)
+
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
+    def get_custom_metrics(self) -> Optional[dict]:
+        from core.benchmark.metrics import compute_memory_transfer_metrics
+        bytes_transferred = float(self.numel * 4 * len(self.pairs))
+        return compute_memory_transfer_metrics(
+            bytes_transferred=bytes_transferred,
+            elapsed_ms=getattr(self, "_last_elapsed_ms", 1.0),
+            transfer_type="hbm",
+        )
+
+    def get_custom_streams(self) -> List[torch.cuda.Stream]:
+        return self.streams
+
+    def validate_result(self) -> Optional[str]:
+        if not self.src:
+            return "Buffers not initialized"
+        return None
 
 
-def get_benchmark() -> OptimizedNVLinkBenchmark:
-    return MultiGPUOptimizedNVLinkBenchmark()
+def get_benchmark() -> BaseBenchmark:
+    return OptimizedNVLinkBenchmark()
 
 
 if __name__ == "__main__":
     from core.harness.benchmark_harness import benchmark_main
+
     benchmark_main(get_benchmark)

@@ -31,6 +31,8 @@ class TorchrunScriptBenchmark(VerificationPayloadMixin, BaseBenchmark):
         config_arg_map: Optional[Dict[str, str]] = None,
         multi_gpu_required: bool = True,
         default_nproc_per_node: Optional[int] = None,
+        default_iterations: Optional[int] = None,
+        env: Optional[Dict[str, str]] = None,
         name: Optional[str] = None,
     ):
         super().__init__()
@@ -39,6 +41,8 @@ class TorchrunScriptBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._config_arg_map = config_arg_map or {}
         self._multi_gpu_required = multi_gpu_required
         self._default_nproc_per_node = default_nproc_per_node
+        self._default_iterations = default_iterations
+        self._env = dict(env) if env else {}
         self._target_label = target_label
         self.name = name or self._script_path.stem
         # Compliance: verification interface
@@ -151,6 +155,8 @@ class TorchrunScriptBenchmark(VerificationPayloadMixin, BaseBenchmark):
             multi_gpu_required=self._multi_gpu_required,
             nproc_per_node=self._resolve_nproc_per_node(),
         )
+        if self._default_iterations is not None:
+            cfg.iterations = int(self._default_iterations)
         cfg.target_label = self._target_label
         return cfg
 
@@ -159,6 +165,7 @@ class TorchrunScriptBenchmark(VerificationPayloadMixin, BaseBenchmark):
         return TorchrunLaunchSpec(
             script_path=self._script_path,
             script_args=list(self._base_args),
+            env=dict(self._env),
             multi_gpu_required=self._multi_gpu_required,
             config_arg_map=self._config_arg_map,
             name=self.name,

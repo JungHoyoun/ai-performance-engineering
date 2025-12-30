@@ -12,6 +12,7 @@ def get_benchmark():
         script_path=Path(__file__).parents[2] / "ch04" / "symmetric_memory_training_advanced.py",
         base_args=["--demo", "optimizer", "--disable-symmetric"],
         target_label="labs/train_distributed:symmem_training",
-        multi_gpu_required=True,
+        multi_gpu_required=False,
+        default_nproc_per_node=1,
         name="baseline_symmem_training",
     )

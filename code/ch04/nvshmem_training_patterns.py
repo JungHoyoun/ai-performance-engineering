@@ -600,8 +600,10 @@ class PipelineParallelSymmetricMemory:
                     buffer.tensor.copy_(activation.flatten())
                     
                     if buffer.handle is not None and nvshmem_available():
-                            remote_buf = buffer.handle.get_buffer(next_rank)
-                            remote_buf.copy_(buffer.tensor, non_blocking=True)
+                        remote_buf = buffer.handle.get_buffer(next_rank)
+                        remote_buf.copy_(buffer.tensor, non_blocking=True)
+                    else:
+                        dist.send(buffer.tensor, dst=next_rank)
                     
                     dist.barrier()
                     return None  # This rank is done
@@ -623,10 +625,22 @@ def demo_pipeline_parallel(benchmark: bool = False) -> None:
     """
     rank, world_size, device = init_process_group()
     
+    # Execute pipeline with multiple microbatches
+    if benchmark:
+        num_microbatches = 64
+        batch_size = 16
+        seq_len = 512
+        dim = 2048
+    else:
+        num_microbatches = 8
+        batch_size = 8
+        seq_len = 256
+        dim = 1024
+    microbatch_size = batch_size
+    hidden = dim * 4
+
     # Split model across ranks
     stages_per_rank = 2
-    dim = 1024
-    hidden = dim * 4
     
     # Create pipeline stages
     pipeline_dtype = torch.float16
@@ -642,15 +656,10 @@ def demo_pipeline_parallel(benchmark: bool = False) -> None:
     pipeline = PipelineParallelSymmetricMemory(
         stages=my_stages,
         stage_ranks=stage_ranks,
-        microbatch_size=8,
+        microbatch_size=microbatch_size,
         world_size=world_size,
     )
-    
-    # Execute pipeline with multiple microbatches
-    num_microbatches = 8 if not benchmark else 32
-    batch_size = 8
-    seq_len = 256
-    
+
     my_stage_idx = rank * stages_per_rank
     
     for mb_idx in range(num_microbatches):
@@ -663,8 +672,14 @@ def demo_pipeline_parallel(benchmark: bool = False) -> None:
             buffer = pipeline._get_or_create_buffer(
                 my_stage_idx, (batch_size, seq_len, dim), device, pipeline_dtype
             )
-            dist.barrier()
-            microbatch = buffer.tensor.view(batch_size, seq_len, dim)
+            if nvshmem_available() and buffer.handle is not None:
+                dist.barrier()
+                microbatch = buffer.tensor.view(batch_size, seq_len, dim)
+            else:
+                recv_buf = torch.empty_like(buffer.tensor)
+                dist.recv(recv_buf, src=prev_stage // stages_per_rank)
+                dist.barrier()
+                microbatch = recv_buf.view(batch_size, seq_len, dim)
         
         # Execute forward through local stages
         output = pipeline.forward_microbatch(microbatch, rank, my_stage_idx)

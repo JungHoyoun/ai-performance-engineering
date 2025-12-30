@@ -109,7 +109,7 @@
       "type": "python"
     },
     "hbm_cuda": {
-      "example": "hbm",
+      "example": "hbm_cuda",
       "metadata": {
         "best_optimization": "vectorized",
         "best_optimization_file": "optimized_hbm_vectorized.cu",
@@ -194,7 +194,7 @@
       "type": "python"
     },
     "loop_unrolling_cuda": {
-      "example": "loop_unrolling",
+      "example": "loop_unrolling_cuda",
       "metadata": {
         "best_optimization": "optimized_loop_unrolling",
         "best_optimization_file": "optimized_loop_unrolling.cu",
@@ -387,7 +387,7 @@
       "type": "python"
     },
     "threshold_cuda": {
-      "example": "threshold",
+      "example": "threshold_cuda",
       "metadata": {
         "best_optimization": "optimized_threshold",
         "best_optimization_file": "optimized_threshold.cu",
@@ -472,7 +472,7 @@
       "type": "python"
     },
     "thresholdtma_cuda": {
-      "example": "thresholdtma",
+      "example": "thresholdtma_cuda",
       "metadata": {
         "best_optimization": "optimized_thresholdtma",
         "best_optimization_file": "optimized_thresholdtma.cu",

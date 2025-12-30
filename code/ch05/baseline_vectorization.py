@@ -32,12 +32,13 @@ class BaselineVectorizationBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._synchronize()
     
     def benchmark_fn(self) -> None:
-        """Benchmark: Scalar operations without vectorization."""
+        """Benchmark: Chunked reductions to simulate scalar-style overhead."""
         assert self.data is not None
         with self._nvtx_range("baseline_vectorization"):
             result = torch.zeros(1, device=self.device)
-            for i in range(min(1000, self.N)):  # Simulate scalar loop
-                result += self.data[i]
+            chunk = 4096
+            for start in range(0, self.N, chunk):
+                result += self.data[start:start + chunk].sum()
             self._synchronize()
         self.output = result
 

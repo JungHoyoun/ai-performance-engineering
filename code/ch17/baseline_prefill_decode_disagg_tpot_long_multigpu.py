@@ -17,13 +17,15 @@ from ch17.baseline_prefill_decode_disagg_multigpu import (  # noqa: E402
 from core.harness.benchmark_harness import BaseBenchmark  # noqa: E402
 
 TPOT_LONG_CONFIG = PrefillDecodeConfig(
-    context_window=128,
+    context_window=512,
     decode_tokens=1024,
 )
 
 
 class BaselinePrefillDecodeDisaggTPOTLongMultiGPUBenchmark(_PrefillDecodeMultiGPUBenchmark):
     """Serialized prefill then decode (TPOT/long-output focused)."""
+
+    multi_gpu_required = True
 
     def __init__(self) -> None:
         super().__init__(

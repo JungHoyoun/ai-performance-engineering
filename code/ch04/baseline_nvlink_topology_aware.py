@@ -1,23 +1,16 @@
-"""baseline_nvlink_topology_aware.py
-
-Baseline NVLink benchmark that ignores topology: default stream, no peer access enablement,
-and no attempt to pick near-neighbor pairs. Uses a simple P2P copy between GPU 0 and GPU 1
-if available. Requires >=2 GPUs.
-"""
+"""baseline_nvlink_topology_aware.py - single-GPU naive copy baseline."""
 
 from __future__ import annotations
 
 from typing import Optional
 
 import torch
-
-from core.benchmark.gpu_requirements import skip_if_insufficient_gpus, require_peer_access
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
 class BaselineNvlinkTopologyAwareBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Naive P2P copy that does not enable peer access or respect NVLink distance."""
+    """Naive copy that uses the default stream on a single GPU."""
 
     def __init__(self):
         super().__init__()
@@ -33,11 +26,10 @@ class BaselineNvlinkTopologyAwareBenchmark(VerificationPayloadMixin, BaseBenchma
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
         n = self.numel
-        skip_if_insufficient_gpus(2)
-        require_peer_access(0, 1)
-
-        self.src = torch.randn(n, device="cuda:0", dtype=torch.float16)
-        self.dst = torch.empty(n, device="cuda:1", dtype=torch.float16)
+        if not torch.cuda.is_available():
+            raise RuntimeError("SKIPPED: requires CUDA")
+        self.src = torch.randn(n, device=self.device, dtype=torch.float16)
+        self.dst = torch.empty_like(self.src)
         self._synchronize()
 
     def benchmark_fn(self) -> None:

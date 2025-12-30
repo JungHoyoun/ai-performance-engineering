@@ -15,7 +15,7 @@ Demonstrates Blackwell-friendly persistent decode kernels and TMA-powered prefil
 | `baseline_persistent_decode.py`, `optimized_persistent_decode_cuda.py`, `optimized_persistent_decode_graphs.py`, `optimized_persistent_decode_triton.py` | Persistent decode variants spanning CUDA, graphs, and Triton. |
 | `baseline_tma_prefill_decode.py`, `optimized_tma_prefill_decode.py`, `baseline_native_tma_prefill_decode.py`, `optimized_native_tma_prefill_decode.py` | Prefill workloads illustrating cp.async vs native TMA scheduling. |
 | `kv_locality_microbench.py` | Pinned/pageable/NUMA host slab copy microbench (HBM vs local/remote pinned vs pageable). |
-| `persistent_decode_common.py`, `tma_extension.py`, `expectations_b200.json` | Shared helpers, CUDA extension wrappers, and expectation thresholds. |
+| `persistent_decode_common.py`, `tma_extension.py`, `expectations_{hardware_key}.json` | Shared helpers, CUDA extension wrappers, and expectation thresholds. |
 
 ## Running the Benchmarks
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.

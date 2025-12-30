@@ -14,7 +14,7 @@ Mirrors the FlexAttention CuTe DSL walkthrough: run eager vs compiled FlexAttent
 | --- | --- |
 | `baseline_flex_attention.py`, `optimized_flex_attention.py` | FlexAttention DSL workloads toggling `torch.compile` for fused kernels. |
 | `flex_attention_cute.py` | CuTe/FlashAttention tool for hardware without FlexAttention bindings. |
-| `flexattention_common.py`, `expectations_b200.json` | Shared input builders, score modifiers, and regression thresholds. |
+| `flexattention_common.py`, `expectations_{hardware_key}.json` | Shared input builders, score modifiers, and regression thresholds. |
 
 ## Running the Benchmarks
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.

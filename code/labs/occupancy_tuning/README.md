@@ -32,4 +32,4 @@ python -m cli.aisp bench run --targets labs/occupancy_tuning --profile minimal
 
 ## Notes
 - Add new schedules to `triton_matmul_schedules.py` and regenerate the harness targets by rerunning the sweep script.
-- `expectations_b200.json` records FLOP/s per schedule so improvements show up in CI.
+- `expectations_{hardware_key}.json` records FLOP/s per schedule so improvements show up in CI.

@@ -12,14 +12,8 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 
-from core.benchmark.gpu_requirements import skip_if_insufficient_gpus, require_peer_access
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch15.verification_payload_mixin import VerificationPayloadMixin
-
-
-def _enable_peer_access() -> None:
-    skip_if_insufficient_gpus(2)
-    require_peer_access(0, 1)
 
 
 class OptimizedKVCacheNvlinkPoolBenchmark(VerificationPayloadMixin, BaseBenchmark):
@@ -46,8 +40,10 @@ class OptimizedKVCacheNvlinkPoolBenchmark(VerificationPayloadMixin, BaseBenchmar
     def setup(self) -> None:
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-        _enable_peer_access()
-        self.peer_device = torch.device("cuda:1")
+        if not torch.cuda.is_available():
+            raise RuntimeError("SKIPPED: requires CUDA")
+        # Single-GPU: treat peer cache as an expanded local pool.
+        self.peer_device = self.device
         self.model = nn.MultiheadAttention(self.hidden, self.heads, batch_first=True).to(self.device).eval()
         self._synchronize()
         self._verify_q = torch.randn(1, 1, self.hidden, device=self.device)

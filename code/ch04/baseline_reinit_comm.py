@@ -1,8 +1,4 @@
-"""baseline_reinit_comm.py - Reinitializing NCCL every iteration (baseline).
-
-Anti-pattern: reinitializing NCCL communicator on every iteration.
-Implements BaseBenchmark for harness integration.
-"""
+"""baseline_reinit_comm.py - Reinitializing NCCL every iteration (single GPU)."""
 
 from __future__ import annotations
 
@@ -16,8 +12,6 @@ if str(repo_root) not in sys.path:
 
 import torch
 import torch.distributed as dist
-
-from core.benchmark.gpu_requirements import skip_if_insufficient_gpus
 try:
     from distributed_helper import setup_single_gpu_env
 except ImportError:
@@ -59,7 +53,6 @@ class BaselineReinitCommBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def setup(self) -> None:
         """Setup: Configure distributed environment."""
-        skip_if_insufficient_gpus()
         setup_single_gpu_env()
         self.rank = int(os.environ.get("RANK", "0"))
         self.world_size = int(os.environ.get("WORLD_SIZE", "1"))

@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""Gradient fusion benchmark for multi-GPU all-reduce."""
+
+from __future__ import annotations
+
+import argparse
+import datetime
+import os
+import sys
+from pathlib import Path
+from typing import Tuple
+
+import torch
+import torch.distributed as dist
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+try:
+    from distributed_helper import setup_single_gpu_env
+except ImportError:
+    def setup_single_gpu_env() -> None:
+        if "RANK" not in os.environ:
+            os.environ.setdefault("RANK", "0")
+            os.environ.setdefault("WORLD_SIZE", "1")
+            os.environ.setdefault("MASTER_ADDR", "localhost")
+            os.environ.setdefault("MASTER_PORT", "29500")
+            os.environ.setdefault("LOCAL_RANK", "0")
+
+
+def init_distributed() -> Tuple[int, int, torch.device]:
+    setup_single_gpu_env()
+    if not dist.is_initialized():
+        rank = int(os.environ.get("RANK", 0))
+        world_size = int(os.environ.get("WORLD_SIZE", torch.cuda.device_count()))
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        torch.cuda.set_device(local_rank)
+        dist.init_process_group(
+            backend="nccl",
+            init_method="env://",
+            rank=rank,
+            world_size=world_size,
+            timeout=datetime.timedelta(seconds=60),
+            device_id=local_rank,
+        )
+    return dist.get_rank(), dist.get_world_size(), torch.device(f"cuda:{torch.cuda.current_device()}")
+
+
+def run_benchmark(
+    *,
+    mode: str,
+    num_tensors: int,
+    tensor_kb: int,
+    iterations: int,
+) -> None:
+    rank, world_size, device = init_distributed()
+    if world_size < 2:
+        raise RuntimeError("gradient_fusion_multigpu requires >=2 GPUs")
+
+    dtype = torch.float16
+    elem_size = torch.tensor([], dtype=dtype).element_size()
+    numel = max(1, (tensor_kb * 1024) // elem_size)
+
+    tensors = [
+        torch.randn(numel, device=device, dtype=dtype) for _ in range(num_tensors)
+    ]
+    fused = None
+    if mode == "optimized":
+        fused = torch.cat([t.view(-1) for t in tensors])
+
+    for _ in range(5):
+        if mode == "baseline":
+            for t in tensors:
+                dist.all_reduce(t)
+        else:
+            dist.all_reduce(fused)
+    torch.cuda.synchronize(device)
+
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+    start.record()
+    for _ in range(iterations):
+        if mode == "baseline":
+            for t in tensors:
+                dist.all_reduce(t)
+        else:
+            dist.all_reduce(fused)
+    end.record()
+    torch.cuda.synchronize(device)
+
+    elapsed_ms = start.elapsed_time(end)
+    total_bytes = num_tensors * numel * elem_size
+    bw_gbps = (total_bytes / (elapsed_ms / iterations / 1000.0)) / 1e9
+
+    if rank == 0:
+        print(
+            f"[gradient_fusion:{mode}] tensors={num_tensors} size={tensor_kb}KB "
+            f"time={elapsed_ms / iterations:.4f} ms/iter bw={bw_gbps:.2f} GB/s"
+        )
+
+    dist.barrier()
+    dist.destroy_process_group()
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Gradient fusion benchmark")
+    parser.add_argument("--mode", choices=("baseline", "optimized"), default="baseline")
+    parser.add_argument("--num-tensors", type=int, default=128, help="Number of small tensors.")
+    parser.add_argument("--tensor-kb", type=int, default=64, help="Size per tensor (KB).")
+    parser.add_argument("--iterations", type=int, default=50, help="Iterations to time.")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    run_benchmark(
+        mode=args.mode,
+        num_tensors=args.num_tensors,
+        tensor_kb=args.tensor_kb,
+        iterations=args.iterations,
+    )
+
+
+if __name__ == "__main__":
+    main()

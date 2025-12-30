@@ -1,4 +1,4 @@
-"""baseline_disaggregated.py - Baseline monolithic inference in multi-GPU context."""
+"""baseline_disaggregated.py - Baseline monolithic inference (single GPU)."""
 
 from __future__ import annotations
 
@@ -13,9 +13,6 @@ import torch
 import torch.nn as nn
 import torch.distributed as dist
 
-from core.utils.compile_utils import compile_model
-from core.benchmark.gpu_requirements import skip_if_insufficient_gpus
-
 from typing import Optional
 
 from core.harness.benchmark_harness import (  # noqa: E402
@@ -29,11 +26,7 @@ from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
 class BaselineDisaggregatedBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Baseline: Monolithic inference (prefill and decode share resources across GPUs).
-    
-    Disaggregated inference: This baseline does not separate prefill and decode phases.
-    Both phases compete for same GPU resources, causing interference and poor utilization.
-    """
+    """Baseline: Monolithic inference (prefill and decode share the same GPU)."""
     
     def __init__(self):
         super().__init__()
@@ -55,8 +48,6 @@ class BaselineDisaggregatedBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def setup(self) -> None:
         """Setup: Initialize model and inputs."""
-        skip_if_insufficient_gpus()
-
         # Only initialize distributed when launched under torchrun.
         import os
         if dist.is_available() and "RANK" in os.environ and "WORLD_SIZE" in os.environ:

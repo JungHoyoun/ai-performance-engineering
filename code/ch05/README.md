@@ -15,9 +15,10 @@ Focuses on feeding GPUs efficiently: tune DataLoader workers, vectorize preproce
 | `baseline_storage_cpu.py`, `optimized_storage_cpu.py` | Single-node dataloader comparison covering worker count, pinned memory, and caching strategies. |
 | `baseline_vectorization.py`, `optimized_vectorization.py` | Vectorized parsing and memory-map examples that remove Python loops from preprocessing. |
 | `baseline_ai.py`, `optimized_ai.py`, `storage_io_optimization.py` | LLM-style token pipelines showcasing overlapping compute with streaming reads and prefetch. |
-| `baseline_distributed.py`, `optimized_distributed.py` | Multi-node reader pair demonstrating sharded datasets and rendezvous barriers. |
+| `baseline_distributed.py`, `optimized_distributed.py` | Single-GPU sum vs optional distributed all-reduce fallback. |
+| `baseline_distributed_multigpu.py`, `optimized_distributed_multigpu.py` | Multi-GPU reduction baseline (CPU staging) vs GPU-side reduce_add. |
 | `gds_cufile_minimal.py`, `gpudirect_storage_example.py` | GPUDirect Storage samples for verifying cuFile setup, buffer alignment, and throughput. |
-| `compare.py`, `requirements.txt`, `expectations_b200.json` | Harness entrypoint plus expectation baselines for spotting regressions. |
+| `compare.py`, `requirements.txt`, `expectations_{hardware_key}.json` | Harness entrypoint plus expectation baselines for spotting regressions. |
 
 ## Running the Benchmarks
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
@@ -27,7 +28,7 @@ python -m cli.aisp bench list-targets --chapter ch05
 python -m cli.aisp bench run --targets ch05 --profile minimal
 ```
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
-- Expectation baselines live next to each chapter in `expectations_b200.json`; refresh with `--update-expectations` after validating new hardware.
+- Expectation baselines live next to each chapter in `expectations_{hardware_key}.json`; refresh with `--update-expectations` after validating new hardware.
 
 ## Validation Checklist
 - `python baseline_storage_cpu.py --inspect` exposes CPU wait time > GPU time; `optimized_storage_cpu.py` reverses the ratio with >=80% GPU utilization.

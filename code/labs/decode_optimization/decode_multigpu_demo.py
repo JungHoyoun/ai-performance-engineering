@@ -40,6 +40,7 @@ def _resolve_world_size() -> int:
 
 class MultiGPUDecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Torchrun-only entry that launches this script across available GPUs."""
+    multi_gpu_required = True
 
     def __init__(self) -> None:
         super().__init__()

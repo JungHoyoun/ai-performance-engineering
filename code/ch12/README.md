@@ -13,13 +13,12 @@ Covers modern CUDA Graph capabilities-conditional capture, graph memory tuning, 
 | Path | Description |
 | --- | --- |
 | `baseline_cuda_graphs.py`, `optimized_cuda_graphs.py`, `baseline_cuda_graphs_conditional*.cu`, `optimized_cuda_graphs_conditional*.cu` | Graph capture demos that evolve from simple replay to conditional and DSM-aware execution. |
-| `baseline_nvfp4_mlp.py`, `optimized_nvfp4_mlp.py` | BF16 vs NVFP4 MLP benchmark to quantify precision-driven throughput in steady-state runs. |
 | `baseline_graph_bandwidth.{py,cu}`, `optimized_graph_bandwidth.{py,cu}`, `baseline_kernel_launches.py`, `optimized_kernel_launches.py` | Launch- and bandwidth-focused studies illustrating how graphs reduce CPU overhead. |
 | `baseline_dynamic_parallelism_host.cu`, `baseline_dynamic_parallelism_device.cu`, `optimized_dynamic_parallelism_host.cu`, `optimized_dynamic_parallelism_device.cu`, `dynamic_parallelism_sm121/` | Device-side launch samples showing when dynamic parallelism helps or hurts. |
 | `baseline_work_queue.{py,cu}`, `optimized_work_queue.{py,cu}`, `work_queue_common.cuh` | GPU work queues for irregular batch sizes, including NVTX instrumentation. |
 | `baseline_uneven_partition.cu`, `optimized_uneven_partition.cu`, `baseline_uneven_static.cu`, `optimized_uneven_static.cu` | Uneven workload partitioners that rebalance CTA assignments at runtime. |
 | `baseline_kernel_fusion.py`, `optimized_kernel_fusion.py`, `kernel_fusion_cuda_demo.cu` | Kernel fusion exercises within graph capture so you can remove CPU synchronization entirely. (`kernel_fusion_cuda_demo.cu` is a standalone tool; not a benchmark target.) |
-| `compare.py`, `cuda_extensions/`, `expectations_b200.json` | Harness entry, extension stubs, and expectation thresholds. |
+| `compare.py`, `cuda_extensions/`, `expectations_{hardware_key}.json` | Harness entry, extension stubs, and expectation thresholds. |
 
 ## Running the Benchmarks
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
@@ -29,17 +28,7 @@ python -m cli.aisp bench list-targets --chapter ch12
 python -m cli.aisp bench run --targets ch12 --profile minimal
 ```
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
-- Expectation baselines live next to each chapter in `expectations_b200.json`; refresh with `--update-expectations` after validating new hardware.
-
-## Demos (Non-Benchmark)
-These are runnable CUDA-graph companions (not baseline/optimized benchmark pairs). Run them via `aisp demos`:
-```bash
-python -m cli.aisp demos ch12-graph-capture
-python -m cli.aisp demos ch12-graph-replay
-python -m cli.aisp demos ch12-instantiation-overhead
-```
-- List all demos: `python -m cli.aisp demos list`
-- Pass args to a demo with `--` (e.g., `python -m cli.aisp demos ch12-graph-capture -- --help`)
+- Expectation baselines live next to each chapter in `expectations_{hardware_key}.json`; refresh with `--update-expectations` after validating new hardware.
 
 ## Validation Checklist
 - `python optimized_cuda_graphs.py --iterations 100` should report lower wall-clock time than the baseline while matching outputs.

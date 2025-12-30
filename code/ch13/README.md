@@ -18,7 +18,7 @@ Focuses on PyTorch-centric optimizations: compiled autograd, memory profiling, F
 | `context_parallelism.py`, `fsdp_example.py` | Context and FSDP sharding demos for scaling beyond a single GPU. (Tools; not benchmark targets.) |
 | `baseline_precisionfp8*.py`, `optimized_precisionfp8*.py`, `baseline_precisionmixed.py`, `optimized_precisionmixed.py`, `compiled_autograd.py` | Precision-management suites covering Transformer Engine and compiled autograd recipes. |
 | `baseline_quantization.py`, `optimized_quantization.py`, `baseline_kv_cache_naive.py`, `optimized_kv_cache_naive.py`, `optimized_kv_cache_naive_pool.py` | Quantization and KV-cache pipelines for inference/training memory savings. |
-| `compare.py`, `compare_perf.py`, `requirements.txt`, `expectations_b200.json`, `workload_config.py` | Harness entry, performance comparison helper, dependencies, and regression baselines. |
+| `compare.py`, `compare_perf.py`, `requirements.txt`, `expectations_{hardware_key}.json`, `workload_config.py` | Harness entry, performance comparison helper, dependencies, and regression baselines. |
 
 ## Running the Benchmarks
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
@@ -28,7 +28,7 @@ python -m cli.aisp bench list-targets --chapter ch13
 python -m cli.aisp bench run --targets ch13 --profile minimal
 ```
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
-- Expectation baselines live next to each chapter in `expectations_b200.json`; refresh with `--update-expectations` after validating new hardware.
+- Expectation baselines live next to each chapter in `expectations_{hardware_key}.json`; refresh with `--update-expectations` after validating new hardware.
 
 ## Validation Checklist
 - `python compare.py --examples training_standard` shows optimized training runs producing higher goodput with identical metrics.

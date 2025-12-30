@@ -1,17 +1,5 @@
 #!/usr/bin/env python3
-"""baseline_prefill_decode_disagg.py - CPU-staged KV handoff baseline.
-
-This benchmark models a two-pool serving setup on a single node:
-- Prefill runs on `cuda:0`
-- Decode runs on `cuda:1`
-
-Baseline behavior:
-- KV handoff is staged through host memory: GPU0 -> CPU -> GPU1
-- Prefill and decode are serialized (no pipelining across pools)
-
-The optimized pair (`optimized_prefill_decode_disagg.py`) keeps the semantic
-output invariant while improving performance via peer copies + pipelining.
-"""
+"""baseline_prefill_decode_disagg.py - CPU-staged KV handoff baseline (single GPU)."""
 
 from __future__ import annotations
 
@@ -62,14 +50,11 @@ class BaselinePrefillDecodeDisaggBenchmark(VerificationPayloadMixin, BaseBenchma
     def setup(self) -> None:
         if not torch.cuda.is_available():
             raise RuntimeError("SKIPPED: CUDA required for prefill/decode disaggregation")
-        if torch.cuda.device_count() < 2:
-            raise RuntimeError("SKIPPED: prefill/decode disaggregation requires >=2 GPUs")
-
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
 
-        self.prefill_device = torch.device("cuda:0")
-        self.decode_device = torch.device("cuda:1")
+        self.prefill_device = self.device
+        self.decode_device = self.device
 
         self.prefill_model = nn.Linear(self.hidden_size, self.hidden_size, bias=False).to(
             self.prefill_device, dtype=torch.bfloat16
@@ -157,7 +142,7 @@ class BaselinePrefillDecodeDisaggBenchmark(VerificationPayloadMixin, BaseBenchma
             torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=5, warmup=5, multi_gpu_required=True)
+        return BenchmarkConfig(iterations=5, warmup=5, multi_gpu_required=False)
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload
@@ -171,4 +156,3 @@ if __name__ == "__main__":
     from core.harness.benchmark_harness import benchmark_main
 
     benchmark_main(get_benchmark)
-

@@ -65,6 +65,17 @@ class NvshmemIbgdaMicrobench(CudaBinaryBenchmark):
             timeout_seconds=180,
             run_args=args,
             time_regex=None,  # Use harness timing instead of stdout parsing.
+            workload_params={
+                "mode_id": ord(mode[0]),
+                "bytes": bytes_per_message,
+                "ctas": ctas,
+                "threads": threads,
+                "iters": iters,
+                "world_size": self.world_size,
+                "ibgda": int(enable_ibgda),
+                "batch_size": 1,
+                "dtype": "float32",
+            },
         )
         self.register_workload_metadata(requests_per_iteration=1.0)
 
@@ -180,6 +191,43 @@ class NvshmemIbgdaMicrobench(CudaBinaryBenchmark):
             self._parsed_metrics = {"single_pe": 1.0}
         self._parsed_metrics["elapsed_ms"] = elapsed_ms
         return BinaryRunResult(time_ms=elapsed_ms, raw_stdout=completed.stdout, raw_stderr=completed.stderr)
+
+    def _run_verify(self) -> Optional[float]:
+        if self._verify_exec_path is None:
+            raise RuntimeError("Verify binary not built (call _build_binary_verify first)")
+        if self.nvshmemrun is None:
+            raise RuntimeError("nvshmemrun launcher not resolved")
+
+        env = os.environ.copy()
+        env.update(self._runtime_env())
+        cmd = [
+            self.nvshmemrun,
+            "-np",
+            str(self.world_size),
+            str(self._verify_exec_path),
+            *self.run_args,
+        ]
+        completed = subprocess.run(
+            cmd,
+            cwd=self.chapter_dir,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=self.timeout_seconds,
+            env=env,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"{self._verify_exec_path.name} exited with code {completed.returncode}.\n"
+                f"stdout:\n{completed.stdout}\n"
+                f"stderr:\n{completed.stderr}"
+            )
+
+        match = self._verify_checksum_pattern.search(completed.stdout)
+        if match:
+            self._verify_checksum = float(match.group(1))
+            return self._verify_checksum
+        return None
 
     # --------------------------------------------------------------------- Benchmark API
     def benchmark_fn(self) -> None:

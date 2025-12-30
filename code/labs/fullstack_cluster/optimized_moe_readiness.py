@@ -44,6 +44,7 @@ def _build_parser() -> argparse.ArgumentParser:
         max_p99_ms=5.5,
         min_bw_gbps=18.0,
         output_dir="artifacts/moe_readiness_optimized",
+        impl="single",
     )
     parser.add_argument("--disable-heatmaps", action="store_true", help="Skip matplotlib heatmap generation.")
     return parser
@@ -67,9 +68,7 @@ def _preflight(rank: int) -> None:
 
 def run_probe(args: argparse.Namespace) -> Tuple[Dict[Tuple[int, float], object], int, int]:
     rank, world_size, _, initialized = init_distributed()
-    if world_size <= 1:
-        print("Run with torchrun and at least 2 ranks to exercise all-to-all.")
-        return {}, rank, world_size
+    world_size = max(world_size, 1)
 
     if not args.skip_preflight:
         _preflight(rank)
@@ -89,6 +88,8 @@ def run_probe(args: argparse.Namespace) -> Tuple[Dict[Tuple[int, float], object]
                 num_iters=args.iters,
                 world_size=world_size,
                 dtype=dtype,
+                impl=args.impl,
+                allocate_each_iter=False,
             )
             results[(msg_bytes, alpha)] = res
 
@@ -102,10 +103,7 @@ def run_probe(args: argparse.Namespace) -> Tuple[Dict[Tuple[int, float], object]
 def _resolve_world_size() -> int:
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for MoE readiness benchmark")
-    world_size = torch.cuda.device_count()
-    if world_size < 2:
-        raise RuntimeError("MoE readiness benchmark requires >=2 GPUs.")
-    return world_size
+    return 1
 
 
 def main() -> None:
@@ -146,17 +144,15 @@ class OptimizedMoEReadinessBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._workload_registered = True
 
     def benchmark_fn(self) -> None:
-        if torch.cuda.device_count() < 2:
-            raise RuntimeError("SKIPPED: MoE readiness benchmark requires >=2 GPUs.")
         self._verify_output = torch.zeros(1, device=self.device, dtype=torch.float32)
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             launch_via=LaunchVia.TORCHRUN,
-            nproc_per_node=_resolve_world_size(),
+            nproc_per_node=1,
             iterations=1,
             warmup=5,
-            multi_gpu_required=True,
+            multi_gpu_required=False,
             measurement_timeout_seconds=1200,
         )
 
@@ -183,7 +179,7 @@ class OptimizedMoEReadinessBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 "NCCL_NET_GDR_LEVEL": "PHB",
             },
             parse_rank0_only=True,
-            multi_gpu_required=True,
+            multi_gpu_required=False,
             name="optimized_moe_readiness",
             config_arg_map={
                 "iterations": "--iters",

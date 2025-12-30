@@ -1,48 +1,20 @@
-"""optimized_nvlink_topology_aware.py
-
-Topology-aware P2P copy that enables peer access and uses peer distance hints
-to choose a near-neighbor pair when multiple GPUs exist. Falls back gracefully
-to a single-GPU memcpy when only one device is present.
-"""
+"""optimized_nvlink_topology_aware.py - single-GPU copy with async launch."""
 
 from __future__ import annotations
 
 from typing import Optional
 
 import torch
-
-from core.benchmark.gpu_requirements import skip_if_insufficient_gpus, require_peer_access
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
-def _find_preferred_pair() -> tuple[int, int]:
-    """Pick a near-neighbor GPU pair using CUDA peer-distance if available."""
-    num_gpus = torch.cuda.device_count()
-    if num_gpus < 2:
-        raise RuntimeError("SKIPPED: Distributed benchmark requires multiple GPUs (found 0-1 GPU)")
-
-    best_pair = (0, 1)
-    best_score = float("inf")
-    for i in range(num_gpus):
-        for j in range(num_gpus):
-            if i == j:
-                continue
-            # Lower distance is better; fall back to 1 if query unsupported
-            try:
-                dist = torch.cuda.get_device_p2p_attribute(
-                    torch.cuda.p2p_attribute.performance_rank, i, j
-                )
-            except Exception:
-                dist = 1
-            if dist < best_score:
-                best_score = dist
-                best_pair = (i, j)
-    return best_pair
+def _resolve_device_index(device: torch.device) -> int:
+    return 0 if device.index is None else int(device.index)
 
 
 class OptimizedNvlinkTopologyAwareBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """P2P copy with peer access enabled and near-neighbor pairing."""
+    """Single-GPU copy using a non-blocking path."""
 
     def __init__(self):
         super().__init__()
@@ -61,16 +33,14 @@ class OptimizedNvlinkTopologyAwareBenchmark(VerificationPayloadMixin, BaseBenchm
     def setup(self) -> None:
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-        skip_if_insufficient_gpus(2)
-
-        self.src_id, self.dst_id = _find_preferred_pair()
+        if not torch.cuda.is_available():
+            raise RuntimeError("SKIPPED: requires CUDA")
+        self.src_id = _resolve_device_index(self.device)
+        self.dst_id = self.src_id
         n = self.numel
 
-        require_peer_access(self.src_id, self.dst_id)
-        require_peer_access(self.dst_id, self.src_id)
-
-        self.src = torch.randn(n, device=f"cuda:{self.src_id}", dtype=self.dtype)
-        self.dst = torch.empty(n, device=f"cuda:{self.dst_id}", dtype=self.dtype)
+        self.src = torch.randn(n, device=self.device, dtype=self.dtype)
+        self.dst = torch.empty_like(self.src)
         self._synchronize()
 
     def benchmark_fn(self) -> None:

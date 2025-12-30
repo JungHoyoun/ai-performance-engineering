@@ -171,7 +171,7 @@ class GradientBucket:
         self.handle = None
 
 
-def demo_gradient_buckets(batch: torch.Tensor, model: nn.Module) -> None:
+def demo_gradient_buckets(batch: torch.Tensor, model: nn.Module, steps: int = 1) -> None:
     """Attach hooks that fuse gradients into symmetric memory buckets."""
     rank, world_size, device = init_process_group()
 
@@ -199,11 +199,14 @@ def demo_gradient_buckets(batch: torch.Tensor, model: nn.Module) -> None:
     for p in model.parameters():
         p.register_hook(lambda grad, p=p: _hook(p, grad))
 
-    output = model(batch)
-    loss = output.float().sum()
-    loss.backward()
-    bucket.allreduce_ring(rank)
-    reduced_norm = bucket.tensor.norm().item()
+    reduced_norm = 0.0
+    for _ in range(steps):
+        output = model(batch)
+        loss = output.float().sum()
+        loss.backward()
+        bucket.allreduce_ring(rank)
+        reduced_norm = bucket.tensor.norm().item()
+        model.zero_grad(set_to_none=True)
     dist.barrier()
     bucket.close()
 
@@ -274,7 +277,7 @@ class NVSHMEMParameterServer:
         self.buffers.clear()
 
 
-def demo_hybrid_sharding(microbatch: torch.Tensor) -> None:
+def demo_hybrid_sharding(microbatch: torch.Tensor, steps: int = 1) -> None:
     """Showcase FSDP sharding with NVSHMEM-backed parameter server tensors."""
     if not torch.cuda.is_available():
         raise RuntimeError("Hybrid sharding demo requires CUDA-enabled environment")
@@ -307,11 +310,14 @@ def demo_hybrid_sharding(microbatch: torch.Tensor) -> None:
         mirror = server.materialize_parameter(name, tensor)
         tensor.copy_(mirror.view_as(tensor))
 
-    out = fsdp_model(microbatch.to(device))
-    loss = out.sum()
-    loss.backward()
-    buffer_count = len(server.buffers)
-    dist.barrier()
+    buffer_count = 0
+    for _ in range(steps):
+        out = fsdp_model(microbatch.to(device))
+        loss = out.sum()
+        loss.backward()
+        buffer_count = len(server.buffers)
+        dist.barrier()
+        fsdp_model.zero_grad(set_to_none=True)
     server.close()
 
     if rank == 0:
@@ -339,7 +345,7 @@ class PipelineStage(nn.Module):
         return self.net(x)
 
 
-def demo_pipeline_parallel(microbatch: torch.Tensor) -> None:
+def demo_pipeline_parallel(microbatch: torch.Tensor, steps: int = 1) -> None:
     """
     Pipeline two stages using symmetric memory buffers for microbatch handoff.
 
@@ -362,22 +368,31 @@ def demo_pipeline_parallel(microbatch: torch.Tensor) -> None:
         world_size=world_size,
     )
 
-    if rank < world_size // 2:
-        microbatch = stage0(microbatch.to(device))
-        bucket.tensor.copy_(microbatch.flatten())
-        if nvshmem_available() and bucket.handle is not None:
-            next_rank = rank + world_size // 2
-            remote = bucket.handle.get_buffer(next_rank)
-            remote.copy_(bucket.tensor)
-        dist.barrier()
-    else:
-        dist.barrier()
-        if nvshmem_available() and bucket.handle is not None:
-            remote = bucket.handle.get_buffer(rank)
-            microbatch = remote.view_as(microbatch)
+    partner_offset = world_size // 2
+    for _ in range(steps):
+        if rank < partner_offset:
+            microbatch = stage0(microbatch.to(device))
+            bucket.tensor.copy_(microbatch.flatten())
+            if nvshmem_available() and bucket.handle is not None:
+                next_rank = rank + partner_offset
+                remote = bucket.handle.get_buffer(next_rank)
+                remote.copy_(bucket.tensor, non_blocking=True)
+                torch.cuda.synchronize(device)
+                dist.barrier()
+            else:
+                dist.send(bucket.tensor, dst=rank + partner_offset)
+                dist.barrier()
         else:
-            microbatch = bucket.tensor.view_as(microbatch)
-        microbatch = stage1(microbatch)
+            if nvshmem_available() and bucket.handle is not None:
+                dist.barrier()
+                remote = bucket.handle.get_buffer(rank)
+                microbatch = remote.view_as(microbatch)
+            else:
+                recv_buf = torch.empty_like(bucket.tensor)
+                dist.recv(recv_buf, src=rank - partner_offset)
+                dist.barrier()
+                microbatch = recv_buf.view_as(microbatch)
+            microbatch = stage1(microbatch)
 
     dist.barrier()
     bucket.close()
@@ -405,6 +420,10 @@ def main() -> None:
         default="gradient",
         help="Which demonstration to run",
     )
+    parser.add_argument("--batch-size", type=int, default=8, help="Batch size for the sample workload.")
+    parser.add_argument("--seq-len", type=int, default=512, help="Sequence length for the sample workload.")
+    parser.add_argument("--dim", type=int, default=2048, help="Model hidden dimension.")
+    parser.add_argument("--steps", type=int, default=8, help="Iterations per demo run.")
     args = parser.parse_args()
 
     demo_map = {
@@ -414,15 +433,15 @@ def main() -> None:
     }
 
     init_process_group()
-    batch = _build_sample_batch()
-    model = TransformerBlock()
+    batch = _build_sample_batch(batch_size=args.batch_size, seq_len=args.seq_len, dim=args.dim)
+    model = TransformerBlock(d_model=args.dim)
 
     if args.demo == "gradient":
-        demo_map[args.demo](batch, model)
+        demo_map[args.demo](batch, model, steps=args.steps)
     elif args.demo == "hybrid":
-        demo_map[args.demo](batch)
+        demo_map[args.demo](batch, steps=args.steps)
     else:
-        demo_map[args.demo](batch)
+        demo_map[args.demo](batch, steps=args.steps)
 
     dist.barrier()
     if dist.get_rank() == 0:

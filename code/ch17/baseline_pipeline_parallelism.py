@@ -1,4 +1,4 @@
-"""baseline_pipeline_parallelism.py - Baseline sequential processing without pipeline parallelism.
+"""baseline_pipeline_parallel_multigpuism.py - Baseline sequential processing without pipeline parallelism.
 
 Demonstrates sequential processing of model layers without pipeline parallelism.
 Pipeline parallelism: This baseline processes all layers sequentially on a single GPU.
@@ -68,7 +68,7 @@ class BaselinePipelineParallelismBenchmark(VerificationPayloadMixin, BaseBenchma
     
     def benchmark_fn(self) -> None:
         """Benchmark: Sequential processing of all layers."""
-        with self._nvtx_range("baseline_pipeline_parallelism"):
+        with self._nvtx_range("baseline_pipeline_parallel_multigpuism"):
             with torch.no_grad():
                 activations = self.input_data
                 for layer in self.model:

@@ -147,6 +147,16 @@ def init_distributed() -> Tuple[int, int, int]:
     return dist.get_rank(), dist.get_world_size(), torch.cuda.current_device()
 
 
+def _resolve_microbatch_size(batch_size: int, num_microbatches: int, microbatch_size: Optional[int]) -> int:
+    if microbatch_size is not None:
+        return int(microbatch_size)
+    if num_microbatches <= 0:
+        raise ValueError("num_microbatches must be > 0")
+    if batch_size % num_microbatches != 0:
+        raise ValueError("batch_size must be divisible by num_microbatches")
+    return batch_size // num_microbatches
+
+
 # ============================================================================
 # Activation Buffer with Symmetric Memory
 # ============================================================================
@@ -583,7 +593,14 @@ class InterleavedPipeline:
 # ============================================================================
 
 
-def demo_1f1b_pipeline() -> None:
+def demo_1f1b_pipeline(
+    *,
+    hidden_dim: int,
+    batch_size: int,
+    seq_len: int,
+    num_microbatches: int,
+    microbatch_size: int,
+) -> None:
     """
     Demonstrate 1F1B pipeline schedule with NVSHMEM.
     
@@ -595,11 +612,6 @@ def demo_1f1b_pipeline() -> None:
     rank, world_size, device = init_distributed()
     
     # Configuration
-    hidden_dim = 2048
-    batch_size = 32
-    seq_len = 512
-    num_microbatches = 16
-    microbatch_size = batch_size // num_microbatches
     pipeline_dtype = torch.float16
     
     # Create pipeline stage for this rank
@@ -639,7 +651,15 @@ def demo_1f1b_pipeline() -> None:
         print(f"[1f1b] Symmetric memory: {symmetric_memory_available() and not symmem_pipeline_disabled()}")
 
 
-def demo_interleaved_pipeline() -> None:
+def demo_interleaved_pipeline(
+    *,
+    hidden_dim: int,
+    batch_size: int,
+    seq_len: int,
+    num_microbatches: int,
+    microbatch_size: int,
+    virtual_stages_per_rank: int,
+) -> None:
     """
     Demonstrate interleaved pipeline with virtual stages.
     
@@ -651,12 +671,6 @@ def demo_interleaved_pipeline() -> None:
     rank, world_size, device = init_distributed()
     
     # Configuration
-    hidden_dim = 2048
-    batch_size = 32
-    seq_len = 512
-    num_microbatches = 16
-    microbatch_size = batch_size // num_microbatches
-    virtual_stages_per_rank = 2
     pipeline_dtype = torch.float16
     
     # Create virtual pipeline stages for this rank
@@ -713,20 +727,60 @@ def main() -> None:
         default="1f1b",
         help="Pipeline schedule to demonstrate",
     )
+    parser.add_argument("--hidden-dim", type=int, default=2048, help="Hidden dimension for pipeline layers.")
+    parser.add_argument("--batch-size", type=int, default=32, help="Global batch size per step.")
+    parser.add_argument("--seq-len", type=int, default=512, help="Sequence length per microbatch.")
+    parser.add_argument("--num-microbatches", type=int, default=16, help="Number of microbatches per step.")
+    parser.add_argument("--microbatch-size", type=int, default=None, help="Override microbatch size.")
+    parser.add_argument(
+        "--virtual-stages",
+        type=int,
+        default=2,
+        help="Virtual stages per rank for interleaved schedule.",
+    )
     args = parser.parse_args()
+    microbatch_size = _resolve_microbatch_size(
+        args.batch_size, args.num_microbatches, args.microbatch_size
+    )
     
     init_distributed()
     
     if args.schedule == "1f1b":
-        demo_1f1b_pipeline()
+        demo_1f1b_pipeline(
+            hidden_dim=args.hidden_dim,
+            batch_size=args.batch_size,
+            seq_len=args.seq_len,
+            num_microbatches=args.num_microbatches,
+            microbatch_size=microbatch_size,
+        )
     elif args.schedule == "interleaved":
-        demo_interleaved_pipeline()
+        demo_interleaved_pipeline(
+            hidden_dim=args.hidden_dim,
+            batch_size=args.batch_size,
+            seq_len=args.seq_len,
+            num_microbatches=args.num_microbatches,
+            microbatch_size=microbatch_size,
+            virtual_stages_per_rank=args.virtual_stages,
+        )
     elif args.schedule == "all":
-        demo_1f1b_pipeline()
+        demo_1f1b_pipeline(
+            hidden_dim=args.hidden_dim,
+            batch_size=args.batch_size,
+            seq_len=args.seq_len,
+            num_microbatches=args.num_microbatches,
+            microbatch_size=microbatch_size,
+        )
         dist.barrier()
         if dist.get_rank() == 0:
             print("\n" + "="*60 + "\n")
-        demo_interleaved_pipeline()
+        demo_interleaved_pipeline(
+            hidden_dim=args.hidden_dim,
+            batch_size=args.batch_size,
+            seq_len=args.seq_len,
+            num_microbatches=args.num_microbatches,
+            microbatch_size=microbatch_size,
+            virtual_stages_per_rank=args.virtual_stages,
+        )
     
     rank = dist.get_rank() if dist.is_initialized() else 0
     if rank == 0:

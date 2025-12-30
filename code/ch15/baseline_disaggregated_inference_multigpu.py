@@ -372,6 +372,8 @@ def _run_torchrun_worker(
 class _DisaggregatedInferenceMultiGPUBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Shared multi-GPU disaggregated inference harness."""
 
+    multi_gpu_required = True
+
     def __init__(self, *, overlap: bool, label: str) -> None:
         super().__init__()
         self.cfg = DisaggConfig()

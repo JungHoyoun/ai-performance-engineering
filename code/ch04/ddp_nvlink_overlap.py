@@ -91,7 +91,7 @@ class OptimizedDdpNvlinkOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark
 
     def benchmark_fn(self) -> None:
         assert self.models
-        with self._nvtx_range("optimized_ddp_nvlink_overlap"):
+        with self._nvtx_range("optimized_ddp_multigpu_nvlink_overlap"):
             reduction_results: List[torch.Tensor] = []
             # Process microbatches; overlap reduction of previous with compute of next
             for micro in range(self.microbatches):

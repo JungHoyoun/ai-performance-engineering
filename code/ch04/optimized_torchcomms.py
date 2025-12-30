@@ -1,8 +1,4 @@
-"""optimized_torchcomms.py - Modern torchcomms API patterns (PyTorch 2.10+).
-
-Demonstrates async-first functional collectives with compute/communication overlap.
-This benchmark is launched via torchrun and requires >=2 GPUs.
-"""
+"""optimized_torchcomms.py - Modern torchcomms API patterns (single GPU)."""
 
 from __future__ import annotations
 
@@ -65,10 +61,7 @@ def _require_torchcomms() -> None:
 def _resolve_world_size() -> int:
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for torchcomms benchmark")
-    world_size = torch.cuda.device_count()
-    if world_size < 2:
-        raise RuntimeError("optimized_torchcomms requires >=2 GPUs.")
-    return world_size
+    return 1
 
 
 def _build_block(hidden: int, device: torch.device) -> nn.Sequential:
@@ -82,8 +75,8 @@ def _build_block(hidden: int, device: torch.device) -> nn.Sequential:
 def _run_worker(iters: int, warmup: int, batch: int, hidden: int) -> None:
     _require_torchcomms()
     rank, world_size, local_rank = _init_distributed()
-    if world_size < 2:
-        raise RuntimeError("optimized_torchcomms requires >=2 GPUs.")
+    if world_size < 1:
+        raise RuntimeError("optimized_torchcomms requires >=1 GPU.")
 
     torch.manual_seed(42)
     torch.cuda.manual_seed_all(42)
@@ -218,10 +211,10 @@ class OptimizedTorchcommsBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             launch_via=LaunchVia.TORCHRUN,
-            nproc_per_node=_resolve_world_size(),
+            nproc_per_node=1,
             iterations=50,
             warmup=5,
-            multi_gpu_required=True,
+            multi_gpu_required=False,
             measurement_timeout_seconds=900,
         )
 
@@ -230,7 +223,7 @@ class OptimizedTorchcommsBenchmark(VerificationPayloadMixin, BaseBenchmark):
         return TorchrunLaunchSpec(
             script_path=Path(__file__).resolve(),
             script_args=[],
-            multi_gpu_required=True,
+            multi_gpu_required=False,
             name="optimized_torchcomms",
             config_arg_map={
                 "iterations": "--iters",

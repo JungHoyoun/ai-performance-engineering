@@ -33,11 +33,11 @@ class OptimizedVectorizationBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._synchronize()
     
     def benchmark_fn(self) -> None:
-        """Benchmark: Vectorized sum of first 1000 elements (same as baseline)."""
+        """Benchmark: Fully vectorized reduction over the full tensor."""
         assert self.data is not None
         with self._nvtx_range("optimized_vectorization"):
-            # Vectorized sum of first 1000 elements to match baseline
-            result = self.data[:1000].sum().unsqueeze(0)
+            # Vectorized sum over the full tensor (single kernel)
+            result = self.data.sum().unsqueeze(0)
             self._synchronize()
         self.output = result
 

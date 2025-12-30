@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Optimized: FSDP2 (FP8) training on Blackwell.
-
-Advanced FSDP2 training with:
-- FP8 mixed precision via torchao
-- Fused AdamW optimizer
-"""
+"""Optimized: FSDP2 (FP8) training on Blackwell (single GPU)."""
 
 from __future__ import annotations
 
@@ -80,10 +75,7 @@ def _init_distributed() -> tuple[int, int, int]:
 def _resolve_world_size() -> int:
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for FSDP2 benchmarks")
-    world_size = torch.cuda.device_count()
-    if world_size < 2:
-        raise RuntimeError("FSDP2 optimized requires >=2 GPUs.")
-    return world_size
+    return 1
 
 
 def _require_torchao() -> None:
@@ -110,8 +102,8 @@ def _run_worker(
 ) -> None:
     _require_torchao()
     rank, world_size, local_rank = _init_distributed()
-    if world_size < 2:
-        raise RuntimeError("FSDP2 optimized requires >=2 GPUs.")
+    if world_size < 1:
+        raise RuntimeError("FSDP2 optimized requires >=1 GPU.")
 
     if batch_size % micro_batch_size != 0:
         raise ValueError("batch_size must be divisible by micro_batch_size")
@@ -291,10 +283,10 @@ class OptimizedFSDP2Benchmark(VerificationPayloadMixin, BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             launch_via=LaunchVia.TORCHRUN,
-            nproc_per_node=self._world_size,
+            nproc_per_node=1,
             iterations=3,
             warmup=5,
-            multi_gpu_required=True,
+            multi_gpu_required=False,
             measurement_timeout_seconds=900,
         )
 
@@ -303,7 +295,7 @@ class OptimizedFSDP2Benchmark(VerificationPayloadMixin, BaseBenchmark):
         return TorchrunLaunchSpec(
             script_path=Path(__file__).resolve(),
             script_args=[],
-            multi_gpu_required=True,
+            multi_gpu_required=False,
             name="optimized_fsdp2_standalone",
             config_arg_map={
                 "iterations": "--iters",

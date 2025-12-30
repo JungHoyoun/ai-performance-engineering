@@ -1,9 +1,7 @@
 # Lab - MoE Parallelism Planner
 
 ## Summary
-Provides scenario planning for mixture-of-experts clusters: memory budgeting, network affinity, parallelism breakdown, and pipeline schedules.
-
-This lab is a planning tool (CPU-side analysis). The "baseline" vs "optimized" plans are intentionally different designs, so they are not exposed as `aisp bench run` baseline/optimized benchmark pairs.
+Scenario planning tool for mixture-of-experts clusters: memory budgeting, network affinity, parallelism breakdown, and pipeline schedules.
 
 ## Learning Goals
 - Quantify memory budgets for experts, routers, and KV caches before deploying models.
@@ -14,22 +12,23 @@ This lab is a planning tool (CPU-side analysis). The "baseline" vs "optimized" p
 ## Directory Layout
 | Path | Description |
 | --- | --- |
-| `plan.py` | Core sizing model + report formatting. |
-| `scenarios.py` | Scenario pairs (baseline vs optimized) used by the tool. |
-| `run_lab.py` | Tool entrypoint that prints scenario reports + comparisons. |
-| `compare_pairs.py` | Helper for quick side-by-side comparisons. |
+| `run_lab.py`, `scenarios.py`, `plan.py` | Tool entry point + canonical scenario definitions and sizing model. |
+| `benchmarking.py` | Optional harness wrapper for ad-hoc validation and integration. |
 
-## Running the Tool
+## Running the Benchmarks
+Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
 ```bash
-python -m cli.aisp tools moe-parallelism -- --scenario memory_budget
-python -m cli.aisp tools moe-parallelism -- --scenario pipeline_schedule
-python -m cli.aisp tools moe-parallelism -- --scenario deepseek_gb200
+python -m cli.aisp bench list-targets --chapter labs/moe_parallelism
+python -m cli.aisp bench run --targets labs/moe_parallelism --profile minimal
 ```
-- Omit `--scenario` to run all scenarios in `labs/moe_parallelism/scenarios.py`.
+- Targets follow the `labs/moe_parallelism:<workload>` naming convention listed by `list-targets`.
+- Use `--target-extra-arg labs/moe_parallelism:<workload>="--flag value"` to sweep schedule knobs.
 
 ## Validation Checklist
-- `python -m cli.aisp tools moe-parallelism -- --scenario memory_budget` runs and prints baseline/optimized reports.
+- `python -m cli.aisp tools moe-parallelism -- --scenario memory_budget` runs a single scenario via the tool registry.
+- `python -m cli.aisp tools moe-parallelism -- --scenario gpt_gb200` runs a larger cluster scenario.
+- `python labs/moe_parallelism/run_lab.py --scenario deepseek_gb200` runs the planner directly (without aisp).
 
 ## Notes
-- `plan.py` centralizes the sizing model so scenario edits stay small and readable.
-- Scenario definitions live in `scenarios.py`; use `run_lab.py` (via `aisp tools moe-parallelism`) to print baseline vs optimized plan comparisons.
+- Baseline vs optimized here are *planning* scenarios (different designs), not comparable performance benchmarks.
+- `plan.py` centralizes scenario definitions so you only update one file when adding a new topology.

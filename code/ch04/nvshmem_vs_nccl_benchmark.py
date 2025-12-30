@@ -13,19 +13,19 @@ from pathlib import Path
 NVSHMEM vs NCCL Benchmark (Conceptual)
 =====================================
 
-Micro-benchmark comparing NCCL collectives against PyTorch 2.10 symmetric
-memory (NVSHMEM-backed) operations on multi-GPU Blackwell B200 systems.
+Micro-benchmark comparing NCCL broadcast against PyTorch 2.10 symmetric
+memory (NVSHMEM-backed) direct copies on multi-GPU Blackwell B200 systems.
 
 Measurements:
 - Latency (µs) for small message sizes (1 KB - 1 MB)
-- Bandwidth (GB/s) for large message sizes (16 MB - 512 MB)
+- Bandwidth (GB/s) for larger message sizes (16 MB - 512 MB)
 
 The script degrades gracefully when NVSHMEM/symmetric memory is missing,
 reporting NCCL numbers only so it can run on non-Blackwell hardware.
 
 Usage:
     torchrun --nproc_per_node=<num_gpus> nvshmem_vs_nccl_benchmark.py \
-        --min-bytes 1024 --max-bytes 67108864 --steps 6
+        --min-bytes 1024 --max-bytes 67108864 --steps 6 --mode nccl
 """
 
 import os
@@ -105,18 +105,17 @@ def _format_bytes(num_bytes: int) -> str:
     return f"{value:.1f} {units[unit]}"
 
 
-def _measure_nccl(bytes_per_rank: int, iterations: int) -> BenchmarkResult:
+def _measure_nccl_broadcast(bytes_per_rank: int, iterations: int) -> BenchmarkResult:
     device = torch.cuda.current_device()
     dtype = torch.float16
     numel = bytes_per_rank // torch.tensor([], dtype=dtype).element_size()
     numel = max(1, numel)
 
     tensor = torch.randn(numel, device=device, dtype=dtype)
-    tensor2 = torch.empty_like(tensor)
 
     # Warmup
     for _ in range(5):
-        dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+        dist.broadcast(tensor, src=0)
 
     torch.cuda.synchronize(device)
     start = torch.cuda.Event(enable_timing=True)
@@ -124,19 +123,18 @@ def _measure_nccl(bytes_per_rank: int, iterations: int) -> BenchmarkResult:
 
     start.record()
     for _ in range(iterations):
-        dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+        dist.broadcast(tensor, src=0)
     end.record()
     torch.cuda.synchronize(device)
 
     elapsed_ms = start.elapsed_time(end)
     latency_us = (elapsed_ms * 1000.0) / iterations
-    total_bytes = bytes_per_rank * dist.get_world_size()
+    total_bytes = bytes_per_rank * max(dist.get_world_size() - 1, 1)
     bandwidth_gbps = (total_bytes / (elapsed_ms / iterations / 1000.0)) / 1e9
-    _ = tensor2
     return BenchmarkResult(bytes=bytes_per_rank, latency_us=latency_us, bandwidth_gbps=bandwidth_gbps)
 
 
-def _measure_symmetric_memory(bytes_per_rank: int, iterations: int) -> Optional[BenchmarkResult]:
+def _measure_symmetric_broadcast(bytes_per_rank: int, iterations: int) -> Optional[BenchmarkResult]:
     if not symmetric_memory_available():
         return None
 
@@ -151,12 +149,13 @@ def _measure_symmetric_memory(bytes_per_rank: int, iterations: int) -> Optional[
         return None
     buffer = sym_handle.buffer
 
-    neighbor = (dist.get_rank() + 1) % dist.get_world_size()
-    remote = sym_handle.get_buffer(neighbor)
-
     for _ in range(5):
-        remote.copy_(buffer)
+        if dist.get_rank() == 0:
+            for peer in range(1, dist.get_world_size()):
+                remote = sym_handle.get_buffer(peer)
+                remote.copy_(buffer, non_blocking=True)
         torch.cuda.current_stream().synchronize()
+        dist.barrier()
 
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
@@ -164,14 +163,19 @@ def _measure_symmetric_memory(bytes_per_rank: int, iterations: int) -> Optional[
 
     start.record()
     for _ in range(iterations):
-        remote.copy_(buffer)
+        if dist.get_rank() == 0:
+            for peer in range(1, dist.get_world_size()):
+                remote = sym_handle.get_buffer(peer)
+                remote.copy_(buffer, non_blocking=True)
         torch.cuda.current_stream().synchronize()
+        dist.barrier()
     end.record()
     torch.cuda.synchronize(device)
 
     elapsed_ms = start.elapsed_time(end)
     latency_us = (elapsed_ms * 1000.0) / iterations
-    bandwidth_gbps = (bytes_per_rank / (elapsed_ms / iterations / 1000.0)) / 1e9
+    total_bytes = bytes_per_rank * max(dist.get_world_size() - 1, 1)
+    bandwidth_gbps = (total_bytes / (elapsed_ms / iterations / 1000.0)) / 1e9
     return BenchmarkResult(bytes=bytes_per_rank, latency_us=latency_us, bandwidth_gbps=bandwidth_gbps)
 
 
@@ -193,30 +197,38 @@ def benchmark(args: argparse.Namespace) -> Dict[str, List[BenchmarkResult]]:
 
     for message_size in sizes:
         dist.barrier()
-        nccl = _measure_nccl(message_size, args.iterations)
-        results["nccl"].append(nccl)
+        if args.mode in ("nccl", "both"):
+            nccl = _measure_nccl_broadcast(message_size, args.iterations)
+            results["nccl"].append(nccl)
         dist.barrier()
-        nvshmem_res = _measure_symmetric_memory(message_size, args.iterations)
-        if nvshmem_res is not None:
-            results["nvshmem"].append(nvshmem_res)
+        if args.mode in ("nvshmem", "both"):
+            nvshmem_res = _measure_symmetric_broadcast(message_size, args.iterations)
+            if nvshmem_res is not None:
+                results["nvshmem"].append(nvshmem_res)
         dist.barrier()
 
     return results
 
 
 def main(destroy_process_group: bool = True) -> None:
-    parser = argparse.ArgumentParser(description="Compare NVSHMEM vs NCCL latency/bandwidth")
+    parser = argparse.ArgumentParser(description="Compare NVSHMEM vs NCCL broadcast latency/bandwidth")
     parser.add_argument("--min-bytes", type=int, default=1024, help="Smallest message size per rank")
     parser.add_argument("--max-bytes", type=int, default=64 * 1024 * 1024, help="Largest message size per rank")
     parser.add_argument("--steps", type=int, default=6, help="Number of message sizes to sample")
     parser.add_argument("--iterations", type=int, default=50, help="Iterations per measurement")
+    parser.add_argument(
+        "--mode",
+        choices=("nccl", "nvshmem", "both"),
+        default="both",
+        help="Which transport(s) to benchmark",
+    )
     args = parser.parse_args()
 
     rank = init_distributed()
     results = benchmark(args)
 
     if rank == 0:
-        print("\nNVSHMEM vs NCCL Benchmark (conceptual)")
+        print("\nNVSHMEM vs NCCL Broadcast Benchmark (conceptual)")
         print("------------------------------------------------------")
         print(f"Symmetric memory available: {symmetric_memory_available()}")
         print("Message Size | NCCL Latency (us) | NCCL BW (GB/s) | NVSHMEM Latency (us) | NVSHMEM BW (GB/s)")

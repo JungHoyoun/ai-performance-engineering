@@ -1,15 +1,15 @@
 {
   "examples": {
-    "continuous_batching": {
-      "example": "continuous_batching",
+    "continuous_batching_multigpu": {
+      "example": "continuous_batching_multigpu",
       "metadata": {
         "best_memory_savings_pct": -0.05522311306421075,
         "best_memory_savings_ratio": 0.9994480736602646,
-        "best_optimization": "optimized_continuous_batching",
-        "best_optimization_file": "optimized_continuous_batching.py",
+        "best_optimization": "optimized_continuous_batching_multigpu",
+        "best_optimization_file": "optimized_continuous_batching_multigpu.py",
         "best_optimization_memory_mb": 167.20556640625,
         "best_optimization_speedup": 4.907917071685794,
-        "best_optimization_technique": "optimized_continuous_batching",
+        "best_optimization_technique": "optimized_continuous_batching_multigpu",
         "best_optimization_time_ms": 15.0953460420881,
         "optimization_goal": "speed"
       },

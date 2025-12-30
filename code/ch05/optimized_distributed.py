@@ -10,7 +10,6 @@ import torch.distributed as dist
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
-from core.benchmark.gpu_requirements import skip_if_insufficient_gpus
 
 
 class OptimizedDistributedBenchmark(VerificationPayloadMixin, BaseBenchmark):
@@ -31,7 +30,8 @@ class OptimizedDistributedBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def setup(self) -> None:
         """Setup: Initialize data and (optional) distributed process group."""
-        skip_if_insufficient_gpus()
+        if not torch.cuda.is_available():
+            raise RuntimeError("SKIPPED: requires CUDA")
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
         

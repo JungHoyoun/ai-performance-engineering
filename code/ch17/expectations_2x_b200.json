@@ -5,26 +5,26 @@
       "metadata": {
         "best_optimization": "optimized_prefill_decode_disagg_multigpu",
         "best_optimization_file": "optimized_prefill_decode_disagg_multigpu.py",
-        "best_optimization_speedup": 0.7789518720695185,
+        "best_optimization_speedup": 1.0634386150738968,
         "best_optimization_technique": "optimized_prefill_decode_disagg_multigpu",
-        "best_optimization_time_ms": 1919.73477602005,
+        "best_optimization_time_ms": 1525.2131819725037,
         "optimization_goal": "speed"
       },
       "metrics": {
-        "baseline_p75_ms": 1495.3809976577759,
-        "baseline_time_ms": 1495.3809976577759,
-        "best_optimized_p75_ms": 1919.73477602005,
-        "best_optimized_speedup": 0.7789518720695185,
-        "best_optimized_time_ms": 1919.73477602005,
-        "best_speedup": 0.7789518720695185,
-        "is_regression": true
+        "baseline_p75_ms": 1621.9705939292908,
+        "baseline_time_ms": 1621.9705939292908,
+        "best_optimized_p75_ms": 1525.2131819725037,
+        "best_optimized_speedup": 1.0634386150738968,
+        "best_optimized_time_ms": 1525.2131819725037,
+        "best_speedup": 1.0634386150738968,
+        "is_regression": false
       },
       "provenance": {
-        "git_commit": "6ad824fd0ee440dc10ef6923ea7d84e9fb19520c",
+        "git_commit": "2ed7f7e02098df8478dd65a5fd779c28d1e60489",
         "hardware_key": "2x_b200",
         "iterations": 20,
         "profile_name": "none",
-        "timestamp": "2025-12-30T00:46:41.878047",
+        "timestamp": "2025-12-30T03:11:44.707971",
         "warmup_iterations": 5
       },
       "type": "python"
@@ -34,26 +34,26 @@
       "metadata": {
         "best_optimization": "optimized_prefill_decode_disagg_tpot_long_multigpu",
         "best_optimization_file": "optimized_prefill_decode_disagg_tpot_long_multigpu.py",
-        "best_optimization_speedup": 0.5888362185184609,
+        "best_optimization_speedup": 1.8662692804930734,
         "best_optimization_technique": "optimized_prefill_decode_disagg_tpot_long_multigpu",
-        "best_optimization_time_ms": 2496.014177799225,
+        "best_optimization_time_ms": 1474.0488529205322,
         "optimization_goal": "speed"
       },
       "metrics": {
-        "baseline_p75_ms": 1469.743549823761,
-        "baseline_time_ms": 1469.743549823761,
-        "best_optimized_p75_ms": 2496.014177799225,
-        "best_optimized_speedup": 0.5888362185184609,
-        "best_optimized_time_ms": 2496.014177799225,
-        "best_speedup": 0.5888362185184609,
-        "is_regression": true
+        "baseline_p75_ms": 2750.972092151642,
+        "baseline_time_ms": 2750.972092151642,
+        "best_optimized_p75_ms": 1474.0488529205322,
+        "best_optimized_speedup": 1.8662692804930734,
+        "best_optimized_time_ms": 1474.0488529205322,
+        "best_speedup": 1.8662692804930734,
+        "is_regression": false
       },
       "provenance": {
-        "git_commit": "6ad824fd0ee440dc10ef6923ea7d84e9fb19520c",
+        "git_commit": "2ed7f7e02098df8478dd65a5fd779c28d1e60489",
         "hardware_key": "2x_b200",
         "iterations": 20,
         "profile_name": "none",
-        "timestamp": "2025-12-30T00:46:59.871275",
+        "timestamp": "2025-12-30T03:12:04.544824",
         "warmup_iterations": 5
       },
       "type": "python"
@@ -63,26 +63,26 @@
       "metadata": {
         "best_optimization": "optimized_prefill_decode_disagg_ttft_multigpu",
         "best_optimization_file": "optimized_prefill_decode_disagg_ttft_multigpu.py",
-        "best_optimization_speedup": 1.872030418892162,
+        "best_optimization_speedup": 0.9395933172235528,
         "best_optimization_technique": "optimized_prefill_decode_disagg_ttft_multigpu",
-        "best_optimization_time_ms": 1521.231770515442,
+        "best_optimization_time_ms": 2924.034297466278,
         "optimization_goal": "speed"
       },
       "metrics": {
-        "baseline_p75_ms": 2847.792148590088,
-        "baseline_time_ms": 2847.792148590088,
-        "best_optimized_p75_ms": 1521.231770515442,
-        "best_optimized_speedup": 1.872030418892162,
-        "best_optimized_time_ms": 1521.231770515442,
-        "best_speedup": 1.872030418892162,
-        "is_regression": false
+        "baseline_p75_ms": 2747.403085231781,
+        "baseline_time_ms": 2747.403085231781,
+        "best_optimized_p75_ms": 2924.034297466278,
+        "best_optimized_speedup": 0.9395933172235528,
+        "best_optimized_time_ms": 2924.034297466278,
+        "best_speedup": 0.9395933172235528,
+        "is_regression": true
       },
       "provenance": {
-        "git_commit": "6ad824fd0ee440dc10ef6923ea7d84e9fb19520c",
+        "git_commit": "2ed7f7e02098df8478dd65a5fd779c28d1e60489",
         "hardware_key": "2x_b200",
         "iterations": 20,
         "profile_name": "none",
-        "timestamp": "2025-12-30T00:47:19.623530",
+        "timestamp": "2025-12-30T03:12:29.082663",
         "warmup_iterations": 5
       },
       "type": "python"

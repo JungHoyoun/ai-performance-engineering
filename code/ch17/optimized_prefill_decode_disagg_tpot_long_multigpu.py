@@ -20,6 +20,8 @@ from core.harness.benchmark_harness import BaseBenchmark  # noqa: E402
 class OptimizedPrefillDecodeDisaggTPOTLongMultiGPUBenchmark(_PrefillDecodeMultiGPUBenchmark):
     """Pipelined prefill/decode overlap (TPOT/long-output focused)."""
 
+    multi_gpu_required = True
+
     def __init__(self) -> None:
         super().__init__(
             overlap=True,

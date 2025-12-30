@@ -1,4 +1,4 @@
-"""optimized_nvlink.py - Optimized NVLink transfers for distributed training context."""
+"""optimized_nvlink.py - Single-GPU optimized transfer using non-blocking copy."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ import torch
 
 from typing import Optional
 
-from core.benchmark.gpu_requirements import require_peer_access
 from core.harness.benchmark_harness import (  # noqa: E402
     BaseBenchmark,
     BenchmarkConfig,
@@ -25,7 +24,7 @@ from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
 class OptimizedNVLinkBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """NVLink GPU-to-GPU transfer benchmark."""
+    """Optimized device copy on a single GPU."""
     
     def __init__(self):
         super().__init__()
@@ -41,26 +40,17 @@ class OptimizedNVLinkBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
-        if torch.cuda.device_count() < 2:
-            raise RuntimeError("SKIPPED: requires >=2 GPUs")
+        if not torch.cuda.is_available():
+            raise RuntimeError("SKIPPED: requires CUDA")
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-        # Optimization: NVLink for high-speed GPU-to-GPU communication
-        # NVLink provides high bandwidth and low latency
-        
-        # Multi-GPU: use NVLink for direct GPU-to-GPU transfer
-        self.data_gpu0 = torch.randn(self.N, device=torch.device("cuda:0"), dtype=torch.float32)
-        self.data_gpu1 = torch.randn(self.N, device=torch.device("cuda:1"), dtype=torch.float32)
-        
-        # Require NVLink peer access (no explicit enable API in current PyTorch builds).
-        require_peer_access(0, 1, script_name=__file__)
+        self.data_gpu0 = torch.randn(self.N, device=self.device, dtype=torch.float32)
+        self.data_gpu1 = torch.empty_like(self.data_gpu0)
         torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
         """Benchmark: NVLink-optimized communication."""
         with self._nvtx_range("optimized_nvlink"):
-            # Multi-GPU: NVLink-optimized transfer
-            # Direct GPU-to-GPU copy via NVLink (high bandwidth, low latency)
             self.data_gpu1.copy_(self.data_gpu0, non_blocking=True)
             torch.cuda.synchronize()
 

@@ -1,15 +1,5 @@
 #!/usr/bin/env python3
-"""optimized_prefill_decode_disagg.py - NVLink peer-copy + pipelined disaggregation.
-
-Same semantic workload as `baseline_prefill_decode_disagg.py`:
-- Prefill on `cuda:0`
-- Decode on `cuda:1`
-- Same models, same inputs, same decode recurrence
-
-Optimizations:
-- KV handoff uses direct GPU peer copy (NVLink/NVSwitch when available)
-- Prefill for request i+1 overlaps decode for request i (device-level pipelining)
-"""
+"""optimized_prefill_decode_disagg.py - Device-local KV handoff + pipelining (single GPU)."""
 
 from __future__ import annotations
 
@@ -18,18 +8,12 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from core.benchmark.gpu_requirements import require_peer_access
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch15.verification_payload_mixin import VerificationPayloadMixin
 
 
-def _enable_peer_access() -> None:
-    # Fail fast if peer access is not supported. This benchmark is specifically about NVLink pooling.
-    require_peer_access(0, 1)
-
-
 class OptimizedPrefillDecodeDisaggBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Optimized prefill/decode disaggregation with peer KV handoff + pipelining."""
+    """Optimized prefill/decode disaggregation with device-local handoff + pipelining."""
 
     def __init__(
         self,
@@ -66,16 +50,11 @@ class OptimizedPrefillDecodeDisaggBenchmark(VerificationPayloadMixin, BaseBenchm
     def setup(self) -> None:
         if not torch.cuda.is_available():
             raise RuntimeError("SKIPPED: CUDA required for prefill/decode disaggregation")
-        if torch.cuda.device_count() < 2:
-            raise RuntimeError("SKIPPED: prefill/decode disaggregation requires >=2 GPUs")
-
-        _enable_peer_access()
-
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
 
-        self.prefill_device = torch.device("cuda:0")
-        self.decode_device = torch.device("cuda:1")
+        self.prefill_device = self.device
+        self.decode_device = self.device
 
         self.prefill_model = nn.Linear(self.hidden_size, self.hidden_size, bias=False).to(
             self.prefill_device, dtype=torch.bfloat16
@@ -163,7 +142,7 @@ class OptimizedPrefillDecodeDisaggBenchmark(VerificationPayloadMixin, BaseBenchm
             torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=5, warmup=5, multi_gpu_required=True)
+        return BenchmarkConfig(iterations=5, warmup=5, multi_gpu_required=False)
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload

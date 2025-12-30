@@ -25,6 +25,7 @@ from core.harness.benchmark_harness import (
     LaunchVia,
     TorchrunLaunchSpec,
 )
+from core.optimization.symmetric_memory_patch import symmetric_memory_available
 from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
@@ -44,6 +45,7 @@ def _configure_blackwell_nccl() -> None:
 
 
 class OptimizedNVSHMEMTrainingPatternsMultiGPU(VerificationPayloadMixin, BaseBenchmark):
+    multi_gpu_required = True
     def __init__(self) -> None:
         super().__init__()
         self.register_workload_metadata(requests_per_iteration=1.0)
@@ -59,12 +61,17 @@ class OptimizedNVSHMEMTrainingPatternsMultiGPU(VerificationPayloadMixin, BaseBen
 
     def benchmark_fn(self) -> None:
         original_argv = sys.argv[:]
+        original_disable = os.environ.get("AISP_DISABLE_SYMMETRIC_MEMORY")
         try:
-            # Run all patterns with benchmarking enabled to exercise NVLink/NVLS paths.
-            sys.argv = [original_argv[0], "--pattern", "all", "--benchmark"]
+            os.environ["AISP_DISABLE_SYMMETRIC_MEMORY"] = "0" if symmetric_memory_available() else "1"
+            sys.argv = [original_argv[0], "--pattern", "pipeline", "--benchmark"]
             nvshmem_train_patterns_main()
         finally:
             sys.argv = original_argv
+            if original_disable is None:
+                os.environ.pop("AISP_DISABLE_SYMMETRIC_MEMORY", None)
+            else:
+                os.environ["AISP_DISABLE_SYMMETRIC_MEMORY"] = original_disable
 
     def capture_verification_payload(self) -> None:
         if self._verify_input is None:

@@ -24,6 +24,7 @@ from ch04.nccl_blackwell_config import (
     detect_b200_multigpu_topology,
 )
 from ch04.nvshmem_pipeline_parallel import main as nvshmem_main
+from core.optimization.symmetric_memory_patch import symmetric_memory_available
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -49,6 +50,7 @@ def _configure_blackwell_nccl() -> None:
 
 
 class OptimizedNVSHMEMPipelineParallelMultiGPU(VerificationPayloadMixin, BaseBenchmark):
+    multi_gpu_required = True
     def __init__(self) -> None:
         super().__init__()
         self.register_workload_metadata(requests_per_iteration=1.0)
@@ -63,8 +65,31 @@ class OptimizedNVSHMEMPipelineParallelMultiGPU(VerificationPayloadMixin, BaseBen
         self._verify_input = torch.randn(64, 64, device=self.device, dtype=torch.float32)
 
     def benchmark_fn(self) -> None:
-        os.environ.setdefault("AISP_DISABLE_SYMMEM_PIPELINE", "1")
-        nvshmem_main()
+        original_argv = sys.argv[:]
+        original_disable = os.environ.get("AISP_DISABLE_SYMMEM_PIPELINE")
+        try:
+            enable_symmem = symmetric_memory_available()
+            os.environ["AISP_DISABLE_SYMMEM_PIPELINE"] = "0" if enable_symmem else "1"
+            sys.argv = [
+                original_argv[0],
+                "--schedule",
+                "1f1b",
+                "--batch-size",
+                "64",
+                "--num-microbatches",
+                "32",
+                "--seq-len",
+                "256",
+                "--hidden-dim",
+                "2048",
+            ]
+            nvshmem_main()
+        finally:
+            sys.argv = original_argv
+            if original_disable is None:
+                os.environ.pop("AISP_DISABLE_SYMMEM_PIPELINE", None)
+            else:
+                os.environ["AISP_DISABLE_SYMMEM_PIPELINE"] = original_disable
 
     def capture_verification_payload(self) -> None:
         if self._verify_input is None:

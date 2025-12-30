@@ -97,7 +97,7 @@ Use `--accept-regressions` when you intentionally want to refresh expectation fi
 - Harness records `world_size`/`launch_via` in results and only parses rank0-style output (duplicate rank logs are deduped).
 - Forward env vars via `--torchrun-env CUDA_VISIBLE_DEVICES=0,1` and per-target overrides with `--target-extra-arg target="--flag value"`.
 - Multi-GPU targets (`multi_gpu_required=True`) return `SKIPPED` instead of hanging when launched with a single process.
-- Example: `PYTHONPATH=. python -m cli.aisp bench run --targets labs/train_distributed:ddp --launch-via torchrun --nproc-per-node 2 --target-extra-arg 'labs/train_distributed:ddp=--compile'`.
+- Example: `PYTHONPATH=. python -m cli.aisp bench run --targets labs/train_distributed:ddp_multigpu --launch-via torchrun --nproc-per-node 2 --target-extra-arg 'labs/train_distributed:ddp_multigpu=--compile'`.
 
 ---
 

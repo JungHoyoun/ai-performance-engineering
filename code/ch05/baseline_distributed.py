@@ -8,7 +8,6 @@ import torch
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
-from core.benchmark.gpu_requirements import skip_if_insufficient_gpus
 
 
 class BaselineDistributedBenchmark(VerificationPayloadMixin, BaseBenchmark):
@@ -25,7 +24,8 @@ class BaselineDistributedBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def setup(self) -> None:
         """Setup: Initialize data."""
-        skip_if_insufficient_gpus()
+        if not torch.cuda.is_available():
+            raise RuntimeError("SKIPPED: requires CUDA")
         torch.manual_seed(42)
         self.data = torch.randn(self.N, device=self.device)
         self._synchronize()

@@ -13,8 +13,6 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.distributed as dist
 
-from core.benchmark.gpu_requirements import skip_if_insufficient_gpus
-
 try:
     from distributed_helper import setup_single_gpu_env
 except ImportError:
@@ -55,7 +53,6 @@ class OptimizedReinitCommBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def setup(self) -> None:
         """Setup: Initialize NCCL once."""
-        skip_if_insufficient_gpus()
         setup_single_gpu_env()
         self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
         torch.cuda.set_device(self.local_rank)

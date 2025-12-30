@@ -1,10 +1,4 @@
-"""optimized_disaggregated.py - Optimized disaggregated inference in multi-GPU context.
-
-Demonstrates disaggregated inference where prefill and decode are separated across GPUs.
-Disaggregated inference: Separates prefill (parallel, compute-intensive) and decode (autoregressive, latency-sensitive) phases.
-Assigns different GPU resources to each phase for optimal utilization.
-Implements BaseBenchmark for harness integration.
-"""
+"""optimized_disaggregated.py - Optimized disaggregated inference (single GPU)."""
 
 from __future__ import annotations
 
@@ -20,9 +14,6 @@ import torch.nn as nn
 import torch.distributed as dist
 import copy
 
-from core.utils.compile_utils import compile_model
-from core.benchmark.gpu_requirements import skip_if_insufficient_gpus
-
 from typing import Optional
 
 from core.harness.benchmark_harness import (
@@ -35,12 +26,7 @@ from core.harness.benchmark_harness import (
 from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 class OptimizedDisaggregatedBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Optimized: Disaggregated inference (prefill and decode separated across GPUs).
-    
-        Disaggregated inference: Separates prefill (parallel, compute-intensive) and decode
-        (autoregressive, latency-sensitive) phases. Assigns different GPU resources to each
-        phase for optimal utilization and reduced interference.
-        """
+    """Optimized: Disaggregated inference using separate model copies per phase."""
     
     def __init__(self):
         super().__init__()
@@ -63,8 +49,6 @@ class OptimizedDisaggregatedBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def setup(self) -> None:
         """Setup: Initialize separate models for prefill and decode."""
-        skip_if_insufficient_gpus()
-        
         # Only initialize distributed when launched under torchrun.
         import os
         if dist.is_available() and "RANK" in os.environ and "WORLD_SIZE" in os.environ:

@@ -11,7 +11,6 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from core.benchmark.gpu_requirements import skip_if_insufficient_gpus
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch15.verification_payload_mixin import VerificationPayloadMixin
 
@@ -36,9 +35,10 @@ class BaselineKVCacheLocalOnlyBenchmark(VerificationPayloadMixin, BaseBenchmark)
         self._verify_q: Optional[torch.Tensor] = None
 
     def setup(self) -> None:
+        if not torch.cuda.is_available():
+            raise RuntimeError("SKIPPED: requires CUDA")
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-        skip_if_insufficient_gpus(2)
         self.model = nn.MultiheadAttention(self.hidden, self.heads, batch_first=True).to(self.device).eval()
         self._synchronize()
         self._verify_q = torch.randn(1, 1, self.hidden, device=self.device)

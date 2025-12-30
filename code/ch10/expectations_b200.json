@@ -55,7 +55,7 @@
       "type": "python"
     },
     "atomic_reduction_cuda": {
-      "example": "atomic_reduction",
+      "example": "atomic_reduction_cuda",
       "metadata": {
         "best_optimization": "optimized_atomic_reduction",
         "best_optimization_file": "optimized_atomic_reduction.cu",
@@ -248,7 +248,7 @@
       "type": "python"
     },
     "cluster_group_cuda": {
-      "example": "cluster_group",
+      "example": "cluster_group_cuda",
       "metadata": {
         "best_optimization": "single_cta",
         "best_optimization_file": "optimized_cluster_group_single_cta.cu",
@@ -333,7 +333,7 @@
       "type": "python"
     },
     "cluster_group_no_dsmem_cuda": {
-      "example": "cluster_group_no_dsmem",
+      "example": "cluster_group_no_dsmem_cuda",
       "metadata": {
         "best_optimization": "optimized_cluster_group_no_dsmem",
         "best_optimization_file": "optimized_cluster_group_no_dsmem.cu",
@@ -526,7 +526,7 @@
       "type": "python"
     },
     "cooperative_persistent_cuda": {
-      "example": "cooperative_persistent",
+      "example": "cooperative_persistent_cuda",
       "metadata": {
         "best_optimization": "optimized_cooperative_persistent",
         "best_optimization_file": "optimized_cooperative_persistent.cu",
@@ -611,7 +611,7 @@
       "type": "python"
     },
     "double_buffered_pipeline_cuda": {
-      "example": "double_buffered_pipeline",
+      "example": "double_buffered_pipeline_cuda",
       "metadata": {
         "best_optimization": "optimized_double_buffered_pipeline",
         "best_optimization_file": "optimized_double_buffered_pipeline.cu",
@@ -750,7 +750,7 @@
       "type": "python"
     },
     "dsmem_reduction_cuda": {
-      "example": "dsmem_reduction",
+      "example": "dsmem_reduction_cuda",
       "metadata": {
         "best_optimization": "warp_specialized",
         "best_optimization_file": "optimized_dsmem_reduction_warp_specialized.cu",
@@ -997,7 +997,7 @@
       "type": "python"
     },
     "flash_attn_tma_micro_pipeline_cuda": {
-      "example": "flash_attn_tma_micro_pipeline",
+      "example": "flash_attn_tma_micro_pipeline_cuda",
       "metadata": {
         "best_optimization": "optimized_flash_attn_tma_micro_pipeline",
         "best_optimization_file": "optimized_flash_attn_tma_micro_pipeline.cu",
@@ -1406,7 +1406,7 @@
       "type": "python"
     },
     "pipeline_3stage_cuda": {
-      "example": "pipeline_3stage",
+      "example": "pipeline_3stage_cuda",
       "metadata": {
         "best_optimization": "optimized_pipeline_3stage",
         "best_optimization_file": "optimized_pipeline_3stage.cu",
@@ -1707,7 +1707,7 @@
       "type": "python"
     },
     "warp_spec_pingpong_cuda": {
-      "example": "warp_spec_pingpong",
+      "example": "warp_spec_pingpong_cuda",
       "metadata": {
         "best_optimization": "optimized_warp_spec_pingpong",
         "best_optimization_file": "optimized_warp_spec_pingpong.cu",
@@ -1738,7 +1738,7 @@
       "type": "cuda"
     },
     "warp_specialized_cluster_pipeline_cuda": {
-      "example": "warp_specialized_cluster_pipeline",
+      "example": "warp_specialized_cluster_pipeline_cuda",
       "metadata": {
         "best_optimization": "optimized_warp_specialized_cluster_pipeline",
         "best_optimization_file": "optimized_warp_specialized_cluster_pipeline.cu",
@@ -1769,7 +1769,7 @@
       "type": "cuda"
     },
     "warp_specialized_pipeline_cuda": {
-      "example": "warp_specialized_pipeline",
+      "example": "warp_specialized_pipeline_cuda",
       "metadata": {
         "best_optimization": "optimized_warp_specialized_pipeline",
         "best_optimization_file": "optimized_warp_specialized_pipeline.cu",
@@ -1800,7 +1800,7 @@
       "type": "cuda"
     },
     "warp_specialized_pipeline_enhanced_cuda": {
-      "example": "warp_specialized_pipeline_enhanced",
+      "example": "warp_specialized_pipeline_enhanced_cuda",
       "metadata": {
         "best_optimization": "optimized_warp_specialized_pipeline_enhanced",
         "best_optimization_file": "optimized_warp_specialized_pipeline_enhanced.cu",

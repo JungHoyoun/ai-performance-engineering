@@ -65,7 +65,7 @@ class BaselineDdpNvlinkNaiveBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def benchmark_fn(self) -> None:
         assert self.models
-        with self._nvtx_range("baseline_ddp_nvlink_naive"):
+        with self._nvtx_range("baseline_ddp_multigpu_nvlink_naive"):
             for micro in range(self.microbatches):
                 grads = []
                 for model_idx, model in enumerate(self.models):

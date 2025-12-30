@@ -64,8 +64,8 @@ class BaselineDataParallelBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def setup(self) -> None:
         """Setup: Initialize model, optimizer, and data."""
-        if not torch.cuda.is_available() or torch.cuda.device_count() < 2:
-            raise RuntimeError("SKIPPED: requires >=2 GPUs")
+        if not torch.cuda.is_available():
+            raise RuntimeError("SKIPPED: requires CUDA")
         torch.manual_seed(42)
         
         # Keep input tensors on CPU so DataParallel copies every iteration.

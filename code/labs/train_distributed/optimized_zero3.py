@@ -139,6 +139,7 @@ def get_benchmark():
         base_args=["--mode", "optimized"],
         config_arg_map={"iterations": "--steps"},
         target_label="labs/train_distributed:zero3",
-        default_nproc_per_node=None,
+        default_nproc_per_node=1,
+        multi_gpu_required=False,
         name="optimized_zero3",
     )

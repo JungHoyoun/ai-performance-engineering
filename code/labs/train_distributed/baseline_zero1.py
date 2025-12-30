@@ -175,6 +175,7 @@ def get_benchmark():
         base_args=["--mode", "baseline"],
         config_arg_map={"iterations": "--steps"},
         target_label="labs/train_distributed:zero1",
-        default_nproc_per_node=None,
+        default_nproc_per_node=1,
+        multi_gpu_required=False,
         name="baseline_zero1",
     )

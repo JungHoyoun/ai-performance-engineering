@@ -59,11 +59,11 @@
       "metadata": {
         "best_memory_savings_pct": 0.0,
         "best_memory_savings_ratio": 1.0,
-        "best_optimization": "optimized_nvlink_offload",
-        "best_optimization_file": "optimized_nvlink_offload.py",
+        "best_optimization": "optimized_nvlink_multigpu_offload",
+        "best_optimization_file": "optimized_nvlink_multigpu_offload.py",
         "best_optimization_memory_mb": 166.126953125,
         "best_optimization_speedup": 1.1563727031150728,
-        "best_optimization_technique": "optimized_nvlink_offload",
+        "best_optimization_technique": "optimized_nvlink_multigpu_offload",
         "best_optimization_time_ms": 12.263015084796482,
         "optimization_goal": "speed"
       },

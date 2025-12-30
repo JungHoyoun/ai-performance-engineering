@@ -22,6 +22,7 @@ from typing import Optional
 
 
 class SymmetricMemoryMultiGPU(VerificationPayloadMixin, BaseBenchmark):
+    multi_gpu_required = True
     def __init__(self) -> None:
         super().__init__()
         self.register_workload_metadata(requests_per_iteration=1.0)
@@ -89,7 +90,14 @@ class SymmetricMemoryMultiGPU(VerificationPayloadMixin, BaseBenchmark):
         script_path = Path(__file__).resolve().with_name("symmetric_memory_example.py")
         return TorchrunLaunchSpec(
             script_path=script_path,
-            script_args=[],
+            script_args=[
+                "--benchmark-mode",
+                "traditional",
+                "--tensor-bytes",
+                "1024",
+                "--iterations",
+                "500",
+            ],
             multi_gpu_required=True,
             name="baseline_symmetric_memory_multigpu",
         )

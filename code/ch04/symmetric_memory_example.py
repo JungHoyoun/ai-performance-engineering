@@ -10,6 +10,7 @@ Requirements:
 
 Expected Runtime: ~5-10 seconds on 2 GPUs
 """
+import argparse
 import pathlib
 import sys
 
@@ -22,7 +23,10 @@ from pathlib import Path
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.optimization.symmetric_memory_patch import maybe_create_symmetric_memory_handle
+from core.optimization.symmetric_memory_patch import (
+    create_symmetric_memory_handle,
+    maybe_create_symmetric_memory_handle,
+)
 
 try:
     from distributed_helper import setup_single_gpu_env
@@ -242,6 +246,78 @@ def benchmark_symmetric_memory(tensor: torch.Tensor, iterations: int = 100):
     return start.elapsed_time(end) / iterations
 
 
+def benchmark_traditional_ring(tensor: torch.Tensor, iterations: int = 100) -> float:
+    """Benchmark ring send/recv using NCCL P2P ops across all ranks."""
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    device = torch.device(f"cuda:{rank}")
+    recv_tensor = torch.empty_like(tensor)
+    next_rank = (rank + 1) % world_size
+    prev_rank = (rank - 1) % world_size
+
+    for _ in range(5):
+        ops = [
+            dist.P2POp(dist.isend, tensor, next_rank),
+            dist.P2POp(dist.irecv, recv_tensor, prev_rank),
+        ]
+        reqs = dist.batch_isend_irecv(ops)
+        for req in reqs:
+            req.wait()
+    torch.cuda.synchronize(device)
+    dist.barrier()
+
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+    start.record()
+    for _ in range(iterations):
+        ops = [
+            dist.P2POp(dist.isend, tensor, next_rank),
+            dist.P2POp(dist.irecv, recv_tensor, prev_rank),
+        ]
+        reqs = dist.batch_isend_irecv(ops)
+        for req in reqs:
+            req.wait()
+    end.record()
+    torch.cuda.synchronize(device)
+    dist.barrier()
+    return start.elapsed_time(end) / iterations
+
+
+def benchmark_symmetric_ring(tensor: torch.Tensor, iterations: int = 100) -> float:
+    """Benchmark ring traffic using symmetric memory buffers."""
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    device = torch.device(f"cuda:{rank}")
+    handle = create_symmetric_memory_handle(tensor, group=dist.group.WORLD)
+    next_rank = (rank + 1) % world_size
+    prev_rank = (rank - 1) % world_size
+    next_buf = handle.get_buffer(next_rank)
+    prev_buf = handle.get_buffer(prev_rank)
+    recv_tensor = torch.empty_like(tensor)
+
+    for _ in range(5):
+        next_buf.copy_(tensor, non_blocking=True)
+        torch.cuda.current_stream().synchronize()
+        dist.barrier()
+        recv_tensor.copy_(prev_buf, non_blocking=True)
+        torch.cuda.current_stream().synchronize()
+        dist.barrier()
+
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+    start.record()
+    for _ in range(iterations):
+        next_buf.copy_(tensor, non_blocking=True)
+        torch.cuda.current_stream().synchronize()
+        dist.barrier()
+        recv_tensor.copy_(prev_buf, non_blocking=True)
+        torch.cuda.current_stream().synchronize()
+        dist.barrier()
+    end.record()
+    torch.cuda.synchronize(device)
+    return start.elapsed_time(end) / iterations
+
+
 def benchmark_multigpu_symmetric_memory(
     tensor_sizes: list = [(1024,), (1024 * 256,), (1024 * 1024,)],
     iterations: int = 100
@@ -411,12 +487,56 @@ def demonstrate_gb200_unified_memory() -> None:
     print("=" * 80)
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Symmetric memory example")
+    parser.add_argument(
+        "--benchmark-mode",
+        choices=("auto", "traditional", "symmetric"),
+        default="auto",
+        help="Benchmark mode: auto runs the original demo, or force a transport for perf runs.",
+    )
+    parser.add_argument(
+        "--tensor-bytes",
+        type=int,
+        default=4 * 1024,
+        help="Payload size in bytes for benchmark-only modes.",
+    )
+    parser.add_argument(
+        "--iterations",
+        type=int,
+        default=200,
+        help="Iterations per benchmark measurement.",
+    )
+    return parser.parse_args()
+
+
 def main():
     """Compare traditional P2P vs symmetric memory performance."""
+    args = _parse_args()
     # Setup
     rank, world_size = setup_distributed()
     device = torch.device(f"cuda:{rank}")
-    
+
+    if args.benchmark_mode != "auto":
+        if world_size < 2:
+            if rank == 0:
+                print("Benchmark mode requires at least 2 GPUs.")
+            dist.destroy_process_group()
+            return
+        numel = max(1, args.tensor_bytes // 4)
+        tensor = torch.randn(numel, device=device, dtype=torch.float32)
+        if args.benchmark_mode == "traditional":
+            time_ms = benchmark_traditional_ring(tensor, iterations=args.iterations)
+            label = "traditional_ring"
+        else:
+            time_ms = benchmark_symmetric_ring(tensor, iterations=args.iterations)
+            label = "symmetric_ring"
+        if rank == 0:
+            size_kb = args.tensor_bytes / 1024
+            print(f"{label}: size={size_kb:.2f} KB time={time_ms:.4f} ms/iter")
+        dist.destroy_process_group()
+        return
+
     if world_size < 2:
         if rank == 0:
             print("This example requires at least 2 GPUs.")

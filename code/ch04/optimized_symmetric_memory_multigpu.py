@@ -40,6 +40,7 @@ def _configure_blackwell_nccl() -> dict[str, str]:
 
 
 class OptimizedSymmetricMemoryMultiGPU(VerificationPayloadMixin, BaseBenchmark):
+    multi_gpu_required = True
     def __init__(self) -> None:
         super().__init__()
         self.register_workload_metadata(requests_per_iteration=1.0)
@@ -109,7 +110,14 @@ class OptimizedSymmetricMemoryMultiGPU(VerificationPayloadMixin, BaseBenchmark):
         env = _configure_blackwell_nccl()
         return TorchrunLaunchSpec(
             script_path=script_path,
-            script_args=[],
+            script_args=[
+                "--benchmark-mode",
+                "symmetric",
+                "--tensor-bytes",
+                "1024",
+                "--iterations",
+                "500",
+            ],
             env=env,
             multi_gpu_required=True,
             name="optimized_symmetric_memory_multigpu",

@@ -27,6 +27,7 @@ from core.harness.benchmark_harness import (
     LaunchVia,
     TorchrunLaunchSpec,
 )
+from core.optimization.symmetric_memory_patch import symmetric_memory_available
 from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
@@ -46,6 +47,7 @@ def _configure_blackwell_nccl() -> None:
 
 
 class OptimizedNVSHMEMVsNCCLBenchmarkMultiGPU(VerificationPayloadMixin, BaseBenchmark):
+    multi_gpu_required = True
     def __init__(self) -> None:
         super().__init__()
         self.register_workload_metadata(requests_per_iteration=1.0)
@@ -60,33 +62,30 @@ class OptimizedNVSHMEMVsNCCLBenchmarkMultiGPU(VerificationPayloadMixin, BaseBenc
         self._verify_input = torch.randn(64, 64, device=self.device, dtype=torch.float32)
 
     def benchmark_fn(self) -> None:
+        use_symmem = symmetric_memory_available()
         args = argparse.Namespace(
             min_bytes=4 * 1024,
-            max_bytes=128 * 1024 * 1024,
-            steps=7,
-            iterations=75,
+            max_bytes=4 * 1024 * 1024,
+            steps=6,
+            iterations=100,
+            mode="nvshmem" if use_symmem else "nccl",
         )
+        original_disable = os.environ.get("AISP_DISABLE_SYMMETRIC_MEMORY")
         rank = init_distributed()
         try:
+            os.environ["AISP_DISABLE_SYMMETRIC_MEMORY"] = "0" if use_symmem else "1"
             results = benchmark(args)
             if rank == 0:
-                print("\nNVSHMEM vs NCCL Benchmark (optimized for NVLink 5.0 / NVLS / TCE)")
-                print("------------------------------------------------------------------")
+                print("\nNVSHMEM Benchmark (optimized for NVLink 5.0 / NVLS / TCE)")
+                print("------------------------------------------------------")
                 print(f"Symmetric memory available: {bool(results['nvshmem'])}")
-                print("Message Size | NCCL Latency (us) | NCCL BW (GB/s) | NVSHMEM Latency (us) | NVSHMEM BW (GB/s)")
-                print("-------------------------------------------------------------------------------------------")
-                nvshmem_dict = {res.bytes: res for res in results["nvshmem"]}
-                for res in results["nccl"]:
-                    nv = nvshmem_dict.get(res.bytes)
-                    nv_lat = f"{nv.latency_us:8.2f}" if nv else "   n/a "
-                    nv_bw = f"{nv.bandwidth_gbps:8.2f}" if nv else "   n/a "
-                    print(
-                        f"{res.bytes:>12} | {res.latency_us:16.2f} | {res.bandwidth_gbps:13.2f} | "
-                        f"{nv_lat:>18} | {nv_bw:>15}"
-                    )
         finally:
             if dist.is_initialized():
                 dist.barrier()
+            if original_disable is None:
+                os.environ.pop("AISP_DISABLE_SYMMETRIC_MEMORY", None)
+            else:
+                os.environ["AISP_DISABLE_SYMMETRIC_MEMORY"] = original_disable
 
     def teardown(self) -> None:
         if dist.is_initialized():

@@ -323,7 +323,7 @@ def discover_benchmarks(
                 and (optimized_name == other or optimized_name.startswith(f"{other}_"))
                 for other in example_names
             ):
-                # Prefer the most specific baseline match (e.g., baseline_ddp_compression_* over baseline_ddp)
+                # Prefer the most specific baseline match (e.g., baseline_ddp_multigpu_compression_* over baseline_ddp_multigpu)
                 continue
             
             suffix = opt_path.stem.replace(f"optimized_{example_name}_", "", 1)

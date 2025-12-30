@@ -7,7 +7,7 @@ from ch11.stream_overlap_base import StridedStreamBaseline
 
 class BaselineDistributedStreamsBenchmark(StridedStreamBaseline):
     def __init__(self) -> None:
-        super().__init__("baseline_distributed_streams")
+        super().__init__("baseline_distributed_multigpu_streams")
 
 
 def get_benchmark() -> StridedStreamBaseline:

@@ -55,7 +55,7 @@
       "type": "python"
     },
     "cuda_graphs_conditional_cuda": {
-      "example": "cuda_graphs_conditional",
+      "example": "cuda_graphs_conditional_cuda",
       "metadata": {
         "best_optimization": "optimized_cuda_graphs_conditional",
         "best_optimization_file": "optimized_cuda_graphs_conditional.cu",
@@ -86,7 +86,7 @@
       "type": "cuda"
     },
     "cuda_graphs_conditional_enhanced_cuda": {
-      "example": "cuda_graphs_conditional_enhanced",
+      "example": "cuda_graphs_conditional_enhanced_cuda",
       "metadata": {
         "best_optimization": "optimized_cuda_graphs_conditional_enhanced",
         "best_optimization_file": "optimized_cuda_graphs_conditional_enhanced.cu",
@@ -117,7 +117,7 @@
       "type": "cuda"
     },
     "cuda_graphs_cuda": {
-      "example": "cuda_graphs",
+      "example": "cuda_graphs_cuda",
       "metadata": {
         "best_optimization": "optimized_cuda_graphs",
         "best_optimization_file": "optimized_cuda_graphs.cu",
@@ -256,7 +256,7 @@
       "type": "python"
     },
     "dynamic_parallelism_device_cuda": {
-      "example": "dynamic_parallelism_device",
+      "example": "dynamic_parallelism_device_cuda",
       "metadata": {
         "best_optimization": "optimized_dynamic_parallelism_device",
         "best_optimization_file": "optimized_dynamic_parallelism_device.cu",
@@ -287,7 +287,7 @@
       "type": "cuda"
     },
     "dynamic_parallelism_host_cuda": {
-      "example": "dynamic_parallelism_host",
+      "example": "dynamic_parallelism_host_cuda",
       "metadata": {
         "best_optimization": "optimized_dynamic_parallelism_host",
         "best_optimization_file": "optimized_dynamic_parallelism_host.cu",
@@ -372,7 +372,7 @@
       "type": "python"
     },
     "graph_bandwidth_cuda": {
-      "example": "graph_bandwidth",
+      "example": "graph_bandwidth_cuda",
       "metadata": {
         "best_optimization": "optimized_graph_bandwidth",
         "best_optimization_file": "optimized_graph_bandwidth.cu",
@@ -457,7 +457,7 @@
       "type": "python"
     },
     "graph_conditional_runtime_cuda": {
-      "example": "graph_conditional_runtime",
+      "example": "graph_conditional_runtime_cuda",
       "metadata": {
         "best_optimization": "optimized_graph_conditional_runtime",
         "best_optimization_file": "optimized_graph_conditional_runtime.cu",
@@ -596,7 +596,7 @@
       "type": "python"
     },
     "uneven_partition_cuda": {
-      "example": "uneven_partition",
+      "example": "uneven_partition_cuda",
       "metadata": {
         "best_optimization": "optimized_uneven_partition",
         "best_optimization_file": "optimized_uneven_partition.cu",
@@ -627,7 +627,7 @@
       "type": "cuda"
     },
     "uneven_static_cuda": {
-      "example": "uneven_static",
+      "example": "uneven_static_cuda",
       "metadata": {
         "best_optimization": "optimized_uneven_static",
         "best_optimization_file": "optimized_uneven_static.cu",
@@ -712,7 +712,7 @@
       "type": "python"
     },
     "work_queue_cuda": {
-      "example": "work_queue",
+      "example": "work_queue_cuda",
       "metadata": {
         "best_optimization": "optimized_work_queue",
         "best_optimization_file": "optimized_work_queue.cu",
