@@ -115,6 +115,17 @@ def _make_fp8_config() -> "Float8LinearConfig":
     return Float8LinearConfig(**kwargs)
 
 
+def _maybe_fused_adamw(params, lr: float) -> torch.optim.Optimizer:
+    try:
+        return torch.optim.AdamW(
+            params,
+            lr=lr,
+            fused=True,
+        )
+    except TypeError:
+        return torch.optim.AdamW(params, lr=lr)
+
+
 def _build_model(hidden_size: int, num_layers: int, device: torch.device) -> nn.Module:
     layers = [SimpleTransformerLayer(hidden_size) for _ in range(num_layers)]
     return SimpleTransformerStack(layers).to(device)
@@ -163,11 +174,7 @@ def _run_worker(
         dtype=torch.bfloat16,
     )
 
-    optimizer = torch.optim.AdamW(
-        fsdp_model.parameters(),
-        lr=1e-4,
-        fused=False,
-    )
+    optimizer = _maybe_fused_adamw(fsdp_model.parameters(), lr=1e-4)
     grad_accum_steps = batch_size // micro_batch_size
 
     def _step() -> float:

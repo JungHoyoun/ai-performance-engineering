@@ -88,11 +88,22 @@ if __name__ == "__main__":
 def get_benchmark():
     return TorchrunScriptBenchmark(
         script_path=Path(__file__).parent / "pipeline_gpipe.py",
-        base_args=["--mode", "baseline"],
+        base_args=[
+            "--mode",
+            "baseline",
+            "--batch-size",
+            "512",
+            "--micro-batch-size",
+            "512",
+            "--hidden-dim",
+            "2048",
+            "--depth",
+            "12",
+        ],
         config_arg_map={"iterations": "--steps"},
         target_label="labs/train_distributed:pipeline_gpipe_multigpu_2stages",
         default_nproc_per_node=None,
-        default_iterations=10,
+        default_iterations=6,
         multi_gpu_required=True,
         name="baseline_pipeline_gpipe_multigpu_2stages",
     )

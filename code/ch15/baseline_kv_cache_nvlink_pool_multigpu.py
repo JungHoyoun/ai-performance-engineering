@@ -27,9 +27,9 @@ class BaselineKVCacheLocalOnlyBenchmark(VerificationPayloadMixin, BaseBenchmark)
         self.hidden = 1024
         self.heads = 16
         self.batch = 8
-        self.seq_len = 256
-        self.local_cache_limit = 32
-        self.peer_cache_limit = 192
+        self.seq_len = 512
+        self.local_cache_limit = 16
+        self.peer_cache_limit = 256
         self.device_ids: List[int] = []
         self.peer_devices: List[torch.device] = []
         tokens = self.batch * self.seq_len

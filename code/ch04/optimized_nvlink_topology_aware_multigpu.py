@@ -9,7 +9,7 @@ from typing import Optional, List, Tuple
 
 import torch
 
-from core.benchmark.gpu_requirements import skip_if_insufficient_gpus
+from core.benchmark.gpu_requirements import require_min_gpus
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch04.verification_payload_mixin import VerificationPayloadMixin
 
@@ -56,7 +56,7 @@ class OptimizedNvlinkTopologyAwareBenchmark(VerificationPayloadMixin, BaseBenchm
     def setup(self) -> None:
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-        skip_if_insufficient_gpus(2)
+        require_min_gpus(2, "optimized_nvlink_topology_aware_multigpu.py")
 
         self.device_ids = list(range(torch.cuda.device_count()))
         self.pairs = self._build_peer_pairs(self.device_ids)

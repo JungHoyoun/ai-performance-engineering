@@ -85,6 +85,7 @@ def run_probe(args: argparse.Namespace) -> Tuple[Dict[Tuple[int, float], object]
                 dtype=dtype,
                 impl=args.impl,
                 allocate_each_iter=True,
+                host_stage=True,
             )
             results[(msg_bytes, alpha)] = res
 

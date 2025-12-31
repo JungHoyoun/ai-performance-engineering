@@ -38,11 +38,11 @@ def _build_parser() -> argparse.ArgumentParser:
     add_base_args(parser)
     parser.set_defaults(
         output_dir="artifacts/moe_readiness_baseline",
-        message_sizes="64k,256k,1m,4m",
+        message_sizes="256k,1m,4m,16m",
         skews="1.0,1.35,1.6",
-        iters=30,
-        max_p99_ms=7.0,
-        min_bw_gbps=12.0,
+        iters=40,
+        max_p99_ms=8.0,
+        min_bw_gbps=10.0,
         impl="list",
     )
     return parser
@@ -88,6 +88,7 @@ def run_probe(args: argparse.Namespace) -> Tuple[Dict[Tuple[int, float], object]
                 dtype=dtype,
                 impl=args.impl,
                 allocate_each_iter=True,
+                host_stage=True,
             )
             results[(msg_bytes, alpha)] = res
 

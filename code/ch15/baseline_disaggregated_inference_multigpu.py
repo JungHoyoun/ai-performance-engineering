@@ -48,9 +48,9 @@ class DisaggConfig:
     num_experts: int = 16
     top_k: int = 2
     batch_size: int = 2
-    requests_per_rank: int = 8
+    requests_per_rank: int = 16
     context_window: int = 1024
-    decode_tokens: int = 256
+    decode_tokens: int = 512
     dtype: torch.dtype = torch.bfloat16
 
     @property
@@ -289,6 +289,7 @@ def _run_torchrun_worker(
                     ready.record()
                     handles = _batch_isend(kv_prompt, seed_tokens, ready_event=ready)
                     _wait_handles(handles)
+                    torch.cuda.synchronize(device)
             return []
 
         if overlap:
@@ -340,6 +341,7 @@ def _run_torchrun_worker(
             handles, _ = _batch_irecv(kv_buf, seed_buf)
             recv_handles.extend(handles)
         _wait_handles(recv_handles)
+        torch.cuda.synchronize(device)
         decoded = _run_decode(cfg, model, kv_chunks, seed_chunks, device)
         return decoded
 

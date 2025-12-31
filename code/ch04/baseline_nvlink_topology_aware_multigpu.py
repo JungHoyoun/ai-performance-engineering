@@ -9,7 +9,7 @@ from typing import Optional, List, Tuple
 
 import torch
 
-from core.benchmark.gpu_requirements import skip_if_insufficient_gpus
+from core.benchmark.gpu_requirements import require_min_gpus
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch04.verification_payload_mixin import VerificationPayloadMixin
 
@@ -45,7 +45,7 @@ class BaselineNvlinkTopologyAwareBenchmark(VerificationPayloadMixin, BaseBenchma
     def setup(self) -> None:
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-        skip_if_insufficient_gpus(2)
+        require_min_gpus(2, "baseline_nvlink_topology_aware_multigpu.py")
 
         self.device_ids = list(range(torch.cuda.device_count()))
         self.pairs = self._build_far_pairs(self.device_ids)
@@ -78,7 +78,9 @@ class BaselineNvlinkTopologyAwareBenchmark(VerificationPayloadMixin, BaseBenchma
         with self._nvtx_range("baseline_nvlink_topology_aware_multigpu"):
             for host_buffer, src, dst in zip(self.host_buffers, self.src, self.dst):
                 host_buffer.copy_(src, non_blocking=False)
+                torch.cuda.synchronize(src.device)
                 dst.copy_(host_buffer, non_blocking=False)
+                torch.cuda.synchronize(dst.device)
             self._sync_all()
         self.output = self.dst[0]
 

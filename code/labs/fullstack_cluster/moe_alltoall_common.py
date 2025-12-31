@@ -145,6 +145,7 @@ def run_alltoall_single(
     dtype: torch.dtype,
     impl: str,
     allocate_each_iter: bool = False,
+    host_stage: bool = False,
 ) -> AllToAllResult:
     elem_size = torch.tensor([], dtype=dtype).element_size()
     total_elems = msg_bytes // elem_size
@@ -172,6 +173,7 @@ def run_alltoall_single(
     recv_buf: torch.Tensor | None = None
     send_list: List[torch.Tensor] | None = None
     recv_list: List[torch.Tensor] | None = None
+    host_send_buf: torch.Tensor | None = None
 
     counts_t = torch.tensor(send_counts, dtype=torch.float32)
     gini = gini_coefficient(counts_t)
@@ -186,8 +188,13 @@ def run_alltoall_single(
         return send_list_local
 
     def _init_buffers() -> None:
-        nonlocal send_buf, recv_buf, send_list, recv_list
-        send_buf = torch.randn(total_elems, dtype=dtype, device="cuda")
+        nonlocal send_buf, recv_buf, send_list, recv_list, host_send_buf
+        if host_stage:
+            host_send_buf = torch.randn(total_elems, dtype=dtype, device="cpu")
+            send_buf = host_send_buf.to(device="cuda", non_blocking=False)
+        else:
+            host_send_buf = None
+            send_buf = torch.randn(total_elems, dtype=dtype, device="cuda")
         if impl == "single":
             recv_buf = torch.empty(recv_total, dtype=dtype, device="cuda")
             send_list = None

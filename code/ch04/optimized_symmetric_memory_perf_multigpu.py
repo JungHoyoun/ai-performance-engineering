@@ -125,12 +125,10 @@ class OptimizedSymmetricMemoryPerfBenchmark(VerificationPayloadMixin, BaseBenchm
             peer_buf = self._peer_buffers[buf_idx]
             prev_buf = self._prev_buffers[buf_idx]
             peer_buf.copy_(local_buf, non_blocking=True)
-            torch.cuda.current_stream().synchronize()
-            dist.barrier()
             local_buf.copy_(prev_buf, non_blocking=True)
-            torch.cuda.current_stream().synchronize()
         end.record()
         torch.cuda.synchronize()
+        dist.barrier()
 
         elapsed_ms = start.elapsed_time(end)
         

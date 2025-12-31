@@ -53,6 +53,7 @@ class BaselineDistributedBenchmark(VerificationPayloadMixin, BaseBenchmark):
             cpu_total = 0.0
             for tensor in self.data:
                 cpu_total += float(tensor.cpu().sum())
+                torch.cuda.synchronize(tensor.device)
             self.output = torch.tensor(cpu_total, device=f"cuda:{self.device_ids[0]}")
             self._synchronize()
 

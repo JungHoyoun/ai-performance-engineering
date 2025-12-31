@@ -11,6 +11,7 @@ if str(repo_root) not in sys.path:
 
 import torch
 
+from core.benchmark.gpu_requirements import require_min_gpus
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from ch04.verification_payload_mixin import VerificationPayloadMixin
 
@@ -61,16 +62,15 @@ class BandwidthSuiteMultiGPU(VerificationPayloadMixin, BaseBenchmark):
     def __init__(self) -> None:
         super().__init__()
         self.last_bandwidth_gbps: Optional[float] = None
-        self.size_mb = 256
-        self.inner_iterations = 20
-        self.num_chunks = 8
+        self.size_mb = 512
+        self.inner_iterations = 12
+        self.num_chunks = 32
         self.pairs: list[tuple[torch.Tensor, torch.Tensor]] = []
         self.chunk_pairs: list[list[tuple[torch.Tensor, torch.Tensor]]] = []
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def setup(self) -> None:
-        if torch.cuda.device_count() < 2:
-            raise RuntimeError("SKIPPED: bandwidth benchmark suite requires >=2 GPUs")
+        require_min_gpus(2, "baseline_bandwidth_benchmark_suite_multigpu.py")
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
         bytes_per_iter = int(self.size_mb * 1024 * 1024)

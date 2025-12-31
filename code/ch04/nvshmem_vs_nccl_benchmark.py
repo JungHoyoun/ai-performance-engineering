@@ -149,13 +149,17 @@ def _measure_symmetric_broadcast(bytes_per_rank: int, iterations: int) -> Option
         return None
     buffer = sym_handle.buffer
 
+    rank = dist.get_rank()
+    remote_buffers = []
+    if rank == 0:
+        remote_buffers = [sym_handle.get_buffer(peer) for peer in range(1, dist.get_world_size())]
+
     for _ in range(5):
-        if dist.get_rank() == 0:
-            for peer in range(1, dist.get_world_size()):
-                remote = sym_handle.get_buffer(peer)
+        if rank == 0:
+            for remote in remote_buffers:
                 remote.copy_(buffer, non_blocking=True)
-        torch.cuda.current_stream().synchronize()
-        dist.barrier()
+        torch.cuda.synchronize(device)
+    dist.barrier()
 
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
@@ -163,14 +167,13 @@ def _measure_symmetric_broadcast(bytes_per_rank: int, iterations: int) -> Option
 
     start.record()
     for _ in range(iterations):
-        if dist.get_rank() == 0:
-            for peer in range(1, dist.get_world_size()):
-                remote = sym_handle.get_buffer(peer)
+        if rank == 0:
+            for remote in remote_buffers:
                 remote.copy_(buffer, non_blocking=True)
-        torch.cuda.current_stream().synchronize()
-        dist.barrier()
+        torch.cuda.synchronize(device)
     end.record()
     torch.cuda.synchronize(device)
+    dist.barrier()
 
     elapsed_ms = start.elapsed_time(end)
     latency_us = (elapsed_ms * 1000.0) / iterations

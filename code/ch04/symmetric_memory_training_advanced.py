@@ -655,6 +655,7 @@ def demo_custom_optimizer(
     hidden_dim: int,
     output_dim: int,
     sync_interval: int,
+    num_layers: int,
 ) -> None:
     """
     Demonstrate custom optimizer with symmetric memory.
@@ -666,12 +667,14 @@ def demo_custom_optimizer(
     """
     rank, world_size, device = init_distributed()
     
-    # Create model
-    model = nn.Sequential(
-        nn.Linear(hidden_dim, hidden_dim),
-        nn.ReLU(),
-        nn.Linear(hidden_dim, output_dim),
-    ).to(device)
+    # Create model with multiple small parameter groups to amplify broadcast overhead.
+    depth = max(1, int(num_layers))
+    layers = []
+    for _ in range(depth):
+        layers.append(nn.Linear(hidden_dim, hidden_dim))
+        layers.append(nn.ReLU())
+    layers.append(nn.Linear(hidden_dim, output_dim))
+    model = nn.Sequential(*layers).to(device)
     
     # Initialize custom optimizer
     optimizer = SymmetricMemoryOptimizer(list(model.parameters()), lr=0.01, world_size=world_size)
@@ -839,6 +842,12 @@ def main() -> None:
     parser.add_argument("--hidden-dim", type=int, default=4096, help="Hidden dimension for optimizer demo.")
     parser.add_argument("--output-dim", type=int, default=2048, help="Output dimension for optimizer demo.")
     parser.add_argument(
+        "--optimizer-layers",
+        type=int,
+        default=2,
+        help="Number of hidden layers for the optimizer demo MLP.",
+    )
+    parser.add_argument(
         "--sync-interval",
         type=int,
         default=1,
@@ -862,6 +871,7 @@ def main() -> None:
             hidden_dim=args.hidden_dim,
             output_dim=args.output_dim,
             sync_interval=args.sync_interval,
+            num_layers=args.optimizer_layers,
         )
     elif args.demo == "zero":
         demo_zero_style_sharding()

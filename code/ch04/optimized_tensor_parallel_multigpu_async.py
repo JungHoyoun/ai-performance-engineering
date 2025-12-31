@@ -84,6 +84,8 @@ def _build_layers(hidden: int, hidden_per_rank: int, num_layers: int, device: to
             nn.Linear(hidden, hidden, bias=False),
             nn.GELU(),
             nn.Linear(hidden, hidden, bias=False),
+            nn.GELU(),
+            nn.Linear(hidden, hidden, bias=False),
         )
         for _ in range(num_layers)
     ]).to(device).to(torch.bfloat16)

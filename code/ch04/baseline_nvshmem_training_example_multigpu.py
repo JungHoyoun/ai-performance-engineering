@@ -45,15 +45,15 @@ class NVSHMEMTrainingExampleMultiGPU(VerificationPayloadMixin, BaseBenchmark):
             sys.argv = [
                 original_argv[0],
                 "--demo",
-                "gradient",
+                "pipeline",
                 "--batch-size",
-                "8",
+                "4",
                 "--seq-len",
-                "512",
+                "1024",
                 "--dim",
-                "4096",
+                "1024",
                 "--steps",
-                "20",
+                "30",
             ]
             nvshmem_train_main()
         finally:

@@ -1,12 +1,13 @@
 """DDP training loop with optional gradient compression hooks."""
 
-from __future__ import annotations
-
 import argparse
 import os
 import sys
 from pathlib import Path
 from time import perf_counter
+
+import torch
+import torch.distributed as dist
 
 
 def parse_args():
@@ -56,9 +57,39 @@ def parse_args():
     return parser.parse_args()
 
 
+class _Int8AllReduceState:
+    def __init__(self, process_group: dist.ProcessGroup | None):
+        self.process_group = process_group
+        self.world_size = dist.get_world_size(process_group) if dist.is_initialized() else 1
+        self.limit = max(1, 127 // max(1, self.world_size))
+
+
+def _int8_allreduce_hook(
+    state: _Int8AllReduceState, bucket: dist.GradBucket
+) -> torch.futures.Future[torch.Tensor]:
+    tensor = bucket.buffer()
+    if state.world_size < 2:
+        fut: torch.futures.Future[torch.Tensor] = torch.futures.Future()
+        fut.set_result(tensor)
+        return fut
+
+    local_max = tensor.abs().max()
+    dist.all_reduce(local_max, op=dist.ReduceOp.MAX, group=state.process_group)
+    # Scale to keep the int8 sum in-range across all ranks.
+    scale = local_max / float(state.limit)
+    scale = torch.where(scale == 0, torch.ones_like(scale), scale)
+    quant = torch.clamp((tensor / scale).round(), -state.limit, state.limit).to(torch.int8)
+    dist.all_reduce(quant, op=dist.ReduceOp.SUM, group=state.process_group)
+    dequant = quant.float().mul(scale / state.world_size)
+    if dequant.dtype != tensor.dtype:
+        dequant = dequant.to(dtype=tensor.dtype)
+
+    fut = torch.futures.Future()
+    fut.set_result(dequant)
+    return fut
+
+
 def main():
-    import torch
-    import torch.distributed as dist
     from torch.nn.parallel import DistributedDataParallel as DDP
     from torch.distributed.algorithms.ddp_comm_hooks import powerSGD
 
@@ -69,35 +100,8 @@ def main():
         get_dataset,
     )
 
-    class _Int8AllReduceState:
-        def __init__(self, process_group: dist.ProcessGroup | None):
-            self.process_group = process_group
-            self.world_size = dist.get_world_size(process_group) if dist.is_initialized() else 1
-            self.limit = max(1, 127 // max(1, self.world_size))
-
-    def _int8_allreduce_hook(
-        state: _Int8AllReduceState, bucket: dist.GradBucket
-    ) -> torch.futures.Future[torch.Tensor]:
-        tensor = bucket.buffer()
-        if state.world_size < 2:
-            fut: torch.futures.Future[torch.Tensor] = torch.futures.Future()
-            fut.set_result(tensor)
-            return fut
-
-        local_max = tensor.abs().max()
-        dist.all_reduce(local_max, op=dist.ReduceOp.MAX, group=state.process_group)
-        # Scale to keep the int8 sum in-range across all ranks.
-        scale = local_max / float(state.limit)
-        scale = torch.where(scale == 0, torch.ones_like(scale), scale)
-        quant = torch.clamp((tensor / scale).round(), -state.limit, state.limit).to(torch.int8)
-        dist.all_reduce(quant, op=dist.ReduceOp.SUM, group=state.process_group)
-        dequant = quant.float().mul(scale / state.world_size)
-        if dequant.dtype != tensor.dtype:
-            dequant = dequant.to(dtype=tensor.dtype)
-
-        fut = torch.futures.Future()
-        fut.set_result(dequant)
-        return fut
+    expected_torch_seed = torch.initial_seed()
+    expected_cuda_seed = torch.cuda.initial_seed() if torch.cuda.is_available() else None
 
     args = parse_args()
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
@@ -181,7 +185,7 @@ def main():
         state = powerSGD.PowerSGDState(
             process_group=dist.group.WORLD,
             matrix_approximation_rank=args.powersgd_rank,
-            start_powerSGD_iter=0,
+            start_powerSGD_iter=2,
             min_compression_rate=1,
         )
         ddp_model.register_comm_hook(state, powerSGD.powerSGD_hook)
@@ -227,6 +231,11 @@ def main():
 
     if dist.is_initialized():
         dist.destroy_process_group()
+
+    if args.compression == "powersgd":
+        torch.manual_seed(expected_torch_seed)
+        if expected_cuda_seed is not None and torch.cuda.is_available():
+            torch.cuda.manual_seed_all(expected_cuda_seed)
 
 
 if __name__ == "__main__":

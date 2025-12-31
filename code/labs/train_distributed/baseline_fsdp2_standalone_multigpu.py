@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""Baseline: FSDP2 with BF16 mixed precision.
-
-Demonstrates standard FSDP2 training without FP8 optimization.
-"""
+"""Baseline: FSDP2 FP8 training with conservative float8 settings."""
 
 from __future__ import annotations
 
 import argparse
+import inspect
 import os
 import sys
 import time
@@ -41,6 +39,15 @@ _DEFAULT_MICRO_BATCH = 1
 _DEFAULT_SEQ_LEN = 2048
 _DEFAULT_HIDDEN = 4096
 _DEFAULT_LAYERS = 8
+
+try:
+    from torchao.float8 import convert_to_float8_training, Float8LinearConfig
+except ImportError as exc:  # pragma: no cover - torchao required on Blackwell
+    convert_to_float8_training = None
+    Float8LinearConfig = None
+    _TORCHAO_IMPORT_ERROR = exc
+else:
+    _TORCHAO_IMPORT_ERROR = None
 
 
 class SimpleTransformerLayer(nn.Module):
@@ -91,6 +98,25 @@ def _build_model(hidden_size: int, num_layers: int, device: torch.device) -> nn.
     return SimpleTransformerStack(layers).to(device)
 
 
+def _require_torchao() -> None:
+    if convert_to_float8_training is None or Float8LinearConfig is None:
+        raise RuntimeError("torchao float8 is required for baseline_fsdp2_standalone_multigpu") from _TORCHAO_IMPORT_ERROR
+
+
+def _make_fp8_config() -> "Float8LinearConfig":
+    _require_torchao()
+    kwargs = {}
+    try:
+        params = inspect.signature(Float8LinearConfig).parameters
+    except (TypeError, ValueError):
+        return Float8LinearConfig()
+    if "enable_fsdp_float8_all_gather" in params:
+        kwargs["enable_fsdp_float8_all_gather"] = True
+    if "enable_pre_and_post_forward" in params:
+        kwargs["enable_pre_and_post_forward"] = False
+    return Float8LinearConfig(**kwargs)
+
+
 def _run_worker(
     *,
     iters: int,
@@ -101,6 +127,7 @@ def _run_worker(
     hidden_size: int,
     num_layers: int,
 ) -> None:
+    _require_torchao()
     rank, world_size, local_rank = _init_distributed()
     if world_size < 2:
         raise RuntimeError("FSDP2 baseline requires >=2 GPUs.")
@@ -113,7 +140,9 @@ def _run_worker(
 
     device = torch.device(f"cuda:{local_rank}")
 
-    model = _build_model(hidden_size, num_layers, device)
+    model = _build_model(hidden_size, num_layers, device).to(torch.bfloat16)
+    fp8_config = _make_fp8_config()
+    convert_to_float8_training(model, config=fp8_config)
     mixed_precision = MixedPrecision(
         param_dtype=torch.bfloat16,
         reduce_dtype=torch.bfloat16,
@@ -205,10 +234,13 @@ class BaselineFSDP2Benchmark(VerificationPayloadMixin, BaseBenchmark):
         self._world_size = _resolve_world_size()
 
     def setup(self) -> None:
+        _require_torchao()
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
         self._model = _build_model(_DEFAULT_HIDDEN, _DEFAULT_LAYERS, self.device)
         self._model = self._model.to(torch.bfloat16)
+        fp8_config = _make_fp8_config()
+        convert_to_float8_training(self._model, config=fp8_config)
         self._input = torch.randn(
             _DEFAULT_BATCH_SIZE,
             _DEFAULT_SEQ_LEN,
@@ -231,7 +263,7 @@ class BaselineFSDP2Benchmark(VerificationPayloadMixin, BaseBenchmark):
             output=self._output,
             batch_size=_DEFAULT_BATCH_SIZE,
             parameter_count=int(self._param_count),
-            precision_flags=PrecisionFlags(bf16=True, tf32=False),
+            precision_flags=PrecisionFlags(fp8=True, bf16=True, tf32=False),
             output_tolerance=(0.1, 1.0),
             signature_overrides={"world_size": self._world_size},
         )

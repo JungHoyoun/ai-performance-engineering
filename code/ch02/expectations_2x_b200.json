@@ -1,7 +1,7 @@
 {
   "examples": {
-    "memory_transfer_multigpu_cuda": {
-      "example": "memory_transfer_multigpu_cuda",
+    "memory_transfer_multigpu": {
+      "example": "memory_transfer_multigpu",
       "metadata": {
         "best_optimization": "optimized_memory_transfer_multigpu",
         "best_optimization_file": "optimized_memory_transfer_multigpu.cu",

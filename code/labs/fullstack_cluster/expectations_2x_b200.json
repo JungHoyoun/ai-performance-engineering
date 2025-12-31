@@ -5,26 +5,26 @@
       "metadata": {
         "best_optimization": "optimized_moe_readiness_multigpu",
         "best_optimization_file": "optimized_moe_readiness_multigpu.py",
-        "best_optimization_speedup": 0.9822255298478909,
+        "best_optimization_speedup": 1.965084840621827,
         "best_optimization_technique": "optimized_moe_readiness_multigpu",
-        "best_optimization_time_ms": 702.1938264369965,
+        "best_optimization_time_ms": 701.6210556030273,
         "optimization_goal": "speed"
       },
       "metrics": {
-        "baseline_p75_ms": 689.7127032279968,
-        "baseline_time_ms": 689.7127032279968,
-        "best_optimized_p75_ms": 702.1938264369965,
-        "best_optimized_speedup": 0.9822255298478909,
-        "best_optimized_time_ms": 702.1938264369965,
-        "best_speedup": 0.9822255298478909,
-        "is_regression": true
+        "baseline_p75_ms": 1378.744900226593,
+        "baseline_time_ms": 1378.744900226593,
+        "best_optimized_p75_ms": 701.6210556030273,
+        "best_optimized_speedup": 1.965084840621827,
+        "best_optimized_time_ms": 701.6210556030273,
+        "best_speedup": 1.965084840621827,
+        "is_regression": false
       },
       "provenance": {
-        "git_commit": "382b9d68bf3407ef003a310b05e5af4998fe46bf",
+        "git_commit": "ccde8aa8f295aa6221251a94d53d8612c0738da7",
         "hardware_key": "2x_b200",
         "iterations": 20,
         "profile_name": "none",
-        "timestamp": "2025-12-30T21:53:36.531420",
+        "timestamp": "2025-12-31T01:53:36.159641",
         "warmup_iterations": 5
       },
       "type": "python"

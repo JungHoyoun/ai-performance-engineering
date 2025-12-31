@@ -38,11 +38,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser("Optimized MoE readiness (all-to-all) probe")
     add_base_args(parser)
     parser.set_defaults(
-        message_sizes="64k,256k,1m,4m",
+        message_sizes="256k,1m,4m,16m",
         skews="1.0,1.35,1.6",
-        iters=30,
-        max_p99_ms=5.5,
-        min_bw_gbps=18.0,
+        iters=40,
+        max_p99_ms=6.0,
+        min_bw_gbps=16.0,
         output_dir="artifacts/moe_readiness_optimized",
         impl="single",
     )

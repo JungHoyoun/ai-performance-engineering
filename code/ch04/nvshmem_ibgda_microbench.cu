@@ -116,16 +116,13 @@ int main(int argc, char** argv) {
     CHECK_NVSHMEM(nvshmem_init());
     int mype = nvshmem_my_pe();
     int npes = nvshmem_n_pes();
-    if (npes < 2) {
-        if (mype == 0) {
-            std::printf("Single-PE run (npes=%d); skipping IBGDA measurement.\n", npes);
-        }
-        CHECK_NVSHMEM(nvshmem_finalize());
-        return 0;
+    bool single_pe = npes < 2;
+    if (single_pe && mype == 0) {
+        std::printf("Single-PE run (npes=%d); skipping IBGDA measurement.\n", npes);
     }
     CHECK_CUDA(cudaSetDevice(mype % dev_count));
 
-    int peer = (mype + 1) % npes;
+    int peer = single_pe ? mype : (mype + 1) % npes;
     size_t elems = (opts.bytes + sizeof(float) - 1) / sizeof(float);
     if (elems == 0) elems = 1;
 
@@ -138,49 +135,55 @@ int main(int argc, char** argv) {
     CHECK_CUDA(cudaMemset(buf, 0, elems * sizeof(float)));
     CHECK_NVSHMEM(nvshmem_barrier_all());
 
-    cudaEvent_t start, stop;
-    CHECK_CUDA(cudaEventCreate(&start));
-    CHECK_CUDA(cudaEventCreate(&stop));
-
-    dim3 grid(opts.ctas);
-    dim3 block(opts.threads);
-
-    CHECK_CUDA(cudaDeviceSynchronize());
-    CHECK_CUDA(cudaEventRecord(start));
-
-    if (opts.mode == Mode::kBlockPut) {
-        block_put_kernel<<<grid, block>>>(buf, elems, peer, opts.iters);
-    } else {
-        scalar_p_kernel<<<grid, block>>>(buf, elems, peer, opts.iters);
-    }
-
-    CHECK_CUDA(cudaEventRecord(stop));
-    CHECK_CUDA(cudaEventSynchronize(stop));
     float ms = 0.0f;
-    CHECK_CUDA(cudaEventElapsedTime(&ms, start, stop));
+    if (!single_pe) {
+        cudaEvent_t start, stop;
+        CHECK_CUDA(cudaEventCreate(&start));
+        CHECK_CUDA(cudaEventCreate(&stop));
+
+        dim3 grid(opts.ctas);
+        dim3 block(opts.threads);
+
+        CHECK_CUDA(cudaDeviceSynchronize());
+        CHECK_CUDA(cudaEventRecord(start));
+
+        if (opts.mode == Mode::kBlockPut) {
+            block_put_kernel<<<grid, block>>>(buf, elems, peer, opts.iters);
+        } else {
+            scalar_p_kernel<<<grid, block>>>(buf, elems, peer, opts.iters);
+        }
+
+        CHECK_CUDA(cudaEventRecord(stop));
+        CHECK_CUDA(cudaEventSynchronize(stop));
+        CHECK_CUDA(cudaEventElapsedTime(&ms, start, stop));
+
+        CHECK_CUDA(cudaEventDestroy(start));
+        CHECK_CUDA(cudaEventDestroy(stop));
+    } else {
+        CHECK_CUDA(cudaDeviceSynchronize());
+    }
     CHECK_NVSHMEM(nvshmem_barrier_all());
 
-    double seconds = ms / 1000.0;
-    size_t active_threads = (size_t)opts.ctas * (size_t)opts.threads;
-    if (opts.mode == Mode::kBlockPut) {
-        size_t per_block_elems = (elems + opts.ctas - 1) / opts.ctas;
-        size_t total_bytes = (size_t)opts.iters * per_block_elems * sizeof(float);
-        double gbps = (total_bytes / seconds) / 1e9;
-        if (mype == 0) {
-            std::printf("mode=put bytes=%zu ctas=%d threads=%d iters=%d time=%.3f ms bw=%.2f GB/s\n",
-                        opts.bytes, opts.ctas, opts.threads, opts.iters, ms, gbps);
-        }
-    } else {
-        size_t ops = (size_t)opts.iters * active_threads;
-        double mops = (ops / seconds) / 1e6;
-        if (mype == 0) {
-            std::printf("mode=p bytes=%zu ctas=%d threads=%d iters=%d time=%.3f ms rate=%.1f MOPS\n",
-                        opts.bytes, opts.ctas, opts.threads, opts.iters, ms, mops);
+    if (!single_pe) {
+        double seconds = ms / 1000.0;
+        size_t active_threads = (size_t)opts.ctas * (size_t)opts.threads;
+        if (opts.mode == Mode::kBlockPut) {
+            size_t per_block_elems = (elems + opts.ctas - 1) / opts.ctas;
+            size_t total_bytes = (size_t)opts.iters * per_block_elems * sizeof(float);
+            double gbps = (total_bytes / seconds) / 1e9;
+            if (mype == 0) {
+                std::printf("mode=put bytes=%zu ctas=%d threads=%d iters=%d time=%.3f ms bw=%.2f GB/s\n",
+                            opts.bytes, opts.ctas, opts.threads, opts.iters, ms, gbps);
+            }
+        } else {
+            size_t ops = (size_t)opts.iters * active_threads;
+            double mops = (ops / seconds) / 1e6;
+            if (mype == 0) {
+                std::printf("mode=p bytes=%zu ctas=%d threads=%d iters=%d time=%.3f ms rate=%.1f MOPS\n",
+                            opts.bytes, opts.ctas, opts.threads, opts.iters, ms, mops);
+            }
         }
     }
-
-    CHECK_CUDA(cudaEventDestroy(start));
-    CHECK_CUDA(cudaEventDestroy(stop));
 
 #ifdef VERIFY
     CHECK_CUDA(cudaDeviceSynchronize());

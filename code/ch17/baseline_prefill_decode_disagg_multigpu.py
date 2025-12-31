@@ -38,9 +38,9 @@ class PrefillDecodeConfig:
     hidden_size: int = 3072
     num_layers: int = 6
     batch_size: int = 2
-    requests_per_rank: int = 16
-    context_window: int = 512
-    decode_tokens: int = 256
+    requests_per_rank: int = 24
+    context_window: int = 1024
+    decode_tokens: int = 384
     dtype: torch.dtype = torch.bfloat16
 
     @property
@@ -279,6 +279,7 @@ def _run_torchrun_worker(
             else:
                 for kv_cache, seed in zip(kv_chunks, seed_chunks):
                     _batch_send(kv_cache, seed, peer_rank, pair_groups[rank])
+                torch.cuda.synchronize(device)
             if not overlap:
                 _barrier()
             return []
@@ -306,6 +307,7 @@ def _run_torchrun_worker(
 
         if overlap:
             return outputs
+        torch.cuda.synchronize(device)
         _barrier()
         return _run_decode(cfg, model, kv_chunks, seed_chunks)
 

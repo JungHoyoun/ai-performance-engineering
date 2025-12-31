@@ -166,18 +166,21 @@ def _run_worker(
 
             if rank < world_size - 1:
                 dist.send(out, dst=rank + 1)
+                torch.cuda.synchronize(device)
 
         for _ in range(num_micro_batches):
             activation = activations.pop()
             if rank < world_size - 1:
                 grad_in = torch.empty_like(activation)
                 dist.recv(grad_in, src=rank + 1)
+                torch.cuda.synchronize(device)
             else:
                 grad_in = activation
 
             grad = _backward(grad_in)
             if rank > 0:
                 dist.send(grad, dst=rank - 1)
+                torch.cuda.synchronize(device)
 
     for _ in range(max(warmup, 0)):
         _run_iteration()

@@ -6,6 +6,7 @@ from typing import Optional, List, Tuple
 
 import torch
 
+from core.benchmark.gpu_requirements import require_min_gpus
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch04.verification_payload_mixin import VerificationPayloadMixin
 
@@ -34,8 +35,7 @@ class BaselineNVLinkBenchmark(VerificationPayloadMixin, BaseBenchmark):
             torch.cuda.synchronize(device_id)
 
     def setup(self) -> None:
-        if torch.cuda.device_count() < 2:
-            raise RuntimeError("SKIPPED: requires >=2 GPUs")
+        require_min_gpus(2, "baseline_nvlink_multigpu.py")
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
 
@@ -69,7 +69,9 @@ class BaselineNVLinkBenchmark(VerificationPayloadMixin, BaseBenchmark):
         with self._nvtx_range("baseline_nvlink_multigpu"):
             for host_buffer, src, dst in zip(self.host_buffers, self.src, self.dst):
                 host_buffer.copy_(src, non_blocking=False)
+                torch.cuda.synchronize(src.device)
                 dst.copy_(host_buffer, non_blocking=False)
+                torch.cuda.synchronize(dst.device)
             self._sync_all()
         self.output = self.dst[0]
 

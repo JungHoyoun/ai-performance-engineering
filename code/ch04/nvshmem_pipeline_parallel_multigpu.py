@@ -214,13 +214,13 @@ class ActivationBuffer:
         Uses symmetric memory for zero-copy DMA transfer over NVLink.
         """
         current_buffer = self.get_current_buffer()
-        current_buffer.copy_(data)
+        current_buffer.copy_(data, non_blocking=True)
         
         handle = self.handles[self.current_idx]
         if not symmem_pipeline_disabled() and symmetric_memory_available() and handle is not None:
             try:
                 remote_buffer = handle.get_buffer(target_rank)
-                remote_buffer.copy_(current_buffer)
+                remote_buffer.copy_(current_buffer, non_blocking=True)
             except Exception:
                 # Fallback to NCCL P2P
                 dist.send(current_buffer, dst=target_rank)
@@ -240,7 +240,7 @@ class ActivationBuffer:
         if not symmem_pipeline_disabled() and symmetric_memory_available() and handle is not None:
             try:
                 remote_buffer = handle.get_buffer(source_rank)
-                current_buffer.copy_(remote_buffer)
+                current_buffer.copy_(remote_buffer, non_blocking=True)
             except Exception:
                 # Fallback to NCCL P2P
                 dist.recv(current_buffer, src=source_rank)

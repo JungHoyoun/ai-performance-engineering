@@ -360,20 +360,31 @@ def demo_pipeline_parallel(microbatch: torch.Tensor, steps: int = 1) -> None:
     stage0 = PipelineStage(dim, dim * 4).to(device)
     stage1 = PipelineStage(dim, dim * 4).to(device)
 
-    # Allocate symmetric buffer for microbatch handoff
-    bucket = GradientBucket(
-        numel=microbatch.numel(),
-        dtype=microbatch.dtype,
-        device=device,
-        world_size=world_size,
-    )
+    use_symmem = nvshmem_available()
+    # Allocate symmetric buffer for microbatch handoff (optimized path).
+    bucket = None
+    if use_symmem:
+        bucket = GradientBucket(
+            numel=microbatch.numel(),
+            dtype=microbatch.dtype,
+            device=device,
+            world_size=world_size,
+        )
 
     partner_offset = world_size // 2
     for _ in range(steps):
+        if not use_symmem:
+            # Baseline: allocate per-iteration buffers (naive path).
+            bucket = GradientBucket(
+                numel=microbatch.numel(),
+                dtype=microbatch.dtype,
+                device=device,
+                world_size=world_size,
+            )
         if rank < partner_offset:
             microbatch = stage0(microbatch.to(device))
             bucket.tensor.copy_(microbatch.flatten())
-            if nvshmem_available() and bucket.handle is not None:
+            if use_symmem and bucket.handle is not None:
                 next_rank = rank + partner_offset
                 remote = bucket.handle.get_buffer(next_rank)
                 remote.copy_(bucket.tensor, non_blocking=True)
@@ -383,7 +394,7 @@ def demo_pipeline_parallel(microbatch: torch.Tensor, steps: int = 1) -> None:
                 dist.send(bucket.tensor, dst=rank + partner_offset)
                 dist.barrier()
         else:
-            if nvshmem_available() and bucket.handle is not None:
+            if use_symmem and bucket.handle is not None:
                 dist.barrier()
                 remote = bucket.handle.get_buffer(rank)
                 microbatch = remote.view_as(microbatch)
@@ -393,9 +404,12 @@ def demo_pipeline_parallel(microbatch: torch.Tensor, steps: int = 1) -> None:
                 dist.barrier()
                 microbatch = recv_buf.view_as(microbatch)
             microbatch = stage1(microbatch)
+        if not use_symmem and bucket is not None:
+            bucket.close()
 
     dist.barrier()
-    bucket.close()
+    if bucket is not None:
+        bucket.close()
     if rank == 0:
         print("[pipeline] completed forward pass with NVSHMEM handoff")
 
