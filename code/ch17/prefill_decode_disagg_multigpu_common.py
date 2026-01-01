@@ -1,17 +1,13 @@
-"""Baseline disaggregated prefill/decode benchmark (multi-GPU torchrun).
-
-Chapter 17: Scaling Disaggregated Prefill and Decode Pipelines
-
-Baseline behavior is serialized: decode waits until all prefills complete.
-"""
+"""Shared multi-GPU disaggregated prefill/decode helpers (Chapter 17)."""
 
 from __future__ import annotations
 
-import argparse
+import inspect
 import os
 import sys
 import time
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -33,14 +29,23 @@ from core.harness.benchmark_harness import (
 )
 
 
+class HandoffMode(str, Enum):
+    SERIAL = "serial"
+    OVERLAP = "overlap"
+    BATCHED = "batched"
+
+
 @dataclass(frozen=True)
 class PrefillDecodeConfig:
-    hidden_size: int = 3072
-    num_layers: int = 6
+    hidden_size: int = 2048
+    num_layers: int = 4
     batch_size: int = 2
     requests_per_rank: int = 24
-    context_window: int = 1024
-    decode_tokens: int = 384
+    context_window: int = 1536
+    decode_tokens: int = 512
+    transfer_group: int = 4
+    sync_per_request: bool = False
+    barrier_per_request: bool = False
     dtype: torch.dtype = torch.bfloat16
 
     @property
@@ -73,8 +78,8 @@ class TinyPrefillDecode(nn.Module):
         for layer in self.layers:
             x = torch.relu(layer(x))
         logits = self.proj(x)
-        kv_cache = x
-        seed = logits[:, -1, :]
+        kv_cache = x.contiguous()
+        seed = logits[:, -1, :].contiguous()
         return kv_cache, seed
 
     def decode(self, seed: torch.Tensor, kv_cache: torch.Tensor, decode_tokens: int) -> torch.Tensor:
@@ -94,7 +99,7 @@ def _resolve_world_size() -> int:
         raise RuntimeError("CUDA required for disaggregated prefill/decode")
     world_size = torch.cuda.device_count()
     if world_size < 2:
-        raise RuntimeError("prefill_decode_disagg_multigpu requires >=2 GPUs.")
+        raise RuntimeError("disaggregated prefill/decode requires >=2 GPUs")
     return world_size
 
 
@@ -199,7 +204,7 @@ def _run_decode(
 def _run_torchrun_worker(
     cfg: PrefillDecodeConfig,
     *,
-    overlap: bool,
+    handoff_mode: HandoffMode,
     label: str,
     iters: int,
     warmup: int,
@@ -207,7 +212,7 @@ def _run_torchrun_worker(
 ) -> None:
     rank, world_size, device = _init_distributed()
     if world_size < 2:
-        raise RuntimeError("prefill_decode_disagg_multigpu requires >=2 GPUs.")
+        raise RuntimeError("disaggregated prefill/decode requires >=2 GPUs")
     if torch.cuda.device_count() < world_size:
         raise RuntimeError(
             f"torchrun world_size={world_size} exceeds visible GPUs ({torch.cuda.device_count()})."
@@ -232,26 +237,70 @@ def _run_torchrun_worker(
         else -1
     )
     device_index = 0 if device.index is None else int(device.index)
+    use_overlap = handoff_mode == HandoffMode.OVERLAP
+    use_batched = handoff_mode == HandoffMode.BATCHED
+    comm_stream = torch.cuda.Stream(device=device, priority=1) if use_overlap else None
 
     def _barrier() -> None:
         dist.barrier(device_ids=[device_index])
 
-    def _batch_send(kv_cache: torch.Tensor, seed: torch.Tensor, dst: int, group: dist.ProcessGroup) -> None:
-        ops = [
-            dist.P2POp(dist.isend, kv_cache, dst, group=group),
-            dist.P2POp(dist.isend, seed, dst, group=group),
-        ]
-        reqs = dist.batch_isend_irecv(ops)
-        for req in reqs:
-            req.wait()
+    def _pair_barrier(group: dist.ProcessGroup) -> None:
+        dist.barrier(group=group, device_ids=[device_index])
 
-    def _batch_recv(kv_buf: torch.Tensor, seed_buf: torch.Tensor, src: int, group: dist.ProcessGroup) -> None:
-        ops = [
-            dist.P2POp(dist.irecv, kv_buf, src, group=group),
-            dist.P2POp(dist.irecv, seed_buf, src, group=group),
-        ]
-        reqs = dist.batch_isend_irecv(ops)
-        for req in reqs:
+    def _batch_isend(
+        kv_cache: torch.Tensor,
+        seed: torch.Tensor,
+        dst: int,
+        group: dist.ProcessGroup,
+        *,
+        ready_event: Optional[torch.cuda.Event] = None,
+    ) -> List[dist.Work]:
+        if comm_stream is None:
+            raise RuntimeError("comm_stream unavailable for overlap sends")
+        with torch.cuda.stream(comm_stream):
+            if ready_event is not None:
+                comm_stream.wait_event(ready_event)
+            ops = [
+                dist.P2POp(dist.isend, kv_cache, dst, group=group),
+                dist.P2POp(dist.isend, seed, dst, group=group),
+            ]
+            return dist.batch_isend_irecv(ops)
+
+    def _batch_irecv(
+        kv_buf: torch.Tensor,
+        seed_buf: torch.Tensor,
+        src: int,
+        group: dist.ProcessGroup,
+    ) -> List[dist.Work]:
+        if comm_stream is None:
+            raise RuntimeError("comm_stream unavailable for overlap receives")
+        with torch.cuda.stream(comm_stream):
+            ops = [
+                dist.P2POp(dist.irecv, kv_buf, src, group=group),
+                dist.P2POp(dist.irecv, seed_buf, src, group=group),
+            ]
+            return dist.batch_isend_irecv(ops)
+
+    def _send_blocking(
+        kv_cache: torch.Tensor,
+        seed: torch.Tensor,
+        dst: int,
+        group: dist.ProcessGroup,
+    ) -> None:
+        dist.send(kv_cache, dst, group=group)
+        dist.send(seed, dst, group=group)
+
+    def _recv_blocking(
+        kv_buf: torch.Tensor,
+        seed_buf: torch.Tensor,
+        src: int,
+        group: dist.ProcessGroup,
+    ) -> None:
+        dist.recv(kv_buf, src, group=group)
+        dist.recv(seed_buf, src, group=group)
+
+    def _wait_handles(handles: List[dist.Work]) -> None:
+        for req in handles:
             req.wait()
 
     torch.manual_seed(42)
@@ -270,24 +319,161 @@ def _run_torchrun_worker(
             dtype=cfg.dtype,
         )
 
+    assigned_prefills: List[int] = []
+
+    recv_kv_batches: dict[int, torch.Tensor] = {}
+    recv_seed_batches: dict[int, torch.Tensor] = {}
+    decode_batch_buffers: dict[int, List[Tuple[torch.Tensor, torch.Tensor, int]]] = {}
+    group_size = max(1, min(cfg.transfer_group, cfg.requests_per_rank))
+    group_slices = [
+        (start, min(group_size, cfg.requests_per_rank - start))
+        for start in range(0, cfg.requests_per_rank, group_size)
+    ]
+
+    if not is_prefill:
+        assigned_prefills = _decode_assigned_prefills(rank, prefill_ranks, decode_ranks)
+        if use_overlap:
+            for src_rank in assigned_prefills:
+                decode_batch_buffers[src_rank] = []
+                for _, group_len in group_slices:
+                    kv_group = torch.empty(
+                        (group_len, cfg.batch_size, cfg.context_window, cfg.hidden_size),
+                        device=device,
+                        dtype=cfg.dtype,
+                    )
+                    seed_group = torch.empty(
+                        (group_len, cfg.batch_size, cfg.hidden_size),
+                        device=device,
+                        dtype=cfg.dtype,
+                    )
+                    decode_batch_buffers[src_rank].append((kv_group, seed_group, group_len))
+        elif use_batched:
+            for src_rank in assigned_prefills:
+                recv_kv_batches[src_rank] = torch.empty(
+                    (cfg.requests_per_rank, cfg.batch_size, cfg.context_window, cfg.hidden_size),
+                    device=device,
+                    dtype=cfg.dtype,
+                )
+                recv_seed_batches[src_rank] = torch.empty(
+                    (cfg.requests_per_rank, cfg.batch_size, cfg.hidden_size),
+                    device=device,
+                    dtype=cfg.dtype,
+                )
+
     def run_iteration() -> List[torch.Tensor]:
         if is_prefill:
-            kv_chunks, seed_chunks = _run_prefill(cfg, model, prompts)
-            if overlap:
-                for kv_cache, seed in zip(kv_chunks, seed_chunks):
-                    _batch_send(kv_cache, seed, peer_rank, pair_groups[rank])
+            if use_overlap:
+                handles: List[dist.Work] = []
+                inflight: List[torch.Tensor] = []
+                with torch.no_grad():
+                    for start, group_len in group_slices:
+                        group_prompts = prompts[start:start + group_len].reshape(
+                            group_len * cfg.batch_size,
+                            cfg.context_window,
+                            cfg.hidden_size,
+                        )
+                        kv_cache, seed = model.prefill(group_prompts)
+                        kv_group = kv_cache.view(
+                            group_len,
+                            cfg.batch_size,
+                            cfg.context_window,
+                            cfg.hidden_size,
+                        )
+                        seed_group = seed.view(group_len, cfg.batch_size, cfg.hidden_size)
+                        inflight.append(kv_group)
+                        inflight.append(seed_group)
+                        ready = torch.cuda.Event()
+                        ready.record()
+                        handles.extend(
+                            _batch_isend(
+                                kv_group,
+                                seed_group,
+                                peer_rank,
+                                pair_groups[rank],
+                                ready_event=ready,
+                            )
+                        )
+                _wait_handles(handles)
+            elif use_batched:
+                with torch.no_grad():
+                    batch_prompts = prompts.reshape(
+                        cfg.requests_per_rank * cfg.batch_size,
+                        cfg.context_window,
+                        cfg.hidden_size,
+                    )
+                    kv_cache, seed = model.prefill(batch_prompts)
+                    kv_batch = kv_cache.view(
+                        cfg.requests_per_rank,
+                        cfg.batch_size,
+                        cfg.context_window,
+                        cfg.hidden_size,
+                    )
+                    seed_batch = seed.view(
+                        cfg.requests_per_rank,
+                        cfg.batch_size,
+                        cfg.hidden_size,
+                    )
+                handles = dist.batch_isend_irecv([
+                    dist.P2POp(dist.isend, kv_batch, peer_rank, group=pair_groups[rank]),
+                    dist.P2POp(dist.isend, seed_batch, peer_rank, group=pair_groups[rank]),
+                ])
+                _wait_handles(handles)
             else:
+                kv_chunks, seed_chunks = _run_prefill(cfg, model, prompts)
                 for kv_cache, seed in zip(kv_chunks, seed_chunks):
-                    _batch_send(kv_cache, seed, peer_rank, pair_groups[rank])
-                torch.cuda.synchronize(device)
-            if not overlap:
-                _barrier()
+                    _send_blocking(kv_cache, seed, peer_rank, pair_groups[rank])
+                    if cfg.sync_per_request:
+                        torch.cuda.synchronize(device)
+                    if cfg.barrier_per_request:
+                        _pair_barrier(pair_groups[rank])
             return []
 
-        kv_chunks = []
-        seed_chunks = []
-        assigned_prefills = _decode_assigned_prefills(rank, prefill_ranks, decode_ranks)
-        outputs = []
+        outputs: List[torch.Tensor] = []
+        if use_overlap:
+            recv_entries: List[Tuple[List[dist.Work], torch.Tensor, torch.Tensor, int]] = []
+            for src_rank in assigned_prefills:
+                for kv_group, seed_group, group_len in decode_batch_buffers[src_rank]:
+                    handles = _batch_irecv(
+                        kv_group,
+                        seed_group,
+                        src_rank,
+                        pair_groups[src_rank],
+                    )
+                    recv_entries.append((handles, kv_group, seed_group, group_len))
+            for handles, kv_group, seed_group, group_len in recv_entries:
+                _wait_handles(handles)
+                flat_seed = seed_group.reshape(group_len * cfg.batch_size, cfg.hidden_size)
+                flat_kv = kv_group.reshape(group_len * cfg.batch_size, cfg.context_window, cfg.hidden_size)
+                decoded = model.decode(flat_seed, flat_kv, cfg.decode_tokens)
+                outputs.extend(decoded.view(group_len, cfg.batch_size, cfg.hidden_size).unbind(0))
+            return outputs
+
+        if use_batched:
+            for src_rank in assigned_prefills:
+                kv_batch = recv_kv_batches[src_rank]
+                seed_batch = recv_seed_batches[src_rank]
+                handles = dist.batch_isend_irecv([
+                    dist.P2POp(dist.irecv, kv_batch, src_rank, group=pair_groups[src_rank]),
+                    dist.P2POp(dist.irecv, seed_batch, src_rank, group=pair_groups[src_rank]),
+                ])
+                _wait_handles(handles)
+                flat_seed = seed_batch.reshape(
+                    cfg.requests_per_rank * cfg.batch_size,
+                    cfg.hidden_size,
+                )
+                flat_kv = kv_batch.reshape(
+                    cfg.requests_per_rank * cfg.batch_size,
+                    cfg.context_window,
+                    cfg.hidden_size,
+                )
+                decoded = model.decode(flat_seed, flat_kv, cfg.decode_tokens)
+                outputs.extend(
+                    decoded.view(cfg.requests_per_rank, cfg.batch_size, cfg.hidden_size).unbind(0)
+                )
+            return outputs
+
+        kv_chunks: List[torch.Tensor] = []
+        seed_chunks: List[torch.Tensor] = []
         for src_rank in assigned_prefills:
             for _ in range(cfg.requests_per_rank):
                 kv_buf = torch.empty(
@@ -296,19 +482,22 @@ def _run_torchrun_worker(
                     dtype=cfg.dtype,
                 )
                 seed_buf = torch.empty(
-                    (cfg.batch_size, cfg.hidden_size), device=device, dtype=cfg.dtype
+                    (cfg.batch_size, cfg.hidden_size),
+                    device=device,
+                    dtype=cfg.dtype,
                 )
-                _batch_recv(kv_buf, seed_buf, src_rank, pair_groups[src_rank])
-                if overlap:
-                    outputs.append(model.decode(seed_buf, kv_buf, cfg.decode_tokens))
-                else:
-                    kv_chunks.append(kv_buf)
-                    seed_chunks.append(seed_buf)
-
-        if overlap:
-            return outputs
-        torch.cuda.synchronize(device)
-        _barrier()
+                _recv_blocking(
+                    kv_buf,
+                    seed_buf,
+                    src_rank,
+                    pair_groups[src_rank],
+                )
+                if cfg.sync_per_request:
+                    torch.cuda.synchronize(device)
+                if cfg.barrier_per_request:
+                    _pair_barrier(pair_groups[src_rank])
+                kv_chunks.append(kv_buf)
+                seed_chunks.append(seed_buf)
         return _run_decode(cfg, model, kv_chunks, seed_chunks)
 
     _barrier()
@@ -345,7 +534,7 @@ class _PrefillDecodeMultiGPUBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def __init__(
         self,
         *,
-        overlap: bool,
+        handoff_mode: HandoffMode,
         label: str,
         cfg: Optional[PrefillDecodeConfig] = None,
         prefill_ranks: Optional[int] = None,
@@ -357,7 +546,8 @@ class _PrefillDecodeMultiGPUBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.decode_ranks = self.world_size - self.prefill_ranks
         if self.decode_ranks < 1:
             raise RuntimeError("decode_ranks must be >= 1 for disaggregated prefill/decode")
-        self.overlap = bool(overlap)
+        self.handoff_mode = handoff_mode
+        self.overlap = handoff_mode == HandoffMode.OVERLAP
         self.label = label
         self._pairs: List[_LocalPair] = []
         self._output: Optional[torch.Tensor] = None
@@ -534,14 +724,17 @@ class _PrefillDecodeMultiGPUBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def get_torchrun_spec(self, config: Optional[BenchmarkConfig] = None) -> TorchrunLaunchSpec:
         self._prepare_verification_payload()
+        module = inspect.getmodule(self.__class__)
+        script_path = Path(module.__file__).resolve() if module and module.__file__ else Path(__file__).resolve()
+        master_port = os.environ.get("MASTER_PORT", "29517")
         script_args = ["--prefill-ranks", str(self.prefill_ranks)]
         return TorchrunLaunchSpec(
-            script_path=Path(__file__).resolve(),
+            script_path=script_path,
             script_args=script_args,
             env={
                 "NCCL_DEBUG": "WARN",
                 "OMP_NUM_THREADS": "1",
-                "MASTER_PORT": "29517",
+                "MASTER_PORT": master_port,
             },
             parse_rank0_only=True,
             multi_gpu_required=True,
@@ -551,43 +744,3 @@ class _PrefillDecodeMultiGPUBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 "warmup": "--warmup",
             },
         )
-
-
-class BaselinePrefillDecodeDisaggMultiGPUBenchmark(_PrefillDecodeMultiGPUBenchmark):
-    """Serialized prefill then decode across multi-GPU ranks."""
-
-    def __init__(self) -> None:
-        super().__init__(overlap=False, label="baseline_prefill_decode_disagg_multigpu")
-
-
-def get_benchmark() -> BaseBenchmark:
-    return BaselinePrefillDecodeDisaggMultiGPUBenchmark()
-
-
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--iters", type=int, default=4)
-    parser.add_argument("--warmup", type=int, default=3)
-    parser.add_argument(
-        "--prefill-ranks",
-        type=int,
-        default=None,
-        help="Number of prefill ranks (defaults to world_size//2 when even).",
-    )
-    return parser.parse_args()
-
-
-def main() -> None:
-    args = _parse_args()
-    _run_torchrun_worker(
-        PrefillDecodeConfig(),
-        overlap=False,
-        label="baseline_prefill_decode_disagg_multigpu",
-        iters=int(args.iters),
-        warmup=int(args.warmup),
-        prefill_ranks=args.prefill_ranks,
-    )
-
-
-if __name__ == "__main__":
-    main()

@@ -126,7 +126,7 @@ class DisaggregatedInferenceSingleGPUBenchmark(VerificationPayloadMixin, BaseBen
         outputs: List[torch.Tensor] = []
         with torch.no_grad():
             for idx in range(self.cfg.requests_per_rank):
-                prompt = self.prompts[idx : idx + 1]
+                prompt = self.prompts[idx]
                 hidden, logits = self.prefill_model.prefill(prompt)
                 seed_tokens = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
                 if self.use_host_staging:
@@ -170,8 +170,8 @@ class DisaggregatedInferenceSingleGPUBenchmark(VerificationPayloadMixin, BaseBen
             output_tolerance=(0.0, 0.0),
             signature_overrides={
                 "world_size": 1,
-                "pipeline_stages": 2,
-                "pipeline_stage_boundaries": [(0, 0), (0, 0)],
+                "pipeline_stages": 1,
+                "pipeline_stage_boundaries": [(0, 0)],
                 "per_rank_batch_size": self.cfg.requests_per_rank,
                 "collective_type": "local_copy",
             },

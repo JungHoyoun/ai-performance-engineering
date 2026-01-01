@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import argparse
 
-from ch17.baseline_prefill_decode_disagg_multigpu import (  # noqa: E402
+from ch17.prefill_decode_disagg_multigpu_common import (  # noqa: E402
+    HandoffMode,
     PrefillDecodeConfig,
     _PrefillDecodeMultiGPUBenchmark,
     _run_torchrun_worker,
@@ -17,10 +18,15 @@ from ch17.baseline_prefill_decode_disagg_multigpu import (  # noqa: E402
 from core.harness.benchmark_harness import BaseBenchmark  # noqa: E402
 
 TTFT_CONFIG = PrefillDecodeConfig(
+    hidden_size=1024,
+    num_layers=6,
+    batch_size=2,
+    requests_per_rank=24,
     context_window=4096,
-    decode_tokens=256,
-    batch_size=4,
-    requests_per_rank=32,
+    decode_tokens=512,
+    transfer_group=4,
+    sync_per_request=True,
+    barrier_per_request=True,
 )
 
 
@@ -31,7 +37,7 @@ class BaselinePrefillDecodeDisaggTTFTMultiGPUBenchmark(_PrefillDecodeMultiGPUBen
 
     def __init__(self) -> None:
         super().__init__(
-            overlap=False,
+            handoff_mode=HandoffMode.SERIAL,
             label="baseline_prefill_decode_disagg_ttft_multigpu",
             cfg=TTFT_CONFIG,
         )
@@ -58,7 +64,7 @@ def main() -> None:
     args = _parse_args()
     _run_torchrun_worker(
         TTFT_CONFIG,
-        overlap=False,
+        handoff_mode=HandoffMode.SERIAL,
         label="baseline_prefill_decode_disagg_ttft_multigpu",
         iters=int(args.iters),
         warmup=int(args.warmup),

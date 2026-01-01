@@ -38,6 +38,7 @@ _DEFAULT_BATCH = 8
 _DEFAULT_SEQ = 4096
 _DEFAULT_HIDDEN = 4096
 _DEFAULT_LAYERS = 6
+_AUX_PASSES = 2
 
 
 def _resolve_world_size() -> int:
@@ -124,7 +125,9 @@ def _run_worker(
             comm_stream.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(comm_stream):
                 work = dist.all_gather(gather_list, local_out, async_op=True)
-            aux_out = aux_layers[layer_idx](x)
+            aux_out = x
+            for _ in range(_AUX_PASSES):
+                aux_out = aux_layers[layer_idx](aux_out)
             work.wait()
             full_out = torch.cat(gather_list, dim=-1)
             proj_out = proj_layers[layer_idx](full_out)
@@ -215,7 +218,9 @@ class OptimizedTensorParallelBenchmark(VerificationPayloadMixin, BaseBenchmark):
         for layer_idx in range(_DEFAULT_LAYERS):
             local_out = self._shard_layers[layer_idx](x)
             full_out = torch.cat([local_out] * self._world_size, dim=-1)
-            aux_out = self._aux_layers[layer_idx](x)
+            aux_out = x
+            for _ in range(_AUX_PASSES):
+                aux_out = self._aux_layers[layer_idx](aux_out)
             proj_out = self._proj_layers[layer_idx](full_out)
             x = proj_out + aux_out
         self._output = x

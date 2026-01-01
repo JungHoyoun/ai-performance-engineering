@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import argparse
 
-from ch17.baseline_prefill_decode_disagg_multigpu import (  # noqa: E402
+from ch17.prefill_decode_disagg_multigpu_common import (  # noqa: E402
+    HandoffMode,
     _PrefillDecodeMultiGPUBenchmark,
     _run_torchrun_worker,
 )
@@ -24,7 +25,7 @@ class OptimizedPrefillDecodeDisaggTTFTMultiGPUBenchmark(_PrefillDecodeMultiGPUBe
 
     def __init__(self) -> None:
         super().__init__(
-            overlap=True,
+            handoff_mode=HandoffMode.OVERLAP,
             label="optimized_prefill_decode_disagg_ttft_multigpu",
             cfg=TTFT_CONFIG,
         )
@@ -51,7 +52,7 @@ def main() -> None:
     args = _parse_args()
     _run_torchrun_worker(
         TTFT_CONFIG,
-        overlap=True,
+        handoff_mode=HandoffMode.OVERLAP,
         label="optimized_prefill_decode_disagg_ttft_multigpu",
         iters=int(args.iters),
         warmup=int(args.warmup),

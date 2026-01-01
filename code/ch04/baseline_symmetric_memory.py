@@ -11,7 +11,7 @@ def get_benchmark() -> BaseBenchmark:
     bench = SingleGPUTransferBenchmark(
         size_mb=96,
         inner_iterations=32,
-        num_chunks=16,
+        num_chunks=2,
         use_streams=False,
         sync_per_chunk=True,
         collective_type="symmetric_memory",

@@ -1,8 +1,8 @@
-"""Optimized TPOT/long-output disaggregated prefill/decode benchmark (multi-GPU torchrun).
+"""Baseline batched-handoff disaggregated prefill/decode benchmark (multi-GPU torchrun).
 
 Chapter 17: Scaling Disaggregated Prefill and Decode Pipelines
 
-TPOT focus: overlap transfers with long decode.
+Batched handoff focus: per-request blocking handoff to contrast with grouped transfers.
 """
 
 from __future__ import annotations
@@ -11,28 +11,40 @@ import argparse
 
 from ch17.prefill_decode_disagg_multigpu_common import (  # noqa: E402
     HandoffMode,
+    PrefillDecodeConfig,
     _PrefillDecodeMultiGPUBenchmark,
     _run_torchrun_worker,
 )
-from ch17.baseline_prefill_decode_disagg_tpot_long_multigpu import TPOT_LONG_CONFIG  # noqa: E402
 from core.harness.benchmark_harness import BaseBenchmark  # noqa: E402
 
+BATCHED_CONFIG = PrefillDecodeConfig(
+    hidden_size=512,
+    num_layers=2,
+    batch_size=1,
+    requests_per_rank=256,
+    context_window=512,
+    decode_tokens=128,
+    transfer_group=1,
+    sync_per_request=True,
+    barrier_per_request=True,
+)
 
-class OptimizedPrefillDecodeDisaggTPOTLongMultiGPUBenchmark(_PrefillDecodeMultiGPUBenchmark):
-    """Pipelined prefill/decode overlap (TPOT/long-output focused)."""
+
+class BaselinePrefillDecodeDisaggBatchedMultiGPUBenchmark(_PrefillDecodeMultiGPUBenchmark):
+    """Serialized prefill then decode with per-request handoff (batched baseline)."""
 
     multi_gpu_required = True
 
     def __init__(self) -> None:
         super().__init__(
-            handoff_mode=HandoffMode.OVERLAP,
-            label="optimized_prefill_decode_disagg_tpot_long_multigpu",
-            cfg=TPOT_LONG_CONFIG,
+            handoff_mode=HandoffMode.SERIAL,
+            label="baseline_prefill_decode_disagg_batched_multigpu",
+            cfg=BATCHED_CONFIG,
         )
 
 
 def get_benchmark() -> BaseBenchmark:
-    return OptimizedPrefillDecodeDisaggTPOTLongMultiGPUBenchmark()
+    return BaselinePrefillDecodeDisaggBatchedMultiGPUBenchmark()
 
 
 def _parse_args() -> argparse.Namespace:
@@ -51,9 +63,9 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     _run_torchrun_worker(
-        TPOT_LONG_CONFIG,
-        handoff_mode=HandoffMode.OVERLAP,
-        label="optimized_prefill_decode_disagg_tpot_long_multigpu",
+        BATCHED_CONFIG,
+        handoff_mode=HandoffMode.SERIAL,
+        label="baseline_prefill_decode_disagg_batched_multigpu",
         iters=int(args.iters),
         warmup=int(args.warmup),
         prefill_ranks=args.prefill_ranks,

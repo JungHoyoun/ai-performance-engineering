@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from core.harness.benchmark_harness import BaseBenchmark
 
-from ch17.baseline_prefill_decode_disagg_multigpu import PrefillDecodeConfig
+from ch17.prefill_decode_disagg_multigpu_common import PrefillDecodeConfig
 from ch17.prefill_decode_disagg_single_common import PrefillDecodeSingleGPUBenchmark, attach_benchmark_metadata
 
 TPOT_LONG_CONFIG = PrefillDecodeConfig(

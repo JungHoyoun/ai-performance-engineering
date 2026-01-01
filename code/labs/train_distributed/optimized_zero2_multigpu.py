@@ -144,8 +144,8 @@ def main():
 
         optimizer = ZeroRedundancyOptimizer(
             ddp_model.parameters(),
-            overlap_with_ddp=False,
-            parameters_as_bucket_view=False,
+            overlap_with_ddp=True,
+            parameters_as_bucket_view=True,
             **_optimizer_cfg(ddp_model.parameters(), args.learning_rate),
         )
 

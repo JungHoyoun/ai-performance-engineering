@@ -35,6 +35,7 @@ logger = get_logger(__name__)
 
 _DEFAULT_BATCH = 256
 _DEFAULT_HIDDEN = 4096
+_AUX_PASSES = 2
 
 try:
     from torch.distributed._functional_collectives import all_reduce as functional_all_reduce
@@ -104,7 +105,9 @@ def _run_worker(iters: int, warmup: int, batch: int, hidden: int) -> None:
                     reduceOp="avg",
                     group=dist.group.WORLD,
                 )
-            aux_out = aux_block(inputs)
+            aux_out = inputs
+            for _ in range(_AUX_PASSES):
+                aux_out = aux_block(aux_out)
             torch.cuda.current_stream().wait_stream(comm_stream)
             _ = reduced + aux_out
 
@@ -170,7 +173,9 @@ class OptimizedTorchcommsBenchmark(VerificationPayloadMixin, BaseBenchmark):
             raise RuntimeError("setup() must run before benchmark_fn()")
         with torch.no_grad():
             comm_out = self._comm_block(self._input)
-            aux_out = self._aux_block(self._input)
+            aux_out = self._input
+            for _ in range(_AUX_PASSES):
+                aux_out = self._aux_block(aux_out)
             self._output = comm_out + aux_out
 
     def capture_verification_payload(self) -> None:

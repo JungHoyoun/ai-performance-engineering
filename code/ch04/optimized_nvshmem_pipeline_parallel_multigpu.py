@@ -1,6 +1,6 @@
 """Optimized NVSHMEM pipeline parallel wrapper with NVLink5/NVLS tuning; skips on <2 GPUs.
 
-Enables symmetric-memory activation handoff for the same 1F1B schedule used by the baseline.
+Uses an interleaved schedule with virtual stages to reduce pipeline bubbles.
 """
 
 from __future__ import annotations
@@ -47,6 +47,28 @@ def _configure_blackwell_nccl() -> None:
         configure_nccl_for_blackwell(verbose=False)
 
 
+def _virtualization_detected() -> bool:
+    try:
+        cpuinfo = Path("/proc/cpuinfo").read_text().lower()
+        if "hypervisor" in cpuinfo:
+            return True
+    except OSError:
+        pass
+    try:
+        product_name = Path("/sys/devices/virtual/dmi/id/product_name").read_text().lower()
+        if any(tag in product_name for tag in ("qemu", "kvm", "vmware", "virtualbox", "hyper-v")):
+            return True
+    except OSError:
+        pass
+    return False
+
+
+def _enable_symmem_pipeline() -> bool:
+    if _virtualization_detected():
+        return False
+    return symmetric_memory_available()
+
+
 class OptimizedNVSHMEMPipelineParallelMultiGPU(VerificationPayloadMixin, BaseBenchmark):
     multi_gpu_required = True
     def __init__(self) -> None:
@@ -66,15 +88,17 @@ class OptimizedNVSHMEMPipelineParallelMultiGPU(VerificationPayloadMixin, BaseBen
         original_argv = sys.argv[:]
         original_disable = os.environ.get("AISP_DISABLE_SYMMEM_PIPELINE")
         try:
-            os.environ["AISP_DISABLE_SYMMEM_PIPELINE"] = "0" if symmetric_memory_available() else "1"
+            os.environ["AISP_DISABLE_SYMMEM_PIPELINE"] = "0" if _enable_symmem_pipeline() else "1"
             sys.argv = [
                 original_argv[0],
                 "--schedule",
-                "1f1b",
+                "interleaved",
                 "--batch-size",
                 "32",
                 "--num-microbatches",
-                "8",
+                "16",
+                "--virtual-stages",
+                "2",
                 "--seq-len",
                 "512",
                 "--hidden-dim",

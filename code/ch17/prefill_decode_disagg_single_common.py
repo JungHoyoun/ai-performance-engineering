@@ -9,7 +9,7 @@ import torch
 from core.benchmark.verification import PrecisionFlags
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from core.benchmark.verification_mixin import VerificationPayloadMixin
-from ch17.baseline_prefill_decode_disagg_multigpu import PrefillDecodeConfig, TinyPrefillDecode
+from ch17.prefill_decode_disagg_multigpu_common import PrefillDecodeConfig, TinyPrefillDecode
 
 
 class PrefillDecodeSingleGPUBenchmark(VerificationPayloadMixin, BaseBenchmark):
@@ -113,8 +113,8 @@ class PrefillDecodeSingleGPUBenchmark(VerificationPayloadMixin, BaseBenchmark):
             output_tolerance=(0.0, 0.0),
             signature_overrides={
                 "world_size": 1,
-                "pipeline_stages": 2,
-                "pipeline_stage_boundaries": [(0, 0), (0, 0)],
+                "pipeline_stages": 1,
+                "pipeline_stage_boundaries": [(0, 0)],
                 "per_rank_batch_size": self.cfg.requests_per_rank,
                 "collective_type": "local_copy",
             },

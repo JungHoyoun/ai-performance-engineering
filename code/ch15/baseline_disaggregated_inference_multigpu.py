@@ -10,6 +10,7 @@ The optimized pair overlaps prefill and decode via pipelined transfers.
 from __future__ import annotations
 
 import argparse
+import inspect
 import os
 import sys
 import time
@@ -48,9 +49,9 @@ class DisaggConfig:
     num_experts: int = 16
     top_k: int = 2
     batch_size: int = 2
-    requests_per_rank: int = 16
-    context_window: int = 1024
-    decode_tokens: int = 512
+    requests_per_rank: int = 12
+    context_window: int = 1536
+    decode_tokens: int = 128
     dtype: torch.dtype = torch.bfloat16
 
     @property
@@ -117,11 +118,11 @@ def _run_prefill(
     seed_chunks: List[torch.Tensor] = []
     with torch.no_grad():
         for req_idx in range(cfg.requests_per_rank):
-            request_prompt = prompts[req_idx : req_idx + 1]
+            request_prompt = prompts[req_idx]
             hidden, logits = model.prefill(request_prompt)
             seed_tokens = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
-            kv_chunks.append(hidden)
-            seed_chunks.append(seed_tokens)
+            kv_chunks.append(hidden.contiguous())
+            seed_chunks.append(seed_tokens.contiguous())
     return kv_chunks, seed_chunks
 
 
@@ -201,23 +202,21 @@ def _run_torchrun_worker(
             ]
             return dist.batch_isend_irecv(ops)
 
-    def _batch_irecv(
-        kv_buf: torch.Tensor,
-        seed_buf: torch.Tensor,
-        *,
-        record_event: bool = False,
-    ) -> Tuple[List[dist.Work], Optional[torch.cuda.Event]]:
+    def _send_blocking(kv_cache: torch.Tensor, seed: torch.Tensor) -> None:
+        dist.send(kv_cache, peer_rank, group=pair_groups[pair_id])
+        dist.send(seed, peer_rank, group=pair_groups[pair_id])
+
+    def _batch_irecv(kv_buf: torch.Tensor, seed_buf: torch.Tensor) -> List[dist.Work]:
         with torch.cuda.stream(comm_stream):
             ops = [
                 dist.P2POp(dist.irecv, kv_buf, peer_rank, group=pair_groups[pair_id]),
                 dist.P2POp(dist.irecv, seed_buf, peer_rank, group=pair_groups[pair_id]),
             ]
-            handles = dist.batch_isend_irecv(ops)
-            ready_event = None
-            if record_event:
-                ready_event = torch.cuda.Event()
-                ready_event.record()
-            return handles, ready_event
+            return dist.batch_isend_irecv(ops)
+
+    def _recv_blocking(kv_buf: torch.Tensor, seed_buf: torch.Tensor) -> None:
+        dist.recv(kv_buf, peer_rank, group=pair_groups[pair_id])
+        dist.recv(seed_buf, peer_rank, group=pair_groups[pair_id])
 
     def _wait_handles(handles: List[dist.Work]) -> None:
         for req in handles:
@@ -234,7 +233,7 @@ def _run_torchrun_worker(
         prompts = torch.randint(
             0,
             cfg.vocab_size,
-            (cfg.requests_per_rank, cfg.context_window),
+            (cfg.requests_per_rank, cfg.batch_size, cfg.context_window),
             device=device,
             dtype=torch.long,
         )
@@ -273,58 +272,50 @@ def _run_torchrun_worker(
                 inflight_tensors: List[torch.Tensor] = []
                 with torch.no_grad():
                     for req_idx in range(cfg.requests_per_rank):
-                        request_prompt = prompts[req_idx : req_idx + 1]
+                        request_prompt = prompts[req_idx]
                         hidden, logits = model.prefill(request_prompt)
                         seed_tokens = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
-                        inflight_tensors.append(hidden)
-                        inflight_tensors.append(seed_tokens)
+                        inflight_tensors.append(hidden.contiguous())
+                        inflight_tensors.append(seed_tokens.contiguous())
                         ready = torch.cuda.Event()
                         ready.record()
-                        handles.extend(_batch_isend(hidden, seed_tokens, ready_event=ready))
+                        handles.extend(
+                            _batch_isend(inflight_tensors[-2], inflight_tensors[-1], ready_event=ready)
+                        )
                 _wait_handles(handles)
             else:
                 kv_chunks, seed_chunks = _run_prefill(cfg, model, prompts)
                 for kv_prompt, seed_tokens in zip(kv_chunks, seed_chunks):
-                    ready = torch.cuda.Event()
-                    ready.record()
-                    handles = _batch_isend(kv_prompt, seed_tokens, ready_event=ready)
-                    _wait_handles(handles)
+                    _send_blocking(kv_prompt, seed_tokens)
                     torch.cuda.synchronize(device)
+                    # Naive handoff: sync per request to keep baseline fully serialized.
+                    _barrier()
             return []
 
         if overlap:
-            recv_handles: List[dist.Work] = []
-            recv_events: List[torch.cuda.Event] = []
+            recv_entries: List[Tuple[List[dist.Work], torch.Tensor, torch.Tensor]] = []
             for kv_buf, seed_buf in zip(recv_kv_buffers, recv_seed_buffers):
-                handles, ready_event = _batch_irecv(kv_buf, seed_buf, record_event=True)
-                recv_handles.extend(handles)
-                if ready_event is None:
-                    raise RuntimeError("Missing ready event for overlap receive pipeline")
-                recv_events.append(ready_event)
+                handles = _batch_irecv(kv_buf, seed_buf)
+                recv_entries.append((handles, kv_buf, seed_buf))
             outputs: List[torch.Tensor] = []
-            compute_stream = torch.cuda.Stream(device=device)
-            with torch.cuda.stream(compute_stream):
-                with torch.no_grad():
-                    for req_idx in range(cfg.requests_per_rank):
-                        compute_stream.wait_event(recv_events[req_idx])
-                        kv_cache = kv_caches[req_idx]
-                        kv_cache[:, : cfg.context_window] = recv_kv_buffers[req_idx]
-                        tokens = recv_seed_buffers[req_idx]
-                        for step in range(cfg.decode_tokens):
-                            _, decode_logits = model.decode(
-                                tokens,
-                                kv_cache=kv_cache,
-                                position=cfg.context_window + step,
-                            )
-                            tokens = torch.argmax(decode_logits[:, -1, :], dim=-1, keepdim=True)
-                        outputs.append(tokens)
-            torch.cuda.current_stream(device).wait_stream(compute_stream)
-            _wait_handles(recv_handles)
+            with torch.no_grad():
+                for req_idx, (handles, kv_buf, seed_buf) in enumerate(recv_entries):
+                    _wait_handles(handles)
+                    kv_cache = kv_caches[req_idx]
+                    kv_cache[:, : cfg.context_window] = kv_buf
+                    tokens = seed_buf
+                    for step in range(cfg.decode_tokens):
+                        _, decode_logits = model.decode(
+                            tokens,
+                            kv_cache=kv_cache,
+                            position=cfg.context_window + step,
+                        )
+                        tokens = torch.argmax(decode_logits[:, -1, :], dim=-1, keepdim=True)
+                    outputs.append(tokens)
             return outputs
 
         kv_chunks: List[torch.Tensor] = []
         seed_chunks: List[torch.Tensor] = []
-        recv_handles: List[dist.Work] = []
         for _ in range(cfg.requests_per_rank):
             kv_buf = torch.empty(
                 (cfg.batch_size, cfg.context_window, cfg.hidden_size),
@@ -336,12 +327,12 @@ def _run_torchrun_worker(
                 device=device,
                 dtype=torch.long,
             )
+            _recv_blocking(kv_buf, seed_buf)
+            torch.cuda.synchronize(device)
+            # Naive handoff: sync per request to keep baseline fully serialized.
+            _barrier()
             kv_chunks.append(kv_buf)
             seed_chunks.append(seed_buf)
-            handles, _ = _batch_irecv(kv_buf, seed_buf)
-            recv_handles.extend(handles)
-        _wait_handles(recv_handles)
-        torch.cuda.synchronize(device)
         decoded = _run_decode(cfg, model, kv_chunks, seed_chunks, device)
         return decoded
 
@@ -420,7 +411,7 @@ class _DisaggregatedInferenceMultiGPUBenchmark(VerificationPayloadMixin, BaseBen
             prompts = torch.randint(
                 0,
                 self.cfg.vocab_size,
-                (self.cfg.requests_per_rank, self.cfg.context_window),
+                (self.cfg.requests_per_rank, self.cfg.batch_size, self.cfg.context_window),
                 device=prefill_device,
                 dtype=torch.long,
             )
@@ -530,8 +521,10 @@ class _DisaggregatedInferenceMultiGPUBenchmark(VerificationPayloadMixin, BaseBen
     def get_torchrun_spec(self, config: Optional[BenchmarkConfig] = None) -> TorchrunLaunchSpec:
         self._prepare_verification_payload()
         master_port = os.environ.get("MASTER_PORT", "29515")
+        module = inspect.getmodule(self.__class__)
+        script_path = Path(module.__file__).resolve() if module and module.__file__ else Path(__file__).resolve()
         return TorchrunLaunchSpec(
-            script_path=Path(__file__).resolve(),
+            script_path=script_path,
             script_args=[],
             env={
                 "OMP_NUM_THREADS": "1",

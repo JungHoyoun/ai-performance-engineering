@@ -35,6 +35,7 @@ logger = get_logger(__name__)
 
 _DEFAULT_BATCH = 256
 _DEFAULT_HIDDEN = 4096
+_AUX_PASSES = 2
 
 
 def _resolve_world_size() -> int:
@@ -83,7 +84,9 @@ def _run_worker(iters: int, warmup: int, batch: int, hidden: int) -> None:
         with torch.no_grad():
             comm_out = comm_block(inputs)
             dist.all_reduce(comm_out, op=dist.ReduceOp.AVG)
-            aux_out = aux_block(inputs)
+            aux_out = inputs
+            for _ in range(_AUX_PASSES):
+                aux_out = aux_block(aux_out)
             _ = comm_out + aux_out
 
     for _ in range(max(warmup, 0)):
@@ -148,7 +151,9 @@ class BaselineTorchcommsBenchmark(VerificationPayloadMixin, BaseBenchmark):
             raise RuntimeError("setup() must run before benchmark_fn()")
         with torch.no_grad():
             comm_out = self._comm_block(self._input)
-            aux_out = self._aux_block(self._input)
+            aux_out = self._input
+            for _ in range(_AUX_PASSES):
+                aux_out = self._aux_block(aux_out)
             self._output = comm_out + aux_out
 
     def capture_verification_payload(self) -> None:
