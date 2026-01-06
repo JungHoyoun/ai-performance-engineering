@@ -22,9 +22,9 @@ from datetime import datetime
 from collections import defaultdict
 import statistics
 import math
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 import threading
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 import copy
 
 # Force NVCC line info so Nsight/torch traces carry file/line metadata
@@ -1527,11 +1527,102 @@ def check_ncu_available() -> bool:
         return False
 
 
+def _is_torchrun_launch(config: Optional[BenchmarkConfig]) -> bool:
+    if config is None:
+        return False
+    launch_via = getattr(config, "launch_via", None)
+    if launch_via is None:
+        return False
+    if hasattr(launch_via, "value"):
+        launch_via = launch_via.value
+    return str(launch_via).lower() == "torchrun"
+
+
+def _pick_free_port() -> int:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _select_single_gpu_visible() -> str:
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if visible:
+        tokens = [tok.strip() for tok in visible.split(",") if tok.strip()]
+        return tokens[0] if tokens else "0"
+    return "0"
+
+
+def _resolve_expected_seed(config: Optional[BenchmarkConfig]) -> int:
+    if config is not None and getattr(config, "seed", None) is not None:
+        return int(config.seed)
+    return int(torch.initial_seed())
+
+
+def _resolve_expected_cuda_seed(config: Optional[BenchmarkConfig]) -> int:
+    if config is not None and getattr(config, "seed", None) is not None:
+        return int(config.seed)
+    return int(torch.cuda.initial_seed())
+
+
+def _build_torchrun_profile_command(
+    config: BenchmarkConfig,
+    wrapper_script_path: str,
+) -> Tuple[List[str], Dict[str, str]]:
+    nproc_per_node = getattr(config, "nproc_per_node", None) or torch.cuda.device_count() or 1
+    torchrun_cmd = [
+        "torchrun",
+        "--nproc_per_node",
+        str(nproc_per_node),
+    ]
+    if getattr(config, "nnodes", None):
+        torchrun_cmd.extend(["--nnodes", str(config.nnodes)])
+
+    rdzv_endpoint = getattr(config, "rdzv_endpoint", None)
+    if not rdzv_endpoint:
+        rdzv_endpoint = f"127.0.0.1:{_pick_free_port()}"
+    rdzv_backend = getattr(config, "rdzv_backend", None) or "c10d"
+    torchrun_cmd.extend(["--rdzv_backend", str(rdzv_backend), "--rdzv_endpoint", str(rdzv_endpoint)])
+
+    wrapper = Path(__file__).resolve().with_name("torchrun_wrapper.py")
+    if not wrapper.exists():
+        raise RuntimeError(f"Missing torchrun wrapper script: {wrapper}")
+
+    expected_seed = _resolve_expected_seed(config)
+    wrapper_args: List[str] = [
+        "--aisp-target-script",
+        wrapper_script_path,
+        "--aisp-expected-torch-seed",
+        str(expected_seed),
+    ]
+    if getattr(config, "deterministic", False):
+        wrapper_args.append("--aisp-deterministic")
+    if torch.cuda.is_available():
+        wrapper_args.extend(["--aisp-expected-cuda-seed", str(_resolve_expected_cuda_seed(config))])
+
+    torchrun_cmd.extend([str(wrapper), *wrapper_args])
+
+    env = os.environ.copy()
+    if getattr(config, "single_gpu", False):
+        env["CUDA_VISIBLE_DEVICES"] = _select_single_gpu_visible()
+    if getattr(config, "lock_gpu_clocks", False) and torch.cuda.is_available():
+        env["AISP_LOCK_GPU_CLOCKS"] = "1"
+        if getattr(config, "gpu_sm_clock_mhz", None) is not None:
+            env["AISP_GPU_SM_CLOCK_MHZ"] = str(config.gpu_sm_clock_mhz)
+        if getattr(config, "gpu_mem_clock_mhz", None) is not None:
+            env["AISP_GPU_MEM_CLOCK_MHZ"] = str(config.gpu_mem_clock_mhz)
+        env["AISP_RAMP_GPU_CLOCKS"] = "1"
+
+    return torchrun_cmd, env
+
+
 def profile_python_benchmark(
     benchmark: Any,  # Benchmark instance
     benchmark_path: Path,
     chapter_dir: Path,
     output_dir: Path,
+    config: Optional[BenchmarkConfig] = None,
     variant: str = "baseline"
 ) -> Optional[Path]:
     """Profile a Python benchmark using nsys by wrapping benchmark execution.
@@ -1555,7 +1646,12 @@ def profile_python_benchmark(
     benchmark_name = benchmark_path.stem
     nsys_output = output_dir / f"{benchmark_name}_{variant}.nsys-rep"
     
-    bench_config = benchmark.get_config() if hasattr(benchmark, "get_config") else None
+    bench_config = config
+    if bench_config is None and hasattr(benchmark, "get_config"):
+        try:
+            bench_config = benchmark.get_config()
+        except Exception:
+            bench_config = None
     nvtx_includes = getattr(bench_config, "nsys_nvtx_include", None) if bench_config else None
     repo_root = chapter_dir.parent
 
@@ -1604,7 +1700,13 @@ benchmark.teardown()
 """)
         wrapper_script.close()
         
-        # Build nsys command
+        use_torchrun = _is_torchrun_launch(bench_config)
+        if use_torchrun and bench_config is not None:
+            target_command, env = _build_torchrun_profile_command(bench_config, wrapper_script.name)
+        else:
+            target_command = [sys.executable, wrapper_script.name]
+            env = None
+
         nsys_command = [
             "nsys",
             "profile",
@@ -1617,18 +1719,19 @@ benchmark.teardown()
             "--python-sampling-frequency=1000",
             "--cudabacktrace=true",
             "--stats=true",
-            sys.executable,
-            wrapper_script.name
+            *target_command,
         ]
+        timeout = 120
+        if bench_config is not None and hasattr(bench_config, "get_effective_timeout"):
+            timeout = bench_config.get_effective_timeout("nsys") or timeout
         
-        # nsys profiling timeout: 120 seconds (matches benchmark_harness.nsys_timeout_seconds)
-        # nsys needs time to initialize, run benchmark (up to 15s), and collect profiling data
         result = subprocess.run(
             nsys_command,
             cwd=str(chapter_dir),
             capture_output=True,
-            timeout=120,  # Increased from 15s - nsys profiling needs more time
-            check=False
+            timeout=timeout,
+            check=False,
+            env=env,
         )
         
         # Clean up wrapper script
@@ -1734,7 +1837,7 @@ def profile_python_benchmark_ncu(
     benchmark_path: Path,
     chapter_dir: Path,
     output_dir: Path,
-    config: BenchmarkConfig,
+    config: Optional[BenchmarkConfig],
     variant: str = "baseline"
 ) -> Optional[Path]:
     """Profile a Python benchmark using ncu (NVIDIA Compute Profiler).
@@ -1759,6 +1862,16 @@ def profile_python_benchmark_ncu(
     benchmark_name = benchmark_path.stem
     ncu_output = output_dir / f"{benchmark_name}_{variant}.ncu-rep"
     
+    if config is None:
+        config = BenchmarkConfig()
+    preferred_replay = getattr(benchmark, "preferred_ncu_replay_mode", None)
+    if preferred_replay:
+        config = replace(
+            config,
+            ncu_replay_mode=str(preferred_replay),
+            ncu_replay_mode_override=True,
+        )
+
     profiler_config = build_profiler_config_from_benchmark(config)
     nvtx_includes = profiler_config.nvtx_includes
     repo_root = chapter_dir.parent
@@ -1819,14 +1932,27 @@ benchmark.teardown()
 """)
         wrapper_script.close()
         
-        # Build ncu command
-        ncu_command = profiler_config.get_ncu_command(
-            str(ncu_output.with_suffix("")),
-            wrapper_script.name,
-            python_executable=sys.executable,
-            metrics=metrics_override,
-            nvtx_includes=nvtx_includes,
-        )
+        use_torchrun = _is_torchrun_launch(config)
+        if use_torchrun:
+            target_command, env = _build_torchrun_profile_command(config, wrapper_script.name)
+            ncu_command = profiler_config.get_ncu_command_for_target(
+                str(ncu_output.with_suffix("")),
+                target_command,
+                metrics=metrics_override,
+                nvtx_includes=nvtx_includes,
+            )
+        else:
+            env = os.environ.copy()
+            ncu_command = profiler_config.get_ncu_command(
+                str(ncu_output.with_suffix("")),
+                wrapper_script.name,
+                python_executable=sys.executable,
+                metrics=metrics_override,
+                nvtx_includes=nvtx_includes,
+            )
+        ncu_env_overrides = getattr(benchmark, "ncu_env_overrides", None)
+        if ncu_env_overrides:
+            env.update({str(key): str(value) for key, value in ncu_env_overrides.items()})
         ncu_command.insert(1, "--force-overwrite")
         
         # ncu profiling timeout: align with BenchmarkConfig.ncu_timeout_seconds
@@ -1840,6 +1966,7 @@ benchmark.teardown()
             stderr=subprocess.PIPE,
             text=True,
             start_new_session=True,
+            env=env,
         )
         stdout_text = ""
         stderr_text = ""
@@ -2132,6 +2259,29 @@ def _compute_locked_fields(
     return locked_fields
 
 
+@contextmanager
+def _sanitized_distributed_env():
+    """Temporarily clear torchrun env vars to avoid cross-benchmark contamination."""
+    keys = (
+        "RANK",
+        "WORLD_SIZE",
+        "LOCAL_RANK",
+        "LOCAL_WORLD_SIZE",
+        "GROUP_RANK",
+        "ROLE_RANK",
+        "ROLE_NAME",
+    )
+    saved = {}
+    for key in keys:
+        if key in os.environ:
+            saved[key] = os.environ.pop(key)
+    try:
+        yield
+    finally:
+        for key, value in saved.items():
+            os.environ[key] = value
+
+
 def _merge_benchmark_config(
     *,
     base_config: BenchmarkConfig,
@@ -2143,7 +2293,11 @@ def _merge_benchmark_config(
     merged = copy.deepcopy(base_config)
 
     bench_config = getattr(benchmark_obj, "get_config", None)
-    override = bench_config() if callable(bench_config) else None
+    if callable(bench_config):
+        with _sanitized_distributed_env():
+            override = bench_config()
+    else:
+        override = None
     if override:
         for field in fields(BenchmarkConfig):
             value = getattr(override, field.name, None)
@@ -2915,7 +3069,12 @@ def _test_chapter_impl(
                     if check_nsys_available():
                         logger.info(f"      nsys...")
                         nsys_path = profile_python_benchmark(
-                            baseline_benchmark, baseline_path, chapter_dir, profiling_output_dir, variant="baseline"
+                            baseline_benchmark,
+                            baseline_path,
+                            chapter_dir,
+                            profiling_output_dir,
+                            baseline_config,
+                            variant="baseline",
                         )
                         if nsys_path:
                             result_entry['baseline_nsys_rep'] = str(nsys_path.relative_to(repo_root))
@@ -3328,8 +3487,12 @@ def _test_chapter_impl(
                         if check_nsys_available():
                             logger.info(f"      nsys...")
                             nsys_path = profile_python_benchmark(
-                                optimized_benchmark, optimized_path, chapter_dir, profiling_output_dir, 
-                                variant=f"optimized_{technique}"
+                                optimized_benchmark,
+                                optimized_path,
+                                chapter_dir,
+                                profiling_output_dir,
+                                optimized_config,
+                                variant=f"optimized_{technique}",
                             )
                             if nsys_path:
                                 opt_result['optimized_nsys_rep'] = str(nsys_path.relative_to(repo_root))

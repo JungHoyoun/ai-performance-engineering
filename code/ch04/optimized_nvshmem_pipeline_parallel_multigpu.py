@@ -71,6 +71,7 @@ def _enable_symmem_pipeline() -> bool:
 
 class OptimizedNVSHMEMPipelineParallelMultiGPU(VerificationPayloadMixin, BaseBenchmark):
     multi_gpu_required = True
+    preferred_ncu_replay_mode = "kernel"
     def __init__(self) -> None:
         super().__init__()
         self.register_workload_metadata(requests_per_iteration=1.0)

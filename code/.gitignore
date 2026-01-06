@@ -108,6 +108,13 @@ perf.data_*
 comprehensive_*
 *.pt.trace.json
 ch*/hta_traces/
+# Allow curated profiling captures for review/commit
+!profile_captures/
+!profile_captures/**
+!profile_captures/**/*.nsys-rep
+!profile_captures/**/*.ncu-rep
+!profile_captures/**/*.qdrep
+!profile_captures/**/*.sqlite
 
 # Test and benchmark results
 benchmark_results/

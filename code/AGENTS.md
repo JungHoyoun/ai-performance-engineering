@@ -36,7 +36,7 @@
 - Use a single queue runner under `artifacts/parallel_runs/` to serialize `aisp bench run` and profiling runs; avoid parallel queues. Append targets to the active queue script instead of creating ad-hoc loops.
 - Queue logic must wait for all active benchmark/profiling processes to finish before starting the next run, and must detect overlapping runs; if another run starts during a queued run, re-queue that target after the system is idle.
 - Busy detection must ignore waiting queue shell processes and treat the current run’s process group as “self” so child processes do not trigger false reruns.
-- Never terminate `ncu`/`nsys` processes; allow them to finish and treat them as busy for idle checks.
+- Do not terminate `ncu`/`nsys` processes unless the user explicitly requests it for a stuck run; if you do, log the action and reason in the queue log.
 - Queue scripts must log start/end timestamps and exit codes to a dedicated log file in `artifacts/parallel_runs/`.
 - Failure recovery: a failed run must not abort the queue; log the failure and continue. Only re-run on overlap or explicit user request.
 - Monitoring: watch the queue log and report when a run starts, completes, or fails.

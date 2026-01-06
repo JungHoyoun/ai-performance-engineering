@@ -109,6 +109,12 @@ class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
         self.hot_k: Optional[torch.Tensor] = None
         self.hot_v: Optional[torch.Tensor] = None
+        self.hot_k_bufs: list[torch.Tensor] = []
+        self.hot_v_bufs: list[torch.Tensor] = []
+        self.active_buf_idx: int = 0
+        self.prefetch_buf_idx: Optional[int] = None
+        self.prefetch_slice_len: Optional[int] = None
+        self.prefetch_event: Optional[torch.cuda.Event] = None
         self.staging: Optional[torch.Tensor] = None
         self.prefetch_staging: Optional[torch.Tensor] = None
         self.prefetched_range: Optional[Tuple[int, int]] = None
@@ -170,24 +176,39 @@ class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
             raise RuntimeError("Host cache not initialized")
         return target, slice_len
 
-    def _copy_to_device(self, staged: torch.Tensor, slice_len: int) -> None:
-        assert self.hot_k is not None and self.hot_v is not None
+    def _copy_to_device(
+        self,
+        staged: torch.Tensor,
+        slice_len: int,
+        buffer_idx: int = 0,
+        wait_for_copy: bool = True,
+        record_event: Optional[torch.cuda.Event] = None,
+    ) -> None:
+        if not self.hot_k_bufs or not self.hot_v_bufs:
+            raise RuntimeError("Device KV buffers are not initialized")
+        target_k = self.hot_k_bufs[buffer_idx]
+        target_v = self.hot_v_bufs[buffer_idx]
         if self.copy_stream is not None:
             with torch.cuda.stream(self.copy_stream):
-                self.hot_k[..., :slice_len, :].copy_(
+                target_k[..., :slice_len, :].copy_(
                     staged[0, ..., :slice_len, :].to(self.device, dtype=self.runtime_dtype, non_blocking=True)
                 )
-                self.hot_v[..., :slice_len, :].copy_(
+                target_v[..., :slice_len, :].copy_(
                     staged[1, ..., :slice_len, :].to(self.device, dtype=self.runtime_dtype, non_blocking=True)
                 )
-            torch.cuda.current_stream().wait_stream(self.copy_stream)
+                if record_event is not None:
+                    record_event.record()
+            if wait_for_copy:
+                torch.cuda.current_stream().wait_stream(self.copy_stream)
         else:
-            self.hot_k[..., :slice_len, :].copy_(
+            target_k[..., :slice_len, :].copy_(
                 staged[0, ..., :slice_len, :].to(self.device, dtype=self.runtime_dtype, non_blocking=False)
             )
-            self.hot_v[..., :slice_len, :].copy_(
+            target_v[..., :slice_len, :].copy_(
                 staged[1, ..., :slice_len, :].to(self.device, dtype=self.runtime_dtype, non_blocking=False)
             )
+            if record_event is not None:
+                record_event.record()
 
     def setup(self) -> None:
         torch.manual_seed(42)
@@ -202,8 +223,15 @@ class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self.cfg.page_tokens,
             self.cfg.head_dim,
         )
-        self.hot_k = torch.zeros(head_shape, device=self.device, dtype=self.runtime_dtype)
-        self.hot_v = torch.zeros_like(self.hot_k)
+        buffer_count = 2 if (self.cfg.prefetch_next_page and self.cfg.use_async_stream) else 1
+        self.hot_k_bufs = [torch.zeros(head_shape, device=self.device, dtype=self.runtime_dtype) for _ in range(buffer_count)]
+        self.hot_v_bufs = [torch.zeros_like(self.hot_k_bufs[0]) for _ in range(buffer_count)]
+        self.hot_k = self.hot_k_bufs[0]
+        self.hot_v = self.hot_v_bufs[0]
+        self.active_buf_idx = 0
+        self.prefetch_buf_idx = None
+        self.prefetch_slice_len = None
+        self.prefetch_event = torch.cuda.Event() if buffer_count == 2 else None
 
         staging_dtype = torch.float16
         staging_shape = (
@@ -280,12 +308,45 @@ class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def benchmark_fn(self) -> None:
         start = self.page_cursor
+        active_idx = self.active_buf_idx
         prefetched = self._maybe_use_prefetch(start)
         if prefetched is not None:
             staged, slice_len = prefetched
+            if self.prefetch_event is not None and self.prefetch_buf_idx is not None:
+                torch.cuda.current_stream().wait_event(self.prefetch_event)
+                active_idx = self.prefetch_buf_idx
+            else:
+                self._copy_to_device(staged, slice_len, buffer_idx=active_idx, wait_for_copy=True)
         else:
             staged, slice_len = self._stage_page(start)
-        self._copy_to_device(staged, slice_len)
+            self._copy_to_device(staged, slice_len, buffer_idx=active_idx, wait_for_copy=True)
+
+        next_start = (start + self.cfg.page_tokens) % self.cfg.max_seq_len
+        if self.cfg.prefetch_next_page:
+            staged_prefetch, pref_len = self._stage_page(next_start, into_prefetch=True)
+            self.prefetched_range = (next_start, next_start + pref_len)
+            self.prefetch_slice_len = pref_len
+            if self.copy_stream is not None and len(self.hot_k_bufs) > 1:
+                prefetch_idx = 1 - active_idx
+                self.prefetch_buf_idx = prefetch_idx
+                if self.prefetch_event is None:
+                    self.prefetch_event = torch.cuda.Event()
+                self._copy_to_device(
+                    staged_prefetch,
+                    pref_len,
+                    buffer_idx=prefetch_idx,
+                    wait_for_copy=False,
+                    record_event=self.prefetch_event,
+                )
+            else:
+                self.prefetch_buf_idx = None
+        else:
+            self.prefetched_range = None
+            self.prefetch_slice_len = None
+            self.prefetch_buf_idx = None
+
+        self.hot_k = self.hot_k_bufs[active_idx]
+        self.hot_v = self.hot_v_bufs[active_idx]
 
         # Simple attention step that will pick flash/mathematics based on dtype/backend.
         q = self.q
@@ -296,14 +357,6 @@ class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
         ctx = prefer_sdpa_backends() if prefer_sdpa_backends is not None else nullcontext()
         with ctx:
             attn_out = F.scaled_dot_product_attention(q, k, v)
-
-        # Queue prefetch for the next page if requested.
-        if self.cfg.prefetch_next_page and self.prefetch_staging is not None:
-            next_start = (start + self.cfg.page_tokens) % self.cfg.max_seq_len
-            staged_prefetch, pref_len = self._stage_page(next_start, into_prefetch=True)
-            self.prefetched_range = (next_start, next_start + pref_len)
-        else:
-            self.prefetched_range = None
 
         self.page_cursor = (start + self.cfg.page_tokens) % self.cfg.max_seq_len
         # Capture a slice of attention output for verification
@@ -341,6 +394,12 @@ class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def teardown(self) -> None:
         self.hot_k = None
         self.hot_v = None
+        self.hot_k_bufs = []
+        self.hot_v_bufs = []
+        self.active_buf_idx = 0
+        self.prefetch_buf_idx = None
+        self.prefetch_slice_len = None
+        self.prefetch_event = None
         self.q = None
         self.staging = None
         self.prefetch_staging = None

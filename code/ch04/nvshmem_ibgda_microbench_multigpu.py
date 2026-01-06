@@ -25,6 +25,12 @@ def _default_symmetric_size() -> str:
 class NvshmemIbgdaMicrobench(CudaBinaryBenchmark):
     """Wrap the nvshmem_ibgda_microbench CUDA binary for the harness."""
     multi_gpu_required = True
+    preferred_ncu_replay_mode = "kernel"
+    # Keep NCU kernel replay bounded for multi-process microbenchmarks.
+    ncu_env_overrides = {
+        "AISP_NCU_PROFILE_ITERS": "200",
+        "AISP_NCU_PROFILE_CTAS": "128",
+    }
 
     def __init__(
         self,
@@ -50,13 +56,7 @@ class NvshmemIbgdaMicrobench(CudaBinaryBenchmark):
         self._parsed_metrics: Dict[str, float] = {}
         self._last_output: Optional[torch.Tensor] = None
 
-        args = [
-            f"--mode={mode}",
-            f"--bytes={bytes_per_message}",
-            f"--ctas={ctas}",
-            f"--threads={threads}",
-            f"--iters={iters}",
-        ]
+        args = self._build_run_args()
 
         super().__init__(
             chapter_dir=Path(__file__).parent,
@@ -113,6 +113,14 @@ class NvshmemIbgdaMicrobench(CudaBinaryBenchmark):
 
         self.nvshmemrun = launcher
 
+        config = getattr(self, "_config", None)
+        if config and getattr(config, "enable_ncu", False):
+            ncu_timeout = getattr(config, "ncu_timeout_seconds", None)
+            if ncu_timeout:
+                self.timeout_seconds = max(self.timeout_seconds, int(ncu_timeout))
+
+        self._maybe_apply_ncu_profile_overrides()
+
         try:
             super().setup()
         except Exception as exc:
@@ -150,6 +158,30 @@ class NvshmemIbgdaMicrobench(CudaBinaryBenchmark):
         if mops:
             metrics["mops"] = float(mops.group(1))
         return metrics
+
+    def _build_run_args(self) -> list[str]:
+        return [
+            f"--mode={self.mode}",
+            f"--bytes={self.bytes_per_message}",
+            f"--ctas={self.ctas}",
+            f"--threads={self.threads}",
+            f"--iters={self.iters}",
+        ]
+
+    def _maybe_apply_ncu_profile_overrides(self) -> None:
+        profile_iters = os.getenv("AISP_NCU_PROFILE_ITERS")
+        profile_ctas = os.getenv("AISP_NCU_PROFILE_CTAS")
+        updated = False
+        if profile_iters:
+            self.iters = min(self.iters, int(profile_iters))
+            updated = True
+        if profile_ctas:
+            self.ctas = min(self.ctas, int(profile_ctas))
+            updated = True
+        if updated:
+            self.run_args = self._build_run_args()
+            self._workload_params["iters"] = self.iters
+            self._workload_params["ctas"] = self.ctas
 
     def _run_once(self) -> BinaryRunResult:
         if self.exec_path is None:

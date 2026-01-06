@@ -25,6 +25,7 @@ from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 class NVSHMEMPipelineParallelMultiGPU(VerificationPayloadMixin, BaseBenchmark):
     multi_gpu_required = True
+    preferred_ncu_replay_mode = "kernel"
     def __init__(self) -> None:
         super().__init__()
         self.register_workload_metadata(requests_per_iteration=1.0)

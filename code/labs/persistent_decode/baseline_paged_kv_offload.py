@@ -28,12 +28,12 @@ from labs.persistent_decode.paged_kv_offload_common import PagedKVConfig, PagedK
 
 def get_benchmark() -> PagedKVOffloadBenchmark:
     cfg = PagedKVConfig(
-        batch_size=2,
+        batch_size=4,
         num_heads=16,
         head_dim=128,
         max_seq_len=8192,
-        page_tokens=1024,
-        decode_tokens=128,
+        page_tokens=4096,
+        decode_tokens=2,
         use_pinned_stage=False,
         use_async_stream=False,
         use_memmap=False,

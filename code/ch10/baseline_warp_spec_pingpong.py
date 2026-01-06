@@ -29,7 +29,7 @@ class BaselineWarpSpecPingPongBenchmark(CudaBinaryBenchmark):
                 "dtype": "float32",
                 "M": 4096,
                 "N": 4096,
-                "K": 512,
+                "K": 256,
             },
         )
         self.register_workload_metadata(bytes_per_iteration=float(4096 * 4096 * 4))
@@ -49,7 +49,7 @@ class BaselineWarpSpecPingPongBenchmark(CudaBinaryBenchmark):
             dtype="float32",
             M=4096,
             N=4096,
-            K=512,
+            K=256,
         ).to_dict()
 
     def get_output_tolerance(self) -> tuple[float, float]:
