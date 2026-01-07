@@ -14,16 +14,16 @@
 
 ```bash
 # Optimize a single file
-python -m core.optimization.auto model.py --output optimized_model.py
+python -m core.optimization.auto examples/optimize_examples.py --output /tmp/optimize_examples_optimized.py
 
-# Optimize from a GitHub repo
-python -m core.optimization.auto https://github.com/user/repo --target src/model.py
+# Optimize from a repo (replace "." with a Git URL)
+python -m core.optimization.auto . --target ch07/baseline_memory_access.py
 
 # Scan and optimize all underperforming benchmarks
 python -m core.optimization.auto --scan . --threshold 1.1
 
 # Use OpenAI instead of Anthropic
-python -m core.optimization.auto model.py --provider openai --model gpt-4o
+python -m core.optimization.auto examples/optimize_examples.py --provider openai --model gpt-4o
 ```
 
 ## CLI Reference
@@ -67,8 +67,8 @@ optimizer = AutoOptimizer(
 
 # Optimize a single file
 result = optimizer.optimize_file(
-    "model.py",
-    output_path="optimized_model.py"
+    "examples/optimize_examples.py",
+    output_path="/tmp/optimize_examples_optimized.py"
 )
 
 print(f"Speedup: {result.speedup:.2f}x")
@@ -76,14 +76,14 @@ print(f"Techniques: {result.techniques_applied}")
 print(result.explanation)
 ```
 
-### Optimize a GitHub Repository
+### Optimize a Repository (Local or Remote)
 
 ```python
 results = optimizer.optimize_repo(
-    "https://github.com/user/ml-project",
-    target_files=["src/model.py", "src/train.py"],
+    ".",
+    target_files=["ch07/baseline_memory_access.py", "ch07/optimized_memory_access.py"],
     branch="main",
-    output_dir="./optimized/"
+    output_dir="/tmp/optimized/"
 )
 
 for file_path, result in results.items():
@@ -109,8 +109,8 @@ The optimizer supports multiple input sources through adapters:
 from core.optimization.auto import FileAdapter
 
 adapter = FileAdapter(
-    paths=["model1.py", "model2.py"],
-    output_dir="./optimized/",
+    paths=["ch07/baseline_memory_access.py", "ch07/optimized_memory_access.py"],
+    output_dir="/tmp/optimized/",
     suffix="_optimized"
 )
 ```
@@ -120,8 +120,8 @@ adapter = FileAdapter(
 from core.optimization.auto import RepoAdapter
 
 adapter = RepoAdapter(
-    repo_url="https://github.com/user/repo",
-    target_files=["src/model.py"],  # Optional, auto-detects GPU files
+    repo_url=".",
+    target_files=["ch07/baseline_memory_access.py"],  # Optional, auto-detects GPU files
     branch="main"
 )
 ```
@@ -139,7 +139,7 @@ adapter = BenchmarkAdapter(
 
 ## Configuration File
 
-Create `optimize_config.yaml` for persistent settings:
+Create `./optimize_config.yaml` for persistent settings (see `examples/optimize_config.yaml`):
 
 ```yaml
 llm:
@@ -227,7 +227,7 @@ See [`examples/optimize_examples.py`](../../examples/optimize_examples.py) for m
 ### Debug Mode
 
 ```bash
-python -m core.optimization.auto model.py --verbose 2>&1 | tee optimize.log
+python -m core.optimization.auto ch07/baseline_memory_access.py --verbose 2>&1 | tee optimize.log
 ```
 
 ## Architecture
@@ -240,4 +240,3 @@ core/optimization/auto/
 ├── input_adapters.py    # File/Repo/Benchmark adapters
 └── README.md            # This file
 ```
-

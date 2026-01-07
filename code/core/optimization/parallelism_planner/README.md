@@ -252,10 +252,10 @@ config = LaunchConfig(
 )
 
 gen = LaunchCommandGenerator()
-print(gen.format_launch_guide(config, "train.py"))
+print(gen.format_launch_guide(config, "ch13/train.py"))
 
 # Or get raw commands/configs
-commands = gen.generate_all(config, "train.py")
+commands = gen.generate_all(config, "ch13/train.py")
 deepspeed_config = commands["deepspeed"]["config"]
 ```
 

@@ -237,7 +237,7 @@ ENTRIES["ch02"] = chapter_entry(
         ("`compare.py`, `Makefile`, `expectations_{hardware_key}.json`", "Harness driver, CUDA build rules, and expectation file for automated pass/fail checks."),
     ],
     validation=[
-        "`python hardware_info.py --json artifacts/hw_snapshot.json` records the correct device name, SM count, and HBM size for every GPU in the system.",
+        "`python hardware_info.py` records the correct device name, SM count, and HBM size for every GPU in the system.",
         "`python nvlink_c2c_bandwidth_benchmark.py --gpus 0 1` sustains ~250 GB/s unidirectional on NVLink-connected pairs; mismatches flag topology or driver issues.",
         "Running the coherency sample shows zero-copy benefiting sub-MB transfers while large transfers favor explicit H2D copies, matching the documented thresholds.",
     ],
@@ -363,7 +363,7 @@ ENTRIES["ch06"] = chapter_entry(
         "Validate unified memory and allocator tuning on Blackwell GPUs.",
     ],
     contents=[
-        ("`my_first_kernel.cu`, `simple_kernel.cu`, `baseline_add.cu`, `optimized_add.cu`, `baseline_add.py`, `optimized_add.py`", "Hello-world kernels plus Python wrappers for verifying CUDA build chains and launch parameters."),
+        ("`my_first_kernel.cu`, `simple_kernel.cu`, `baseline_add.cu`, `optimized_add_parallel.cu`, `baseline_add.py`, `optimized_add.py`", "Hello-world kernels plus Python wrappers for verifying CUDA build chains and launch parameters."),
         ("`baseline_add_tensors.cu`, `optimized_add_tensors.cu`, `baseline_add_tensors.py`, `optimized_add_tensors.py`", "Tensor-oriented adds with automatic pinned-memory staging and correctness checks."),
         ("`baseline_attention_ilp.py`, `baseline_gemm_ilp.py`, `optimized_gemm_ilp.py`, `ilp_low_occupancy_vec4_demo.cu`, `ilp_extreme_low_occupancy_vec4_demo.cu`", "Instruction-level parallelism studies that manipulate loop unrolling, registers, and vector width."),
         ("`baseline_bank_conflicts.cu`, `optimized_bank_conflicts.cu`, `baseline_launch_bounds*.{py,cu}`, `optimized_launch_bounds*.{py,cu}`", "Bank conflict and launch-bound exercises to highlight shared memory layouts and CTA sizing."),
@@ -397,7 +397,7 @@ ENTRIES["ch07"] = chapter_entry(
     ],
     contents=[
         ("`baseline_copy_scalar.cu`, `baseline_copy_uncoalesced.cu`, `baseline_uncoalesced_copy.py`, `optimized_copy_uncoalesced_coalesced.cu`, `optimized_copy_scalar_vectorized.cu`, `optimized_copy_scalar_vectorized_sm121`", "Copy kernels highlighting coalescing, vector width, and warp-level efficiency."),
-        ("`baseline_hbm3e_copy.cu`, `baseline_hbm3e_peak.cu`, `optimized_hbm3e_copy.cu`, `optimized_hbm3e_peak.cu`, `baseline_hbm3ecopy.py`, `optimized_hbm3ecopy.py`", "HBM3e peak-bandwidth probes with CUDA and Python harnesses."),
+        ("`baseline_hbm_copy.cu`, `baseline_hbm_peak.cu`, `optimized_hbm_copy.cu`, `optimized_hbm_peak.cu`, `baseline_hbmcopy.py`, `optimized_hbmcopy.py`", "HBM peak-bandwidth probes with CUDA and Python harnesses."),
         ("`baseline_async_prefetch.cu`, `optimized_async_prefetch.cu`, `baseline_tma_copy.cu`, `baseline_tma_copy.py`, `optimized_async_prefetch.py`", "Async/TMA samples that overlap global-memory fetch with computation."),
         ("`baseline_matmul.cu`, `baseline_matmul_cuda.py`, `optimized_matmul_cuda.py`, `optimized_matmul_tiled.cu`", "Matmul implementations to contrast naive global-memory access with shared-memory tiling and warp-level reuse."),
         ("`baseline_lookup.cu`, `baseline_lookup.py`, `optimized_lookup.cu`, `lookup_pytorch.py`", "Cache-sensitive lookup workloads demonstrating how to reorganize tables for better locality."),
@@ -405,7 +405,7 @@ ENTRIES["ch07"] = chapter_entry(
         ("`compare.py`, `Makefile`, `expectations_{hardware_key}.json`, `memory_access_pytorch.py`", "Harness entry, build recipes, expectation thresholds, and PyTorch validation scripts."),
     ],
     validation=[
-        "`python baseline_hbm3ecopy.py --bytes 1073741824` reports noticeably lower GB/s than `optimized_hbm3ecopy.py`, proving vectorization plus async copies work.",
+        "`python baseline_hbmcopy.py --bytes 1073741824` reports noticeably lower GB/s than `optimized_hbmcopy.py`, proving vectorization plus async copies work.",
         "`python compare.py --examples async_prefetch` shows optimized_async_prefetch reducing total kernel count while preserving accuracy.",
         "Nsight Compute captures of `optimized_matmul_tiled.cu` hit >80% shared-memory bandwidth utilization with minimal bank conflicts.",
     ],
@@ -430,15 +430,15 @@ ENTRIES["ch08"] = chapter_entry(
     ],
     contents=[
         ("`baseline_occupancy_tuning.py`, `optimized_occupancy_tuning.py`, `occupancy_tuning_tool.py`, `occupancy_api_example.cu`, `occupancy_tuning.cu`", "Occupancy studies that tune CTA shapes, register caps, and API-computed limits (plus a sweep tool for quick preset exploration)."),
-        ("`baseline_double_buffering.cu`, `baseline_double_buffering.py`, `optimized_double_buffering_pipelined.cu`, `optimized_double_buffering.py`, `double_buffering_kernels.cu`", "Double-buffered kernels and their Python drivers showing how to keep tensor cores busy."),
+        ("`baseline_ai_optimization.py`, `optimized_ai_optimization.py`, `ai_optimization_kernels.cu`, `independent_ops.cu`", "AI kernel scheduling samples that stage independent ops to highlight pipeline and occupancy tradeoffs."),
         ("`baseline_hbm.cu`, `baseline_hbm.py`, `optimized_hbm.py`, `optimized_hbm_vectorized.cu`, `hbm_kernels.cu`", "HBM streaming workloads that compare scalar, vectorized, and asynchronous fetch patterns."),
         ("`baseline_loop_unrolling.cu`, `baseline_loop_unrolling.py`, `optimized_loop_unrolling.cu`, `optimized_loop_unrolling.py`, `loop_unrolling_kernels.cu`", "Loop unrolling case studies targeting various ILP regimes."),
         ("`baseline_threshold.py`, `baseline_thresholdtma.py`, `optimized_threshold.py`, `optimized_thresholdtma.py`, `threshold_kernels.cu`, `threshold_tma_benchmark_base.py`", "Threshold operators implemented with scalar, vectorized, and TMA-backed pipelines."),
         ("`baseline_tiling.py`, `baseline_tiling_tcgen05.py`, `optimized_tiling.py`, `optimized_tiling_tcgen05.py`, `tiling_kernels.cu`, `tiling_extension_tcgen05.py`", "Tile schedulers for tcgen05 matmuls, including safe fallbacks when tcgen05 isn't available."),
-        ("`compare.py`, `requirements.txt`, `expectations_{hardware_key}.json`, `ai_optimization_kernels.cu`", "Harness entry, dependencies, regression thresholds, and AI-optimization helper kernels."),
+        ("`compare.py`, `requirements.txt`, `expectations_{hardware_key}.json`", "Harness entry, dependencies, and regression thresholds."),
     ],
     validation=[
-        "Nsight Compute traces for `optimized_double_buffering_pipelined.cu` should show overlapping smem/ldgst transactions with minimal idle cycles.",
+        "Nsight Compute traces for `optimized_thresholdtma.py` should show overlapping TMA loads with minimal idle cycles.",
         "`python -m cli.aisp tools occupancy-tuning` prints preset timings + speedups for the occupancy tuning microbenchmark.",
         "`python compare.py --examples threshold` confirms the TMA-backed kernels reducing latency vs scalar reference implementations.",
     ],
@@ -464,15 +464,15 @@ ENTRIES["ch09"] = chapter_entry(
     contents=[
         ("`baseline_compute_bound.py`, `optimized_compute_bound.py`, `baseline_memory_bound.py`, `optimized_memory_bound.py`", "Reference kernels that isolate compute vs bandwidth ceilings and demonstrate tuning strategies."),
         ("`baseline_micro_tiling_matmul.cu`, `baseline_micro_tiling_matmul.py`, `optimized_micro_tiling_matmul.cu`, `optimized_micro_tiling_matmul.py`", "Micro-tiling matmuls with explicit register blocking and cp.async prefetch."),
-        ("`baseline_cutlass_gemm.cu`, `baseline_cutlass_gemm.py`, `optimized_cutlass_gemm.cu`, `optimized_cutlass_gemm.py`, `warp_specialized_cuda.cu`", "CUTLASS-driven matmuls and warp-specialized kernels showcasing tcgen05 lowering and occupancy tuning."),
+        ("`baseline_cutlass_gemm.cu`, `baseline_cutlass_gemm.py`, `optimized_cutlass_gemm.cu`, `optimized_cutlass_gemm.py`, `tcgen05_pipelined.cu`", "CUTLASS-driven matmuls and tcgen05 pipeline kernels showcasing tcgen05 lowering and occupancy tuning."),
         ("`baseline_fused_l2norm.cu`, `baseline_fused_l2norm.py`, `optimized_fused_l2norm.cu`, `optimized_fused_l2norm.py`, `fusedL2Norm/`", "Fusion examples that merge L2 norm + scaling while staying numerically stable."),
-        ("`baseline_triton.py`, `optimized_triton.py`, `warp_specialized_triton.py`", "Triton counterparts for quick prototyping and verifying compiler-generated PTX on Blackwell."),
-        ("`baseline_warp_specialization_producer_consumer.py`, `optimized_warp_specialization_producer_consumer.py`, `two_stage_pipeline.cu`", "Warp cooperation samples emphasizing producer/consumer pipelines and inline PTX hooks."),
+        ("`baseline_triton.py`, `optimized_triton.py`", "Triton counterparts for quick prototyping and verifying compiler-generated PTX on Blackwell."),
+        ("`baseline_tcgen05_tma_pipeline.py`, `optimized_tcgen05_tma_pipeline.py`, `two_stage_pipeline.cu`", "Producer/consumer pipelines emphasizing staged TMA loads and inline PTX hooks."),
         ("`compare.py`, `requirements.txt`, `expectations_{hardware_key}.json`", "Harness hooks plus regression thresholds for every example."),
     ],
     validation=[
         "`python baseline_compute_bound.py --summaries` reports much higher arithmetic intensity than `baseline_memory_bound.py`, matching the roofline plots.",
-        "`python optimized_cutlass_gemm.py --sizes 4096 4096 8192` hits TFLOP/s numbers close to `benchmark_peak_results.json` for the same device.",
+        "`python optimized_cutlass_gemm.py --sizes 4096 4096 8192` improves throughput relative to `baseline_cutlass_gemm.py` on the same device.",
         "`python compare.py --examples fused_l2norm` confirms numerically identical outputs before and after fusion.",
     ],
     notes=[
@@ -502,12 +502,12 @@ ENTRIES["ch10"] = chapter_entry(
         ("`baseline_cluster_multicast.py`, `optimized_cluster_multicast.py`, `tma_multicast_baseline.cu`, `tma_multicast_cluster.cu`", "Cluster multicast GEMM example (baseline vs cluster multicast) wrapped as CUDA-binary harness benchmarks."),
         ("`baseline_cooperative_persistent.{py,cu}`, `optimized_cooperative_persistent.{py,cu}`, `baseline_persistent_matmul_tma.py`, `optimized_persistent_matmul_tma.py`", "Persistent kernels combining cooperative groups with TMA streams for steady-state throughput."),
         ("`baseline_flash_attn_tma_micro_pipeline.{py,cu}`, `optimized_flash_attn_tma_micro_pipeline.{py,cu}`, `baseline_warp_specialized_pipeline*.{py,cu}`, `optimized_warp_specialized_pipeline*.{py,cu}`", "Micro-pipeline and warp specialization studies that mix Triton, CUDA, and inline PTX."),
-        ("`compare.py`, `workload_config.py`, `perf_sweep.sh`, `profile.sh`, `requirements_cufile.txt`", "Harness entry, workload dials, performance sweeps, Nsight automation, and optional cuFile deps."),
+        ("`compare.py`, `workload_config.py`, `demo_both_examples.sh`, `profile.sh`, `requirements_cufile.txt`", "Harness entry, workload dials, demo runner, Nsight automation, and optional cuFile deps."),
     ],
     validation=[
         "Cluster-enabled kernels fail fast on hardware without DSMEM support, while DSMEM-free variants still execute-use this to confirm cluster capability flags.",
         "`python optimized_flash_attn_tma_micro_pipeline.py --profile` produces fewer kernel launches and higher achieved FLOP/s than the baseline script.",
-        "`python perf_sweep.sh --chapter ch10` records TFLOP/s vs batch size curves, proving persistent kernels amortize launch costs.",
+        "`bash demo_both_examples.sh` runs the CUDA memory pipeline and GDS demo, highlighting launch amortization and IO overlap.",
     ],
     notes=[
         "`cufile_gds_example.py` demonstrates integrating GPUDirect Storage into tensor-core pipelines for IO-heavy training loops.",
@@ -532,7 +532,7 @@ ENTRIES["ch11"] = chapter_entry(
         ("`baseline_streams.py`, `optimized_streams.py`, `baseline_streams.cu`, `optimized_streams_ordered.cu`, `stream_overlap_base.py`", "Core stream overlap demos that contrast serialized launches with overlapped workloads."),
         ("`baseline_stream_ordered.py`, `baseline_stream_ordered_kv_cache.py`, `optimized_stream_ordered.py`, `optimized_stream_ordered_kv_cache.py`", "Stream-ordered allocator and KV-cache examples ensuring deterministic updates while enabling overlap."),
         ("`baseline_gemm_streams.py`, `optimized_gemm_streams.py`, `baseline_tensor_cores_streams.py`, `optimized_tensor_cores_streams.py`", "GEMM pipelines that schedule tensor-core kernels across multiple streams to decouple math vs IO phases."),
-        ("`baseline_distributed_multigpu_streams.py`, `optimized_distributed_multigpu_streams.py`, `baseline_adaptive_streams.py`, `optimized_adaptive_streams.py`", "Adaptive streaming controllers that balance NCCL, compute, and IO tasks on large systems."),
+        ("`baseline_distributed_streams.py`, `optimized_distributed_streams.py`, `baseline_adaptive_streams.py`, `optimized_adaptive_streams.py`", "Adaptive streaming controllers that balance NCCL, compute, and IO tasks on large systems."),
         ("`baseline_warp_specialization_multistream.*`, `optimized_warp_specialized_multistream.*`, `warp_specialized_cluster_pipeline_multistream.cu`", "Warp-specialized multistream kernels demonstrating DSMEM usage and per-stream specialization."),
         ("`compare.py`, `Makefile`, `expectations_{hardware_key}.json`", "Harness driver plus expectation data for concurrency regressions."),
     ],
@@ -631,7 +631,7 @@ ENTRIES["ch14"] = chapter_entry(
     contents=[
         ("`baseline_model_eager.py`, `optimized_model_eager.py`, `torch_compile_large_model.py`, `torch_compiler_examples.py`, `training_large_model_1_5x.py`", "Model-scale examples showcasing compile modes, guard rails, and large-model sanity tests."),
         ("`baseline_cutlass.py`, `optimized_cutlass.py`, `triton_examples.py`, `triton_tma_blackwell.py`, `triton_fp8_advanced.py`, `triton_nvshmem_example.py`", "CUTLASS vs Triton comparisons plus advanced TMA/NVSHMEM Triton kernels."),
-        ("`baseline_flex_attention.py`, `optimized_flex_attention.py`, `test_flex_attention.py`", "FlexAttention workloads that validate custom score mods, masks, and compile speedups."),
+        ("`baseline_flex_attention.py`, `optimized_flex_attention.py`, `baseline_flex_attention_sparse.py`, `optimized_flex_attention_sparse.py`, `flex_attention_sparse_demo.py`", "FlexAttention workloads that validate custom score mods, masks, sparsity, and compile speedups."),
         ("`baseline_nccl_quantization.py`, `optimized_nccl_quantization.py`, `deepseek_innovation_l2_bypass.py`", "Quantization-aware communication and the DeepSeek-inspired L2 bypass experiment."),
         ("`baseline_regional_triton.py`, `optimized_regional_triton.py`, `inspect_compiled_code.py`, `benchmark_tma_configs.py`", "Regional compilation and TMA parameter sweeps for auto-tuning generated kernels."),
         ("`compare.py`, `requirements.txt`, `expectations_{hardware_key}.json`, `train.py`, `transformer.py`", "Harness entry plus model definitions and dependency pins."),
@@ -664,7 +664,7 @@ ENTRIES["ch15"] = chapter_entry(
         ("`baseline_inference_monolithic.py`, `optimized_inference_monolithic.py`", "Single-box inference loops that establish the baseline before disaggregation."),
         ("`disaggregated_inference_multigpu.py`", "Disaggregated inference demo that layers speculative decoding on top of prefill/decode pools."),
         ("`baseline_disaggregated_inference.py`, `optimized_disaggregated_inference.py`, `baseline_disaggregated_inference_multigpu.py`, `optimized_disaggregated_inference_multigpu.py`, `baseline_prefill_decode_disagg.py`, `optimized_prefill_decode_disagg.py`, `baseline_prefill_decode_disagg_multigpu.py`, `optimized_prefill_decode_disagg_multigpu.py`, `disaggregated_inference_single_common.py`", "Disaggregated pipelines modeling remote prefills, decode overlap, and NVLink pooling (single- and multi-GPU), plus shared single-GPU helpers."),
-        ("`baseline_kv_cache_management.py`, `optimized_kv_cache_management.py`, `optimized_kv_cache_management_math.py`, `baseline_kv_cache_nvlink_pool.py`, `optimized_kv_cache_nvlink_pool.py`, `baseline_kv_cache_nvlink_pool_multigpu.py`, `optimized_kv_cache_nvlink_pool_multigpu.py`", "KV-cache orchestration utilities with local-only, math-only, and NVLink-pooled variants."),
+        ("`baseline_kv_cache_management.py`, `optimized_kv_cache_management.py`, `kv_cache_management_math.py`, `baseline_kv_cache_nvlink_pool.py`, `optimized_kv_cache_nvlink_pool.py`, `baseline_kv_cache_nvlink_pool_multigpu.py`, `optimized_kv_cache_nvlink_pool_multigpu.py`", "KV-cache orchestration utilities with local-only, math-only, and NVLink-pooled variants."),
         ("`baseline_continuous_batching.py`, `optimized_continuous_batching.py`", "Single-GPU continuous batching scheduler for TTFT-aware queueing."),
         ("`baseline_continuous_batching_multigpu.py`, `optimized_continuous_batching_multigpu.py`", "Multi-GPU continuous batching scheduler for scaled queueing throughput."),
         ("`baseline_moe_inference.py`, `optimized_moe_inference.py`", "Inference-specific MoE workloads that pair router load with communication control."),
@@ -732,7 +732,7 @@ ENTRIES["ch17"] = chapter_entry(
     contents=[
         ("`baseline_dynamic_routing.py`, `optimized_dynamic_routing.py`, `dynamic_routing.py`, `early_rejection.py`", "Routing controllers that evolve from static heuristics to telemetry-driven admission and rejection policies."),
         ("`baseline_inference_full.py`, `optimized_inference_full.py`, `baseline_prefill_decode_disagg_overlap_multigpu.py`, `optimized_prefill_decode_disagg_overlap_multigpu.py`, `baseline_prefill_decode_disagg_batched_multigpu.py`, `optimized_prefill_decode_disagg_batched_multigpu.py`, `baseline_prefill_decode_disagg_ttft_multigpu.py`, `optimized_prefill_decode_disagg_ttft_multigpu.py`, `baseline_prefill_decode_disagg_tpot_long_multigpu.py`, `optimized_prefill_decode_disagg_tpot_long_multigpu.py`", "End-to-end inference flows modeling separate prefill and decode pools, including overlap-focused, batched-handoff, TTFT-focused, and long-output TPOT-focused multi-GPU pairs."),
-        ("`baseline_pipeline_parallel_multigpuism.py`, `optimized_pipeline_parallelism.py`", "Pipeline parallel workloads combining compute and KV-transfer scheduling."),
+        ("`baseline_pipeline_parallelism.py`, `optimized_pipeline_parallelism.py`", "Pipeline parallel workloads combining compute and KV-transfer scheduling."),
         ("`baseline_moe_router_uniform.py`, `optimized_moe_router_uniform_topology.py`", "Comparable MoE router benchmark pair contrasting uniform vs topology-aware routing while keeping outputs invariant via shared expert weights."),
         ("`moe_router_uniform_demo.py`, `moe_router_topology_demo.py`", "MoE routing demos (non-benchmark) contrasting uniform vs topology-aware expert selection."),
         ("`baseline_routing_static.py`, `optimized_routing_static.py`", "Router variants for static/dynamic sharding decisions (comparable benchmarks)."),
@@ -768,13 +768,13 @@ ENTRIES["ch18"] = chapter_entry(
         ("`baseline_flexdecoding.py`, `optimized_flexdecoding.py`, `optimized_flexdecoding_graphs.py`, `v1_engine_loop.py`, `v1_engine_loop_common.py`", "FlexDecoding benchmarks plus a V1 polling-loop correctness tool (not a benchmark pair)."),
         ("`baseline_tensor_cores.py`, `optimized_tensor_cores.py`, `flashmla_kernel.cu`, `warp_specialized_triton.py`", "Tensor-core attention kernels plus Triton equivalents for rapid validation."),
         ("`flex_attention_native.py`, `flex_attention_enhanced.py`, `flex_attention_large_model.py`, `kv_cache_integration_example.py`", "FlexAttention examples ranging from toy sizes to large models with KV-cache reuse."),
-        ("`baseline_vllm_v1_integration.py`, `optimized_vllm_v1_integration.py`, `baseline_vllm_decode_graphs.py`, `optimized_vllm_decode_graphs.py`, `configs/`, `workload_config.py`", "Serving integrations and config presets for pushing workloads through vLLM or custom harnesses."),
+        ("`baseline_vllm_v1_integration.py`, `optimized_vllm_v1_integration.py`, `baseline_vllm_decode_graphs.py`, `optimized_vllm_decode_graphs.py`, `configs/`, `spec_configs/`, `workload_config.py`", "Serving integrations and config presets for pushing workloads through vLLM or custom harnesses."),
         ("`speculative_decode/spec_config_sweep.py`", "Tooling to sweep speculative-decoding configs and summarize latency/throughput tradeoffs."),
         ("`compare.py`, `expectations_{hardware_key}.json`, `test_flex_attention.py`", "Harness entry, regression thresholds, and pytest coverage for FlexAttention APIs."),
     ],
     validation=[
         "`python optimized_flexdecoding.py --profiling` reports significantly fewer kernels and lower latency than the baseline while matching decoded tokens.",
-        "`python run_vllm_decoder.py --config configs/flex_attention.yaml` completes with accuracy parity vs the native FlexAttention path.",
+        "`python run_vllm_decoder.py --spec-config spec_configs/draft_and_verify.json` completes with accuracy parity vs the native FlexAttention path.",
         "`python test_flex_attention.py` passes locally, confirming mask/score-mod helpers are wired correctly.",
     ],
     notes=[
@@ -867,7 +867,7 @@ ENTRIES["labs/blackwell_matmul"] = lab_entry(
     ],
     validation=[
         "`python -m cli.aisp bench run --targets labs/blackwell_matmul:blackwell_matmul_cluster --profile minimal` delivers higher TFLOP/s than the baseline and emits artifacts under `artifacts/labs_blackwell_matmul*`.",
-        "`python labs/blackwell_matmul/run_blackwell_matmul.py --variant pipeline --size 4096 --roofline-meta artifacts/matmul_meta.csv` saves roofline metadata alongside timings.",
+        "`python labs/blackwell_matmul/run_blackwell_matmul.py --variant pipeline --size 4096 --roofline-meta artifacts/labs_blackwell_matmul/matmul_meta.csv` saves roofline metadata alongside timings.",
         "DSM-aware variants error out early on GPUs that lack cluster DSMEM support, preventing misleading results.",
     ],
     notes=[
@@ -903,7 +903,7 @@ ENTRIES["labs/cutlass_profiler_kernel_selector"] = lab_entry(
             "python labs/cutlass_profiler_kernel_selector/compare_against_baselines.py --include-default-triton",
         ],
         notes=[
-            "Set `CUTLASS_PROFILER_BIN` to point at your `cutlass_profiler` binary after running `./setup.sh`.",
+            "Set `CUTLASS_PROFILER_BIN` to point at your `cutlass_profiler` binary after running `setup.sh` from the repo root.",
             "Add extra providers by writing JSON files matching the documented schema (see `compare_against_baselines.py`).",
         ],
     ),
@@ -959,11 +959,10 @@ ENTRIES["labs/dynamic_router"] = lab_entry(
         "Export detailed metrics (TTFT, TPOT, queue depth) for visualization.",
     ],
     contents=[
-        ("`baseline_router.py`, `optimized_router.py`, `driver.py`", "Core router logic plus a synthetic simulator for deterministic comparisons."),
-        ("`baseline_dynamic_router.py`, `optimized_dynamic_router.py`", "Harness-facing benchmarks derived from the simulator."),
+        ("`router_round_robin.py`, `router_policy.py`, `driver.py`, `eval_stack.py`", "Core router logic plus a synthetic simulator for deterministic comparisons."),
         ("`baseline_dynamic_router_vllm.py`, `optimized_dynamic_router_vllm.py`, `vllm_runner.py`", "Integrations for running the routing policy against vLLM instances."),
         ("`baseline_dual_pool_vllm.py`, `optimized_dual_pool_vllm.py`", "Shared-pool vs dual-pool TTFT benchmarks that reuse `vllm_runner.py`."),
-        ("`topology.py`, `topology_probe.py`", "NUMA-aware GPU mapping helpers and a target that emits `artifacts/topology/topology.json` for routing hints."),
+        ("`topology.py`, `topology_probe.py`", "NUMA-aware GPU mapping helpers and a target that emits topology JSON under `artifacts/topology/` for routing hints."),
     ],
     validation=[
         "`python labs/dynamic_router/driver.py --mode baseline` vs `--mode optimized` shows lower TTFT variance and higher TPOT for the optimized policy.",
@@ -1022,9 +1021,9 @@ ENTRIES["labs/fullstack_cluster"] = lab_entry(
         "Collect artifact bundles that summarize every phase of the scenario.",
     ],
     contents=[
-        ("`baseline_01_system_foundations.py` ... `baseline_09_end_to_end.py`, `optimized_01_system_foundations.py` ... `optimized_09_end_to_end.py`, `scenario_benchmark.py`", "Scenario scripts that orchestrate system, kernel, compiler, memory, serving, and end-to-end phases."),
+        ("`baseline_moe_readiness.py`, `optimized_moe_readiness.py`, `baseline_moe_readiness_multigpu.py`, `optimized_moe_readiness_multigpu.py`", "MoE readiness benchmarks that stress all-to-all sharding, routing, and capacity planning."),
         ("`baseline_cluster_gemm.py`, `optimized_cluster_gemm.py`, `baseline_cluster_gemm_tcgen05.py`, `optimized_cluster_gemm_tcgen05.py`", "Python entrypoints for the cluster GEMM kernels with tcgen05 fallbacks."),
-        ("`capstone_extension.py`, `capstone_kernels.cu`, `capstone_kernels_tcgen05.cu`, `capstone_benchmarks.py`", "PyTorch extension, CUDA kernels, and harness hooks for the GEMM showcase."),
+        ("`capstone_extension.py`, `capstone_extension_tcgen05.py`, `capstone_kernels.cu`, `capstone_kernels_tcgen05.cu`, `capstone_benchmarks.py`", "PyTorch extension, CUDA kernels, and harness hooks for the GEMM showcase."),
         ("`run_lab_fullstack_cluster.py`, `gpu_requirements.py`, `expectations_{hardware_key}.json`", "Standalone runner, hardware requirement helper, and expectation file."),
     ],
     validation=[
@@ -1052,15 +1051,15 @@ ENTRIES["labs/moe_cuda"] = lab_entry(
         "Validate CUDA kernels against Python math models before integrating into serving stacks.",
     ],
     contents=[
-        ("`baseline_decode_attention.py`, `optimized_decode_attention.py`, `optimized_decode_attention_math.py`", "Attention microbenchmarks plus math-only checks to vet numerical stability."),
-        ("`baseline_decode_kernel.py`, `optimized_decode_kernel.py`, `decode_kernels.cu`, `kernels/`", "CUDA kernels and wrappers for the decode core."),
+        ("`baseline_decode_attention.py`, `optimized_decode_attention.py`", "Attention microbenchmarks that validate correctness while optimizing kernel schedules."),
+        ("`baseline_decode_kernel.py`, `optimized_decode_kernel.py`, `decode_kernels.py`, `kernels/`", "CUDA kernels and wrappers for the decode core."),
         ("`baseline_kv_transfer.py`, `optimized_kv_transfer.py`, `optimized_kv_transfer_graphs.py`", "KV-transfer samples comparing eager vs CUDA Graph orchestration."),
         ("`baseline_router.py`, `optimized_router.py`, `optimized_router_vectorized.py`", "MoE router logic fit for device execution."),
         ("`expectations_{hardware_key}.json`, `__init__.py`", "Metadata and module exports needed by the harness."),
     ],
     validation=[
         "`python -m cli.aisp bench run --targets labs/moe_cuda --profile minimal` runs every baseline/optimized pair and captures NVTX traces.",
-        "`python labs/moe_cuda/optimized_decode_attention_math.py --validate` compares the CUDA path to the math reference and fails loudly if drift is detected.",
+        "`python -m cli.aisp bench verify -t labs/moe_cuda:decode_attention` compares the CUDA path to the math reference and fails loudly if drift is detected.",
         "KV transfer graphs print latency breakdowns showing overlap improvements relative to the baseline script.",
     ],
     notes=[
@@ -1188,7 +1187,7 @@ ENTRIES["labs/train_distributed"] = lab_entry(
     notes=[
         "Set `TORCHRUN_ARGS` or pass `--torchrun-env` via the CLI when launching multi-node tests.",
         "`utils.py` exposes helper functions (like `resolve_topology()`) that can be reused in other labs.",
-        "FSDP/FSDP2 benchmarks default to `labs/train_distributed/data/tinystories_packed_seq256.jsonl` plus `labs/train_distributed/data/tinyllama_config.json`, with `AISP_TINYSTORIES_LAYERS=4` to keep the model small. Override with `AISP_TINYSTORIES_PACKED_PATH`, `AISP_TINYSTORIES_LOCAL_PATH`, `AISP_TINYSTORIES_CONFIG_PATH`, or `AISP_TINYSTORIES_LAYERS`.",
+        "FSDP/FSDP2 benchmarks default to `labs/train_distributed/data/tinystories_packed_seq128.jsonl` plus `labs/train_distributed/data/tinyllama_config.json`, with `AISP_TINYSTORIES_LAYERS=4` to keep the model small. Override with `AISP_TINYSTORIES_PACKED_PATH`, `AISP_TINYSTORIES_LOCAL_PATH`, `AISP_TINYSTORIES_CONFIG_PATH`, or `AISP_TINYSTORIES_LAYERS`.",
         "Scale up by increasing `AISP_TINYSTORIES_LAYERS` or swapping to a larger config and pairing it with a packed dataset that matches the new sequence length.",
         "Set `AISP_FSDP_DISABLE_FP8=1` to keep the minimal BF16 path; unset it when you want to exercise the FP8 conversion on larger workloads.",
     ],

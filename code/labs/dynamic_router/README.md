@@ -12,11 +12,10 @@ Simulates and benchmarks dynamic routing policies for large-scale inference: spl
 ## Directory Layout
 | Path | Description |
 | --- | --- |
-| `baseline_router.py`, `optimized_router.py`, `driver.py` | Core router logic plus a synthetic simulator for deterministic comparisons. |
-| `baseline_dynamic_router.py`, `optimized_dynamic_router.py` | Harness-facing benchmarks derived from the simulator. |
+| `router_round_robin.py`, `router_policy.py`, `driver.py`, `eval_stack.py` | Core router logic plus a synthetic simulator for deterministic comparisons. |
 | `baseline_dynamic_router_vllm.py`, `optimized_dynamic_router_vllm.py`, `vllm_runner.py` | Integrations for running the routing policy against vLLM instances. |
 | `baseline_dual_pool_vllm.py`, `optimized_dual_pool_vllm.py` | Shared-pool vs dual-pool TTFT benchmarks that reuse `vllm_runner.py`. |
-| `topology.py`, `topology_probe.py` | NUMA-aware GPU mapping helpers and a target that emits `artifacts/topology/topology.json` for routing hints. |
+| `topology.py`, `topology_probe.py` | NUMA-aware GPU mapping helpers and a target that emits topology JSON under `artifacts/topology/` for routing hints. |
 
 ## Running the Benchmarks
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.

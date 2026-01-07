@@ -210,9 +210,9 @@ To close the remaining gap to cuBLAS:
    - Barrier arrival counts must match multicast pattern
 
 3. **Study CUTLASS 4.x**
-   - `examples/70_blackwell_gemm/70_blackwell_fp16_gemm.cu` - Complete example
-   - `sm100_mma_warpspecialized.hpp` - How CUTLASS does it
-   - `sm100_pipeline.hpp` - PipelineTmaUmmaAsync abstractions
+   - `third_party/pytorch-src/third_party/cutlass/examples/70_blackwell_gemm/70_blackwell_fp16_gemm.cu` - Complete example
+   - `third_party/pytorch-src/third_party/cutlass/include/cutlass/gemm/collective/sm100_mma_warpspecialized.hpp` - How CUTLASS does it
+   - `third_party/pytorch-src/third_party/cutlass/include/cutlass/pipeline/sm100_pipeline.hpp` - PipelineTmaUmmaAsync abstractions
    - Use `CollectiveBuilder` for automatic optimization
 
 ### Achieving 68% with CUTLASS

@@ -18,7 +18,9 @@ The goal is to encode the practical rule from the post:
 from __future__ import annotations
 
 import os
+import queue
 import tempfile
+import threading
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
@@ -95,6 +97,7 @@ class PagedKVConfig:
     fallback_dtype: torch.dtype = torch.float16
     prefetch_next_page: bool = False
     use_direct_h2d: bool = False
+    use_host_prefetch_thread: bool = False
 
 
 class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
@@ -122,6 +125,12 @@ class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.prefetched_range: Optional[Tuple[int, int]] = None
         self.copy_stream: Optional[torch.cuda.Stream] = None
         self.q: Optional[torch.Tensor] = None
+        self._prefetch_thread: Optional[threading.Thread] = None
+        self._prefetch_queue: Optional["queue.Queue[int]"] = None
+        self._prefetch_ready: Optional[threading.Event] = None
+        self._prefetch_lock = threading.Lock()
+        self._prefetch_ready_start: Optional[int] = None
+        self._prefetch_stop = threading.Event()
 
         self.host_cache: Optional[torch.Tensor] = None
         self.host_memmap: Optional[np.memmap] = None
@@ -292,6 +301,8 @@ class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._bytes_per_iteration = float(bytes_per_page * max(1, self.cfg.repeat_pages))
         self.register_workload_metadata(bytes_per_iteration=self._bytes_per_iteration)
 
+        self._start_host_prefetch_thread()
+
         # Precompute a deterministic query tensor in the runtime dtype.
         # Some PyTorch builds lack RNG kernels for FP8; generate in FP16 and cast.
         q_dtype = self.runtime_dtype
@@ -321,13 +332,100 @@ class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
             return None
         return self.prefetch_staging, pref_end - pref_start
 
+    def _prefetch_worker(self) -> None:
+        if self._prefetch_queue is None or self.prefetch_staging is None:
+            return
+        while not self._prefetch_stop.is_set():
+            try:
+                start = self._prefetch_queue.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            if start < 0 or self._prefetch_stop.is_set():
+                self._prefetch_queue.task_done()
+                break
+            _, slice_len = self._stage_page(start, into_prefetch=True)
+            with self._prefetch_lock:
+                self.prefetched_range = (start, start + slice_len)
+                self.prefetch_slice_len = slice_len
+                self._prefetch_ready_start = start
+            if self._prefetch_ready is not None:
+                self._prefetch_ready.set()
+            self._prefetch_queue.task_done()
+
+    def _start_host_prefetch_thread(self) -> None:
+        if not (self.cfg.use_host_prefetch_thread and self.cfg.prefetch_next_page):
+            return
+        if self.prefetch_staging is None:
+            return
+        if self._prefetch_thread is not None:
+            return
+        self._prefetch_queue = queue.Queue(maxsize=1)
+        self._prefetch_ready = threading.Event()
+        self._prefetch_stop.clear()
+        self._prefetch_thread = threading.Thread(
+            target=self._prefetch_worker,
+            name="paged_kv_prefetch",
+            daemon=True,
+        )
+        self._prefetch_thread.start()
+
+    def _stop_host_prefetch_thread(self) -> None:
+        if self._prefetch_thread is None:
+            return
+        self._prefetch_stop.set()
+        if self._prefetch_queue is not None:
+            try:
+                self._prefetch_queue.put_nowait(-1)
+            except queue.Full:
+                pass
+        self._prefetch_thread.join(timeout=2.0)
+        self._prefetch_thread = None
+        self._prefetch_queue = None
+        self._prefetch_ready = None
+        self._prefetch_ready_start = None
+
+    def _schedule_host_prefetch(self, start: int) -> None:
+        if self._prefetch_queue is None:
+            return
+        if self._prefetch_ready is not None and self._prefetch_ready.is_set():
+            return
+        try:
+            self._prefetch_queue.put_nowait(start)
+        except queue.Full:
+            return
+
+    def _consume_host_prefetch(self, start: int) -> Optional[Tuple[torch.Tensor, int]]:
+        if self._prefetch_ready is None or self.prefetch_staging is None:
+            return None
+        if not self._prefetch_ready.is_set():
+            return None
+        with self._prefetch_lock:
+            if self._prefetch_ready_start != start:
+                return None
+            slice_len = self.prefetch_slice_len
+            self._prefetch_ready.clear()
+            self._prefetch_ready_start = None
+        if slice_len is None:
+            return None
+        return self.prefetch_staging, slice_len
+
+    def _wait_for_host_prefetch(self, start: int, timeout_s: float = 1.0) -> Optional[Tuple[torch.Tensor, int]]:
+        if self._prefetch_ready is None:
+            return None
+        if self._prefetch_ready.is_set():
+            return self._consume_host_prefetch(start)
+        if self._prefetch_ready.wait(timeout=timeout_s):
+            return self._consume_host_prefetch(start)
+        return None
+
     def benchmark_fn(self) -> None:
         repeats = max(1, self.cfg.repeat_pages)
         attn_out = None
+        use_host_prefetch = bool(self.cfg.use_host_prefetch_thread and self.cfg.prefetch_next_page)
         for _ in range(repeats):
             start = self.page_cursor
             active_idx = self.active_buf_idx
-            prefetched = self._maybe_use_prefetch(start)
+            prefetched = self._consume_host_prefetch(start) if use_host_prefetch else self._maybe_use_prefetch(start)
             if prefetched is not None:
                 staged, slice_len = prefetched
                 if self.prefetch_event is not None and self.prefetch_buf_idx is not None:
@@ -340,9 +438,32 @@ class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 self._copy_to_device(staged, slice_len, buffer_idx=active_idx, wait_for_copy=True)
 
             next_start = (start + self.cfg.page_tokens) % self.cfg.max_seq_len
+            if self.cfg.prefetch_next_page and use_host_prefetch:
+                self._schedule_host_prefetch(next_start)
+
+            self.hot_k = self.hot_k_bufs[active_idx]
+            self.hot_v = self.hot_v_bufs[active_idx]
+
+            # Simple attention step that will pick flash/mathematics based on dtype/backend.
+            q = self.q
+            if q is None:
+                raise RuntimeError("Query tensor not initialized")
+            k = self.hot_k[..., :slice_len, :]
+            v = self.hot_v[..., :slice_len, :]
+            ctx = prefer_sdpa_backends() if prefer_sdpa_backends is not None else nullcontext()
+            with ctx:
+                attn_out = F.scaled_dot_product_attention(q, k, v)
+
             if self.cfg.prefetch_next_page:
-                # Launch next-page prefetch early so H2D can overlap attention compute.
-                staged_prefetch, pref_len = self._stage_page(next_start, into_prefetch=True)
+                # Launch next-page prefetch so H2D can overlap attention compute.
+                if use_host_prefetch:
+                    prefetched = self._wait_for_host_prefetch(next_start)
+                    if prefetched is None:
+                        staged_prefetch, pref_len = self._stage_page(next_start, into_prefetch=True)
+                    else:
+                        staged_prefetch, pref_len = prefetched
+                else:
+                    staged_prefetch, pref_len = self._stage_page(next_start, into_prefetch=True)
                 self.prefetched_range = (next_start, next_start + pref_len)
                 self.prefetch_slice_len = pref_len
                 if self.copy_stream is not None and len(self.hot_k_bufs) > 1:
@@ -363,19 +484,6 @@ class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 self.prefetched_range = None
                 self.prefetch_slice_len = None
                 self.prefetch_buf_idx = None
-
-            self.hot_k = self.hot_k_bufs[active_idx]
-            self.hot_v = self.hot_v_bufs[active_idx]
-
-            # Simple attention step that will pick flash/mathematics based on dtype/backend.
-            q = self.q
-            if q is None:
-                raise RuntimeError("Query tensor not initialized")
-            k = self.hot_k[..., :slice_len, :]
-            v = self.hot_v[..., :slice_len, :]
-            ctx = prefer_sdpa_backends() if prefer_sdpa_backends is not None else nullcontext()
-            with ctx:
-                attn_out = F.scaled_dot_product_attention(q, k, v)
 
             self.page_cursor = next_start
 
@@ -412,6 +520,7 @@ class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
     # -------------------- Teardown --------------------
 
     def teardown(self) -> None:
+        self._stop_host_prefetch_thread()
         self.hot_k = None
         self.hot_v = None
         self.hot_k_bufs = []

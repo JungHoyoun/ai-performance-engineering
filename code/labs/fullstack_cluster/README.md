@@ -12,9 +12,9 @@ Replays the entire performance-engineering arc as scenarios: from system prep to
 ## Directory Layout
 | Path | Description |
 | --- | --- |
-| `baseline_01_system_foundations.py` ... `baseline_09_end_to_end.py`, `optimized_01_system_foundations.py` ... `optimized_09_end_to_end.py`, `scenario_benchmark.py` | Scenario scripts that orchestrate system, kernel, compiler, memory, serving, and end-to-end phases. |
+| `baseline_moe_readiness.py`, `optimized_moe_readiness.py`, `baseline_moe_readiness_multigpu.py`, `optimized_moe_readiness_multigpu.py` | MoE readiness benchmarks that stress all-to-all sharding, routing, and capacity planning. |
 | `baseline_cluster_gemm.py`, `optimized_cluster_gemm.py`, `baseline_cluster_gemm_tcgen05.py`, `optimized_cluster_gemm_tcgen05.py` | Python entrypoints for the cluster GEMM kernels with tcgen05 fallbacks. |
-| `capstone_extension.py`, `capstone_kernels.cu`, `capstone_kernels_tcgen05.cu`, `capstone_benchmarks.py` | PyTorch extension, CUDA kernels, and harness hooks for the GEMM showcase. |
+| `capstone_extension.py`, `capstone_extension_tcgen05.py`, `capstone_kernels.cu`, `capstone_kernels_tcgen05.cu`, `capstone_benchmarks.py` | PyTorch extension, CUDA kernels, and harness hooks for the GEMM showcase. |
 | `run_lab_fullstack_cluster.py`, `gpu_requirements.py`, `expectations_{hardware_key}.json` | Standalone runner, hardware requirement helper, and expectation file. |
 
 ## Running the Benchmarks

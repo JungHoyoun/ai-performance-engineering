@@ -17,16 +17,16 @@ Generate polished **PDF and HTML reports** from benchmark data, profiling result
 
 ```bash
 # Generate PDF from JSON data
-python -m cli.aisp bench report --data-file benchmark_results.json --output report.pdf
+python -m cli.aisp bench report --data-file benchmark_test_results.json --output report.pdf
 
 # Generate HTML report
-python -m cli.aisp bench report --data-file benchmark_results.json --output report.html --format html
+python -m cli.aisp bench report --data-file benchmark_test_results.json --output report.html --format html
 
 # Generate from running dashboard
 python -m cli.aisp bench report --data-file http://localhost:6970/api/data --output report.pdf
 
 # Custom title
-python -m cli.aisp bench report --data-file data.json --output report.pdf --title "Q4 Performance Report"
+python -m cli.aisp bench report --data-file benchmark_test_results.json --output report.pdf --title "Q4 Performance Report"
 ```
 
 ### From Dashboard
@@ -248,7 +248,7 @@ generate_report(
 from core.analysis.reporting import generate_report
 
 generate_report(
-    "artifacts/ch05/results/benchmark_test_results.json",
+    "benchmark_test_results.json",
     "ch05_report.pdf"
 )
 ```

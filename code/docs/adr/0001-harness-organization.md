@@ -25,6 +25,6 @@ These “monolithic” shapes are common in harnesses where:
 
 ## Follow-ups (Roadmap)
 - Split `BenchmarkConfig` into focused groups (e.g., `TimingConfig`, `ProfilingConfig`, `DistributedConfig`, `ValidationConfig`) while keeping a compatibility layer for existing call sites.
-- Extract `run_benchmarks.py` orchestration into cohesive modules (e.g., runner, result collector, report renderer) while keeping the entrypoint stable.
+- Extract `core/harness/run_benchmarks.py` orchestration into cohesive modules (e.g., runner, result collector, report renderer) while keeping the entrypoint stable.
 - Replace process-wide “quick wins” globals with an explicit, idempotent configurator owned by `BenchmarkHarness` initialization.
 - Centralize GPU state operations behind a `GPUStateManager` (single place for reset, cache clear, and telemetry snapshots).

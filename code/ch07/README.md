@@ -13,7 +13,7 @@ Teaches how memory layout drives performance: coalesced copies, tiled matmuls, a
 | Path | Description |
 | --- | --- |
 | `baseline_copy_scalar.cu`, `baseline_copy_uncoalesced.cu`, `baseline_uncoalesced_copy.py`, `optimized_copy_uncoalesced_coalesced.cu`, `optimized_copy_scalar_vectorized.cu`, `optimized_copy_scalar_vectorized_sm121` | Copy kernels highlighting coalescing, vector width, and warp-level efficiency. |
-| `baseline_hbm3e_copy.cu`, `baseline_hbm3e_peak.cu`, `optimized_hbm3e_copy.cu`, `optimized_hbm3e_peak.cu`, `baseline_hbm3ecopy.py`, `optimized_hbm3ecopy.py` | HBM3e peak-bandwidth probes with CUDA and Python harnesses. |
+| `baseline_hbm_copy.cu`, `baseline_hbm_peak.cu`, `optimized_hbm_copy.cu`, `optimized_hbm_peak.cu`, `baseline_hbmcopy.py`, `optimized_hbmcopy.py` | HBM peak-bandwidth probes with CUDA and Python harnesses. |
 | `baseline_async_prefetch.cu`, `optimized_async_prefetch.cu`, `baseline_tma_copy.cu`, `baseline_tma_copy.py`, `optimized_async_prefetch.py` | Async/TMA samples that overlap global-memory fetch with computation. |
 | `baseline_matmul.cu`, `baseline_matmul_cuda.py`, `optimized_matmul_cuda.py`, `optimized_matmul_tiled.cu` | Matmul implementations to contrast naive global-memory access with shared-memory tiling and warp-level reuse. |
 | `baseline_lookup.cu`, `baseline_lookup.py`, `optimized_lookup.cu`, `lookup_pytorch.py` | Cache-sensitive lookup workloads demonstrating how to reorganize tables for better locality. |
@@ -31,7 +31,7 @@ python -m cli.aisp bench run --targets ch07 --profile minimal
 - Expectation baselines live next to each chapter in `expectations_{hardware_key}.json`; refresh with `--update-expectations` after validating new hardware.
 
 ## Validation Checklist
-- `python baseline_hbm3ecopy.py --bytes 1073741824` reports noticeably lower GB/s than `optimized_hbm3ecopy.py`, proving vectorization plus async copies work.
+- `python baseline_hbmcopy.py --bytes 1073741824` reports noticeably lower GB/s than `optimized_hbmcopy.py`, proving vectorization plus async copies work.
 - `python compare.py --examples async_prefetch` shows optimized_async_prefetch reducing total kernel count while preserving accuracy.
 - Nsight Compute captures of `optimized_matmul_tiled.cu` hit >80% shared-memory bandwidth utilization with minimal bank conflicts.
 

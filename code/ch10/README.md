@@ -19,7 +19,7 @@ Applies tensor-core friendly scheduling on Blackwell: warp specialization, TMA-p
 | `baseline_cluster_multicast.py`, `optimized_cluster_multicast.py`, `tma_multicast_baseline.cu`, `tma_multicast_cluster.cu` | Cluster multicast GEMM example (baseline vs cluster multicast) wrapped as CUDA-binary harness benchmarks. |
 | `baseline_cooperative_persistent.{py,cu}`, `optimized_cooperative_persistent.{py,cu}`, `baseline_persistent_matmul_tma.py`, `optimized_persistent_matmul_tma.py` | Persistent kernels combining cooperative groups with TMA streams for steady-state throughput. |
 | `baseline_flash_attn_tma_micro_pipeline.{py,cu}`, `optimized_flash_attn_tma_micro_pipeline.{py,cu}`, `baseline_warp_specialized_pipeline*.{py,cu}`, `optimized_warp_specialized_pipeline*.{py,cu}` | Micro-pipeline and warp specialization studies that mix Triton, CUDA, and inline PTX. |
-| `compare.py`, `workload_config.py`, `perf_sweep.sh`, `profile.sh`, `requirements_cufile.txt` | Harness entry, workload dials, performance sweeps, Nsight automation, and optional cuFile deps. |
+| `compare.py`, `workload_config.py`, `demo_both_examples.sh`, `profile.sh`, `requirements_cufile.txt` | Harness entry, workload dials, demo runner, Nsight automation, and optional cuFile deps. |
 
 ## Running the Benchmarks
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
@@ -34,7 +34,7 @@ python -m cli.aisp bench run --targets ch10 --profile minimal
 ## Validation Checklist
 - Cluster-enabled kernels fail fast on hardware without DSMEM support, while DSMEM-free variants still execute-use this to confirm cluster capability flags.
 - `python optimized_flash_attn_tma_micro_pipeline.py --profile` produces fewer kernel launches and higher achieved FLOP/s than the baseline script.
-- `python perf_sweep.sh --chapter ch10` records TFLOP/s vs batch size curves, proving persistent kernels amortize launch costs.
+- `bash demo_both_examples.sh` runs the CUDA memory pipeline and GDS demo, highlighting launch amortization and IO overlap.
 
 ## Notes
 - `cufile_gds_example.py` demonstrates integrating GPUDirect Storage into tensor-core pipelines for IO-heavy training loops.

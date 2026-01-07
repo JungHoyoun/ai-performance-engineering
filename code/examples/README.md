@@ -62,7 +62,7 @@ The optimizer will automatically find and use `optimize_config.yaml` if present.
 from core.optimization.auto import AutoOptimizer
 
 optimizer = AutoOptimizer()
-result = optimizer.optimize_file("model.py", output_path="optimized_model.py")
+result = optimizer.optimize_file("examples/optimize_examples.py", output_path="/tmp/optimize_examples_optimized.py")
 print(f"Speedup: {result.speedup:.2f}x")
 ```
 
@@ -86,5 +86,3 @@ Examples generate output files in `/tmp/`:
 - `/tmp/timeline.html` - CPU/GPU timeline
 - `/tmp/memory_profile.json` - Memory usage data
 - `/tmp/compile_report.html` - torch.compile analysis
-
-

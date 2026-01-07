@@ -6,7 +6,7 @@ Shared headers, CUDA build flags, and Python utilities that keep every chapter a
 ## Learning Goals
 - Reuse the benchmark harness, logging, and artifact plumbing instead of rebuilding them per chapter.
 - Target the right GPU features (TMA, pipeline API, SDPA backends) by querying capabilities up front.
-- Plug new CUDA/Triton kernels into the harness through the standard compare.py template.
+- Plug new CUDA/Triton kernels into the harness through `core/utils/chapter_compare_template.py`.
 - Keep builds reproducible on Blackwell/Grace-Blackwell by leaning on the common Makefile fragments and env defaults.
 
 ## Directory Layout
@@ -31,7 +31,7 @@ Shared headers, CUDA build flags, and Python utilities that keep every chapter a
       result = harness.benchmark(bench)
       print(result.timing.mean_ms)
   ```
-- **CUDA headers**: include `../../core/common/headers/arch_detection.cuh` to select tiles and query limits; include `tma_helpers.cuh` to encode tensor maps for `cp.async.bulk.tensor` kernels.
+- **CUDA headers**: include `../../core/common/headers/arch_detection.cuh` to select tiles and query limits; include `../../core/common/headers/tma_helpers.cuh` to encode tensor maps for `cp.async.bulk.tensor` kernels.
 
 ## Validation Checklist
 - `python - <<'PY'\nfrom core.env import dump_environment_and_capabilities\ndump_environment_and_capabilities()\nPY` prints CUDA paths, NCCL preload, and TMA/pipeline support.

@@ -13,12 +13,12 @@ Concentrates on resource balancing: adjust block sizes, registers, and shared me
 | Path | Description |
 | --- | --- |
 | `baseline_occupancy_tuning.py`, `optimized_occupancy_tuning.py`, `occupancy_tuning_tool.py`, `occupancy_api_example.cu`, `occupancy_tuning.cu` | Occupancy studies that tune CTA shapes, register caps, and API-computed limits (plus a sweep tool for quick preset exploration). |
-| `baseline_double_buffering.cu`, `baseline_double_buffering.py`, `optimized_double_buffering_pipelined.cu`, `optimized_double_buffering.py`, `double_buffering_kernels.cu` | Double-buffered kernels and their Python drivers showing how to keep tensor cores busy. |
+| `baseline_ai_optimization.py`, `optimized_ai_optimization.py`, `ai_optimization_kernels.cu`, `independent_ops.cu` | AI kernel scheduling samples that stage independent ops to highlight pipeline and occupancy tradeoffs. |
 | `baseline_hbm.cu`, `baseline_hbm.py`, `optimized_hbm.py`, `optimized_hbm_vectorized.cu`, `hbm_kernels.cu` | HBM streaming workloads that compare scalar, vectorized, and asynchronous fetch patterns. |
 | `baseline_loop_unrolling.cu`, `baseline_loop_unrolling.py`, `optimized_loop_unrolling.cu`, `optimized_loop_unrolling.py`, `loop_unrolling_kernels.cu` | Loop unrolling case studies targeting various ILP regimes. |
 | `baseline_threshold.py`, `baseline_thresholdtma.py`, `optimized_threshold.py`, `optimized_thresholdtma.py`, `threshold_kernels.cu`, `threshold_tma_benchmark_base.py` | Threshold operators implemented with scalar, vectorized, and TMA-backed pipelines. |
 | `baseline_tiling.py`, `baseline_tiling_tcgen05.py`, `optimized_tiling.py`, `optimized_tiling_tcgen05.py`, `tiling_kernels.cu`, `tiling_extension_tcgen05.py` | Tile schedulers for tcgen05 matmuls, including safe fallbacks when tcgen05 isn't available. |
-| `compare.py`, `requirements.txt`, `expectations_{hardware_key}.json`, `ai_optimization_kernels.cu` | Harness entry, dependencies, regression thresholds, and AI-optimization helper kernels. |
+| `compare.py`, `requirements.txt`, `expectations_{hardware_key}.json` | Harness entry, dependencies, and regression thresholds. |
 
 ## Running the Benchmarks
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
@@ -31,7 +31,7 @@ python -m cli.aisp bench run --targets ch08 --profile minimal
 - Expectation baselines live next to each chapter in `expectations_{hardware_key}.json`; refresh with `--update-expectations` after validating new hardware.
 
 ## Validation Checklist
-- Nsight Compute traces for `optimized_double_buffering_pipelined.cu` should show overlapping smem/ldgst transactions with minimal idle cycles.
+- Nsight Compute traces for `optimized_thresholdtma.py` should show overlapping TMA loads with minimal idle cycles.
 - `python -m cli.aisp tools occupancy-tuning` prints preset timings + speedups for the occupancy tuning microbenchmark.
 - `python compare.py --examples threshold` confirms the TMA-backed kernels reducing latency vs scalar reference implementations.
 

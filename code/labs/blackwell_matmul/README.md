@@ -27,7 +27,7 @@ python -m cli.aisp bench run --targets labs/blackwell_matmul --profile minimal
 
 ## Validation Checklist
 - `python -m cli.aisp bench run --targets labs/blackwell_matmul:blackwell_matmul_cluster --profile minimal` delivers higher TFLOP/s than the baseline and emits artifacts under `artifacts/labs_blackwell_matmul*`.
-- `python labs/blackwell_matmul/run_blackwell_matmul.py --variant pipeline --size 4096 --roofline-meta artifacts/matmul_meta.csv` saves roofline metadata alongside timings.
+- `python labs/blackwell_matmul/run_blackwell_matmul.py --variant pipeline --size 4096 --roofline-meta artifacts/labs_blackwell_matmul/matmul_meta.csv` saves roofline metadata alongside timings.
 - DSM-aware variants error out early on GPUs that lack cluster DSMEM support, preventing misleading results.
 
 ## Notes

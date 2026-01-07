@@ -17,24 +17,24 @@ Welcome! This guide covers coding standards and best practices for the AI Perfor
 
 ### Chapter Structure
 
+Example chapter layout (see `ch07/`):
 ```
-ch{N}/
-├── __init__.py                    # Module exports
-├── baseline_{technique}.py        # Unoptimized reference
-├── optimized_{technique}.py       # Optimized version
-├── baseline_{technique}.cu        # CUDA kernel (if applicable)
-├── optimized_{technique}.cu       # Optimized CUDA kernel
-└── Makefile                       # CUDA compilation rules
+ch07/__init__.py                    # Module exports
+ch07/baseline_memory_access.py      # Unoptimized reference
+ch07/optimized_memory_access.py     # Optimized version
+ch07/baseline_memory_access.cu      # CUDA kernel (if applicable)
+ch07/optimized_memory_access.cu     # Optimized CUDA kernel
+ch07/Makefile                       # CUDA compilation rules
 ```
 
 ### Naming Conventions
 
 | Pattern | Purpose | Example |
 |---------|---------|---------|
-| `baseline_*.py` | Unoptimized reference | `baseline_memory_access.py` |
-| `optimized_*.py` | Optimized implementation | `optimized_memory_access.py` |
-| `*_bench.py` | Standalone benchmark | `matmul_bench.py` |
-| `*_demo.py` | Demonstration/example | `flash_attention_demo.py` |
+| `baseline_*.py` | Unoptimized reference | `ch07/baseline_memory_access.py` |
+| `optimized_*.py` | Optimized implementation | `ch07/optimized_memory_access.py` |
+| `*_bench.py` | Standalone benchmark | `ch13/fp8_perchannel_bench.py` |
+| `*_demo.py` | Demonstration/example | `ch15/pipeline_parallel_demo.py` |
 
 ---
 
@@ -411,7 +411,7 @@ The following checks run automatically on push/PR:
 - Metrics coverage analysis
 - Linting (flake8, mypy)
 
-See `.github/workflows/benchmark-validation.yml` for details.
+See `./.github/workflows/benchmark-validation.yml` for details.
 
 ---
 

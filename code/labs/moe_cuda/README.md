@@ -12,8 +12,8 @@ Implements mixture-of-experts decode helpers directly in CUDA: decode kernels, K
 ## Directory Layout
 | Path | Description |
 | --- | --- |
-| `baseline_decode_attention.py`, `optimized_decode_attention.py`, `optimized_decode_attention_math.py` | Attention microbenchmarks plus math-only checks to vet numerical stability. |
-| `baseline_decode_kernel.py`, `optimized_decode_kernel.py`, `decode_kernels.cu`, `kernels/` | CUDA kernels and wrappers for the decode core. |
+| `baseline_decode_attention.py`, `optimized_decode_attention.py` | Attention microbenchmarks that validate correctness while optimizing kernel schedules. |
+| `baseline_decode_kernel.py`, `optimized_decode_kernel.py`, `decode_kernels.py`, `kernels/` | CUDA kernels and wrappers for the decode core. |
 | `baseline_kv_transfer.py`, `optimized_kv_transfer.py`, `optimized_kv_transfer_graphs.py` | KV-transfer samples comparing eager vs CUDA Graph orchestration. |
 | `baseline_router.py`, `optimized_router.py`, `optimized_router_vectorized.py` | MoE router logic fit for device execution. |
 | `expectations_{hardware_key}.json`, `__init__.py` | Metadata and module exports needed by the harness. |
@@ -29,7 +29,7 @@ python -m cli.aisp bench run --targets labs/moe_cuda --profile minimal
 
 ## Validation Checklist
 - `python -m cli.aisp bench run --targets labs/moe_cuda --profile minimal` runs every baseline/optimized pair and captures NVTX traces.
-- `python labs/moe_cuda/optimized_decode_attention_math.py --validate` compares the CUDA path to the math reference and fails loudly if drift is detected.
+- `python -m cli.aisp bench verify -t labs/moe_cuda:decode_attention` compares the CUDA path to the math reference and fails loudly if drift is detected.
 - KV transfer graphs print latency breakdowns showing overlap improvements relative to the baseline script.
 
 ## Notes

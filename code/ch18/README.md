@@ -15,7 +15,7 @@ Collects modern decoder techniques-FlexAttention, FlexDecoding, speculative and 
 | `baseline_flexdecoding.py`, `optimized_flexdecoding.py`, `optimized_flexdecoding_graphs.py`, `v1_engine_loop.py`, `v1_engine_loop_common.py` | FlexDecoding benchmarks plus a V1 polling-loop correctness tool (not a benchmark pair). |
 | `baseline_tensor_cores.py`, `optimized_tensor_cores.py`, `flashmla_kernel.cu`, `warp_specialized_triton.py` | Tensor-core attention kernels plus Triton equivalents for rapid validation. |
 | `flex_attention_native.py`, `flex_attention_enhanced.py`, `flex_attention_large_model.py`, `kv_cache_integration_example.py` | FlexAttention examples ranging from toy sizes to large models with KV-cache reuse. |
-| `baseline_vllm_v1_integration.py`, `optimized_vllm_v1_integration.py`, `baseline_vllm_decode_graphs.py`, `optimized_vllm_decode_graphs.py`, `configs/`, `workload_config.py` | Serving integrations and config presets for pushing workloads through vLLM or custom harnesses. |
+| `baseline_vllm_v1_integration.py`, `optimized_vllm_v1_integration.py`, `baseline_vllm_decode_graphs.py`, `optimized_vllm_decode_graphs.py`, `configs/`, `spec_configs/`, `workload_config.py` | Serving integrations and config presets for pushing workloads through vLLM or custom harnesses. |
 | `speculative_decode/spec_config_sweep.py` | Tooling to sweep speculative-decoding configs and summarize latency/throughput tradeoffs. |
 | `compare.py`, `expectations_{hardware_key}.json`, `test_flex_attention.py` | Harness entry, regression thresholds, and pytest coverage for FlexAttention APIs. |
 
@@ -31,7 +31,7 @@ python -m cli.aisp bench run --targets ch18 --profile minimal
 
 ## Validation Checklist
 - `python optimized_flexdecoding.py --profiling` reports significantly fewer kernels and lower latency than the baseline while matching decoded tokens.
-- `python run_vllm_decoder.py --config configs/flex_attention.yaml` completes with accuracy parity vs the native FlexAttention path.
+- `python run_vllm_decoder.py --spec-config spec_configs/draft_and_verify.json` completes with accuracy parity vs the native FlexAttention path.
 - `python test_flex_attention.py` passes locally, confirming mask/score-mod helpers are wired correctly.
 
 ## Notes

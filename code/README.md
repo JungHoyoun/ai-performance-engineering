@@ -13,7 +13,7 @@ The repository packages 20 focused chapters, advanced labs, and the shared bench
 ## Directory Layout
 | Path | Description |
 | --- | --- |
-| `ch01` - `ch20` | One directory per chapter with baseline/optimized benchmarks, workload configs, and `compare.py` harness entrypoints. |
+| `ch01` - `ch20` | One directory per chapter with baseline/optimized benchmarks, workload configs, and chapter-level harness entrypoints such as `ch01/compare.py`. |
 | `labs/` | Deep-dive labs for matmul, routing, FlexAttention, MoE, persistent decode, distributed training, and more. |
 | `core/benchmark/`, `profiling/`, `core/`, `optimization/`, `analysis/` | Shared harness, logging, workload metadata, profiling, and optimization utilities used by every chapter. |
 | `python -m cli.aisp bench` | Typer-based CLI for running and profiling targets with reproducible artifacts. |

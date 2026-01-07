@@ -20,7 +20,7 @@ This lab demonstrates how to overlap data loading with GPU computation using PyT
 
 | File | Description |
 |------|-------------|
-| `pipeline.py` | Shared helpers: `PipelineConfig`, DataLoader builder, benchmark base |
+| `core/common/async_input_pipeline.py` | Shared helpers: `PipelineConfig`, DataLoader builder, benchmark base |
 | `baseline_async_input_pipeline.py` | No overlap: synchronous loading |
 | `optimized_async_input_pipeline.py` | Full overlap: pinned memory + async + workers |
 

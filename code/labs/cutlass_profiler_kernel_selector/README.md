@@ -25,7 +25,7 @@ python labs/cutlass_profiler_kernel_selector/run_cutlass_profiler_sweep.py --out
 python labs/cutlass_profiler_kernel_selector/run_triton_matmul.py --output-dir artifacts/cutlass_profiler
 python labs/cutlass_profiler_kernel_selector/compare_against_baselines.py --include-default-triton
 ```
-- Set `CUTLASS_PROFILER_BIN` to point at your `cutlass_profiler` binary after running `./setup.sh`.
+- Set `CUTLASS_PROFILER_BIN` to point at your `cutlass_profiler` binary after running `setup.sh` from the repo root.
 - Add extra providers by writing JSON files matching the documented schema (see `compare_against_baselines.py`).
 
 ## Validation Checklist

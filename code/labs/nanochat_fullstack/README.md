@@ -49,7 +49,7 @@ And then visit the URL shown. Make sure to access it correctly, e.g. on Lambda u
 
 ---
 
-You can also `cat report.md` file which appeared in the project directory and contains the "report card" of the run, i.e. a bunch of evaluations and metrics. At the very end, you'll see a summary table, for example:
+You can also inspect the generated report card file in the project directory after a run; it contains the evaluations and metrics. At the very end, you'll see a summary table, for example:
 
 ---
 
@@ -119,10 +119,10 @@ Additionally, to add new abilities to nanochat, see [Guide: counting r in strawb
 nanochat is designed to be short and sweet. One big advantage of this is that we can package up all of the files together and copy paste them to your favorite LLM to ask arbitrary questions. As an example, I like to package up the repo using the [files-to-prompt](https://github.com/simonw/files-to-prompt) utility like so:
 
 ```bash
-files-to-prompt . -e py -e md -e rs -e html -e toml -e sh --ignore "*target*" --cxml > packaged.txt
+files-to-prompt . -e py -e md -e rs -e html -e toml -e sh --ignore "*target*" --cxml > /tmp/nanochat_packaged.txt
 ```
 
-This includes all py, rs, html, toml, sh files, excludes the `rustbpe/target` folder, and chooses the cxml output format. Everything is written to the `packaged.txt` file, which atm measures ~330KB (i.e. well below ~100K tokens for a state of the art LLM), and ~8K lines of code in 45 files.
+This includes all py, rs, html, toml, sh files, excludes the `rustbpe/target` folder, and chooses the cxml output format. Everything is written to `/tmp/nanochat_packaged.txt`, which atm measures ~330KB (i.e. well below ~100K tokens for a state of the art LLM), and ~8K lines of code in 45 files.
 
 Alternatively, I recommend using [DeepWiki](https://deepwiki.com/karpathy/nanochat) from Devin/Cognition to ask questions of this repo. In the URL of this repo, simply change github.com to deepwiki.com, and you're off.
 
@@ -137,67 +137,80 @@ python -m pytest tests/test_rustbpe.py -v -s
 ## File structure
 
 ```
-.
+labs/nanochat_fullstack/
 ├── LICENSE
 ├── README.md
-├── dev
-│   ├── gen_synthetic_data.py       # Example synthetic data for identity
-│   ├── generate_logo.html
-│   ├── nanochat.png
-│   ├── repackage_data_reference.py # Pretraining data shard generation
-│   └── runcpu.sh                   # Small example of how to run on CPU/MPS
-├── nanochat
-│   ├── __init__.py                 # empty
-│   ├── adamw.py                    # Distributed AdamW optimizer
-│   ├── checkpoint_manager.py       # Save/Load model checkpoints
-│   ├── core.common.py                   # Misc small utilities, quality of life
-│   ├── configurator.py             # A superior alternative to argparse
-│   ├── core_eval.py                # Evaluates base model CORE score (DCLM paper)
-│   ├── dataloader.py               # Tokenizing Distributed Data Loader
-│   ├── dataset.py                  # Download/read utils for pretraining data
-│   ├── engine.py                   # Efficient model inference with KV Cache
-│   ├── execution.py                # Allows the LLM to execute Python code as tool
-│   ├── gpt.py                      # The GPT nn.Module Transformer
-│   ├── logo.svg
-│   ├── loss_eval.py                # Evaluate bits per byte (instead of loss)
-│   ├── muon.py                     # Distributed Muon optimizer
-│   ├── report.py                   # Utilities for writing the nanochat Report
-│   ├── tokenizer.py                # BPE Tokenizer wrapper in style of GPT-4
-│   └── ui.html                     # HTML/CSS/JS for nanochat frontend
+├── README_FAST.md
+├── __init__.py
+├── baseline_nanochat_inference.py
+├── benchmark_incremental_optimizations.py
+├── expectations_2x_b200.json
+├── expectations_b200.json
+├── optimized_nanochat_inference.py
 ├── pyproject.toml
 ├── run1000.sh                      # Train the ~$800 nanochat d32
-├── rustbpe                         # Custom Rust BPE tokenizer trainer
-│   ├── Cargo.lock
-│   ├── Cargo.toml
-│   ├── README.md                   # see for why this even exists
-│   └── src
-│       └── lib.rs
-├── scripts
-│   ├── base_eval.py                # Base model: calculate CORE score
-│   ├── base_loss.py                # Base model: calculate bits per byte, sample
-│   ├── base_train.py               # Base model: train
-│   ├── chat_cli.py                 # Chat model (SFT/Mid): talk to over CLI
-│   ├── chat_eval.py                # Chat model (SFT/Mid): eval tasks
-│   ├── chat_rl.py                  # Chat model (SFT/Mid): reinforcement learning
-│   ├── chat_sft.py                 # Chat model: train SFT
-│   ├── chat_web.py                 # Chat model (SFT/Mid): talk to over WebUI
-│   ├── mid_train.py                # Chat model: midtraining
-│   ├── tok_eval.py                 # Tokenizer: evaluate compression rate
-│   └── tok_train.py                # Tokenizer: train it
+├── rustbpe.so
 ├── speedrun.sh                     # Train the ~$100 nanochat d20
-├── tasks
-│   ├── arc.py                      # Multiple choice science questions
-│   ├── core.common.py                   # TaskMixture | TaskSequence
-│   ├── customjson.py               # Make Task from arbitrary jsonl convos
-│   ├── gsm8k.py                    # 8K Grade School Math questions
-│   ├── humaneval.py                # Misnomer; Simple Python coding task
-│   ├── mmlu.py                     # Multiple choice questions, broad topics
-│   ├── smoltalk.py                 # Conglomerate dataset of SmolTalk from HF
-│   └── spellingbee.py              # Task teaching model to spell/count letters
-├── tests
-│   └── test_engine.py
-│   └── test_rustbpe.py
-└── uv.lock
+├── test_new_optimizations.py
+├── uv.lock
+├── dev/
+│   ├── dev/gen_synthetic_data.py       # Example synthetic data for identity
+│   ├── dev/generate_logo.html
+│   ├── dev/nanochat.png
+│   ├── dev/repackage_data_reference.py # Pretraining data shard generation
+│   └── dev/runcpu.sh                   # Small example of how to run on CPU/MPS
+├── nanochat/
+│   ├── nanochat/__init__.py                 # empty
+│   ├── nanochat/adamw.py                    # Distributed AdamW optimizer
+│   ├── nanochat/checkpoint_manager.py       # Save/Load model checkpoints
+│   ├── nanochat/common.py                   # Misc small utilities, quality of life
+│   ├── nanochat/configurator.py             # A superior alternative to argparse
+│   ├── nanochat/core_eval.py                # Evaluates base model CORE score (DCLM paper)
+│   ├── nanochat/dataloader.py               # Tokenizing Distributed Data Loader
+│   ├── nanochat/dataset.py                  # Download/read utils for pretraining data
+│   ├── nanochat/engine.py                   # Efficient model inference with KV Cache
+│   ├── nanochat/execution.py                # Allows the LLM to execute Python code as tool
+│   ├── nanochat/gpt.py                      # The GPT nn.Module Transformer
+│   ├── nanochat/logo.svg
+│   ├── nanochat/loss_eval.py                # Evaluate bits per byte (instead of loss)
+│   ├── nanochat/muon.py                     # Distributed Muon optimizer
+│   ├── nanochat/report.py                   # Utilities for writing the nanochat Report
+│   ├── nanochat/tokenizer.py                # BPE Tokenizer wrapper in style of GPT-4
+│   ├── nanochat/ui.html                     # HTML/CSS/JS for nanochat frontend
+│   └── nanochat/kernels/                    # Custom kernels and stubs
+├── rustbpe/
+│   ├── rustbpe/Cargo.lock
+│   ├── rustbpe/Cargo.toml
+│   ├── rustbpe/README.md                   # see for why this even exists
+│   └── rustbpe/src/lib.rs
+├── scripts/
+│   ├── scripts/base_eval.py                # Base model: calculate CORE score
+│   ├── scripts/base_loss.py                # Base model: calculate bits per byte, sample
+│   ├── scripts/base_train.py               # Base model: train
+│   ├── scripts/bench_b200_flags.py         # Flag sweep helper for B200 throughput
+│   ├── scripts/chat_cli.py                 # Chat model (SFT/Mid): talk to over CLI
+│   ├── scripts/chat_eval.py                # Chat model (SFT/Mid): eval tasks
+│   ├── scripts/chat_rl.py                  # Chat model (SFT/Mid): reinforcement learning
+│   ├── scripts/chat_sft.py                 # Chat model: train SFT
+│   ├── scripts/chat_web.py                 # Chat model (SFT/Mid): talk to over WebUI
+│   ├── scripts/mid_train.py                # Chat model: midtraining
+│   ├── scripts/tok_eval.py                 # Tokenizer: evaluate compression rate
+│   └── scripts/tok_train.py                # Tokenizer: train it
+├── tasks/
+│   ├── tasks/arc.py                      # Multiple choice science questions
+│   ├── tasks/common.py                   # TaskMixture | TaskSequence
+│   ├── tasks/customjson.py               # Make Task from arbitrary jsonl convos
+│   ├── tasks/gsm8k.py                    # 8K Grade School Math questions
+│   ├── tasks/humaneval.py                # Misnomer; Simple Python coding task
+│   ├── tasks/mmlu.py                     # Multiple choice questions, broad topics
+│   ├── tasks/smoltalk.py                 # Conglomerate dataset of SmolTalk from HF
+│   └── tasks/spellingbee.py              # Task teaching model to spell/count letters
+└── tests/
+    ├── tests/conftest.py
+    ├── tests/test_engine.py
+    ├── tests/test_engine_smoke.py
+    ├── tests/test_kernel_stubs.py
+    └── tests/test_rustbpe.py
 ```
 
 ## Contributing

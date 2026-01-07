@@ -43,13 +43,13 @@ The harness automatically discovers benchmarks using a simple naming convention:
 ch*/baseline_*.py  →  ch*/optimized_*.py
 ```
 
-**Example**: `baseline_moe.py` pairs with `optimized_moe.py` or `optimized_moe_streams.py`
+**Example**: `ch20/baseline_moe.py` pairs with `ch20/optimized_moe.py`
 
 **Discovery logic**:
 - Scans all chapter directories (`ch01` through `ch20`)
 - Finds `baseline_*.py` files
 - Matches with `optimized_{name}*.py` files
-- Extracts example name (e.g., `baseline_moe.py` → `moe`)
+- Extracts example name (e.g., `ch20/baseline_moe.py` → `moe`)
 - Returns tuples: `(baseline_path, [optimized_paths], example_name)`
 
 **Result**: Run **264 benchmarks** across **20 chapters** with a single command:
@@ -73,7 +73,7 @@ Use `--accept-regressions` when you intentionally want to refresh expectation fi
 
 **How it works**:
 1. Serializes benchmark class and config to JSON
-2. Spawns isolated Python subprocess via `isolated_runner.py`
+2. Spawns isolated Python subprocess via `core/harness/isolated_runner.py`
 3. Subprocess imports module, instantiates benchmark, runs harness
 4. Returns results via JSON (Pydantic models)
 5. Parent process handles timeouts and cleanup
@@ -615,14 +615,14 @@ python -m cli.aisp bench run --no-profile
 
 ### 2. **Comparison Template**
 
-`chapter_compare_template.py` provides:
+`core/utils/chapter_compare_template.py` provides:
 - `load_benchmark()`: Dynamic module loading
 - `compare_baseline_optimized()`: Standard comparison workflow
 - Integration with harness
 
 ### 3. **Manifest System**
 
-`run_manifest.py` captures:
+`core/benchmark/run_manifest.py` captures:
 - Complete environment state
 - Hardware/software versions
 - Git state
@@ -630,7 +630,7 @@ python -m cli.aisp bench run --no-profile
 
 ### 4. **Artifact Management**
 
-`artifact_manager.py` organizes:
+`core/benchmark/artifact_manager.py` organizes:
 - Profiling outputs
 - Logs
 - Reports
