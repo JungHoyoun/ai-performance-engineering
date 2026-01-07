@@ -35,10 +35,10 @@ from core.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _DEFAULT_BATCH = 8
-_DEFAULT_SEQ = 4096
+_DEFAULT_SEQ = 16384
 _DEFAULT_HIDDEN = 8  # Keep hidden small so all-gather cost is visible.
 _DEFAULT_LAYERS = 4
-_AUX_PASSES = 2
+_AUX_PASSES = 1
 
 
 def _resolve_world_size() -> int:
@@ -178,6 +178,7 @@ def main() -> None:
 class BaselineTensorParallelBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Harness entry that launches this module via torchrun."""
     multi_gpu_required = True
+    preferred_ncu_replay_mode = "kernel"  # Application replay is unstable for torchrun collectives.
 
     def __init__(self) -> None:
         super().__init__()

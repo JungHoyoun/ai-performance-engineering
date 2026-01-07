@@ -62,9 +62,10 @@ class BaselineSymmetricMemoryPerfBenchmark(VerificationPayloadMixin, BaseBenchma
         self._last_avg_ms = 0.0
         self._last_gbps = 0.0
         self._bytes_transferred = 0.0
-        self._inner_iterations = 200
+        self._inner_iterations = 2000
         self.register_workload_metadata(requests_per_iteration=1.0)
         self._verify_input: Optional[torch.Tensor] = None
+        self._verify_output: Optional[torch.Tensor] = None
 
     def setup(self) -> None:
         """Initialize distributed and allocate tensor."""
@@ -109,6 +110,7 @@ class BaselineSymmetricMemoryPerfBenchmark(VerificationPayloadMixin, BaseBenchma
         self._last_avg_ms = elapsed_ms
         self._last_gbps = gbps
         self._bytes_transferred = bytes_moved
+        self._verify_output = self.recv_tensor
 
         return {
             "p2p.elapsed_ms": elapsed_ms,
@@ -117,16 +119,19 @@ class BaselineSymmetricMemoryPerfBenchmark(VerificationPayloadMixin, BaseBenchma
         }
 
     def capture_verification_payload(self) -> None:
-        if self.tensor is not None:
-            probe = self.tensor[: 256 * 256].view(256, 256)
-            output = probe.detach().clone()
-        else:
+        if self.tensor is None:
             if self._verify_input is None:
                 torch.manual_seed(42)
                 torch.cuda.manual_seed_all(42)
                 self._verify_input = torch.randn(256, 256, device=self.device, dtype=torch.float32)
             probe = self._verify_input
             output = probe.detach().clone()
+        else:
+            probe = self.tensor[: 256 * 256].view(256, 256)
+            if self._verify_output is not None:
+                output = self._verify_output[: 256 * 256].view(256, 256).detach().clone()
+            else:
+                output = probe.detach().clone()
         self._set_verification_payload(
             inputs={"tensor": probe},
             output=output,
@@ -199,7 +204,7 @@ class BaselineSymmetricMemoryPerfBenchmark(VerificationPayloadMixin, BaseBenchma
 
 def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
-    return BaselineSymmetricMemoryPerfBenchmark(size_mb=2.0)
+    return BaselineSymmetricMemoryPerfBenchmark(size_mb=0.0625)
 
 
 if __name__ == "__main__":

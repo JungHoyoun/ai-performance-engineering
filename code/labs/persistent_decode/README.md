@@ -8,12 +8,14 @@ Demonstrates Blackwell-friendly persistent decode kernels and TMA-powered prefil
 - Adopt TMA-based prefill to stream activations into shared memory with minimal latency.
 - Benchmark CUDA vs Triton implementations with unified validation utilities.
 - Mix CUDA Graphs into the decode path to remove residual launch overhead.
+- Compare pinned direct H2D staging against async prefetch overlap for paged KV offload.
 
 ## Directory Layout
 | Path | Description |
 | --- | --- |
 | `baseline_persistent_decode.py`, `optimized_persistent_decode_cuda.py`, `optimized_persistent_decode_graphs.py`, `optimized_persistent_decode_triton.py` | Persistent decode variants spanning CUDA, graphs, and Triton. |
 | `baseline_tma_prefill_decode.py`, `optimized_tma_prefill_decode.py`, `baseline_native_tma_prefill_decode.py`, `optimized_native_tma_prefill_decode.py` | Prefill workloads illustrating cp.async vs native TMA scheduling. |
+| `baseline_paged_kv_offload.py`, `optimized_paged_kv_offload.py`, `baseline_paged_kv_offload_prefetch.py`, `optimized_paged_kv_offload_prefetch.py` | KV offload comparisons (pinned direct H2D with memmap, plus async prefetch on pinned host cache). |
 | `core/scripts/kv_locality_microbench.py` | Pinned/pageable/NUMA host slab copy microbench (HBM vs local/remote pinned vs pageable). |
 | `persistent_decode_common.py`, `tma_extension.py`, `expectations_{hardware_key}.json` | Shared helpers, CUDA extension wrappers, and expectation thresholds. |
 
