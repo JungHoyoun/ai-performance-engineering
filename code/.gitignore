@@ -60,7 +60,17 @@ tmp*.py
 artifacts_tmp*.json
 artifacts_tmp*.pid
 comparison_*.html
+profile_captures/
 
+core/benchmark/blackwell_optimizations/blackwell_optimizations/test_all_features
+core/benchmark/blackwell_optimizations/blackwell_optimizations/test_clusters
+core/benchmark/blackwell_optimizations/blackwell_optimizations/test_dsmem
+core/benchmark/blackwell_optimizations/blackwell_optimizations/test_fp8
+core/benchmark/blackwell_optimizations/blackwell_optimizations/test_tma
+core/benchmark/blackwell_optimizations/blackwell_optimizations/test_tmem
+core/benchmark/blackwell_optimizations/blackwell_optimizations/test_warp_spec
+ch19/baseline_fp4_hardware_kernel
+ch19/optimized_fp4_hardware_kernel
 
 # Python
 __pycache__/
