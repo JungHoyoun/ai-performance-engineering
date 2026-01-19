@@ -720,6 +720,141 @@ def _extract_bench_results_json(result: Dict[str, Any]) -> Optional[Path]:
     return None
 
 
+def _resolve_artifact_path(path_value: Optional[str]) -> Optional[Path]:
+    if not path_value:
+        return None
+    path = Path(str(path_value))
+    if not path.is_absolute():
+        path = (CODE_ROOT / path).resolve()
+    return path
+
+
+def _file_entry(path: Path) -> Dict[str, Any]:
+    entry: Dict[str, Any] = {"path": str(path)}
+    try:
+        stat = path.stat()
+        entry["exists"] = True
+        entry["size_bytes"] = stat.st_size
+        entry["size_mb"] = round(stat.st_size / (1024 * 1024), 3)
+    except FileNotFoundError:
+        entry["exists"] = False
+    return entry
+
+
+def _collect_dir_files(dir_path: Path) -> List[Dict[str, Any]]:
+    if not dir_path.exists():
+        return []
+    files = [p for p in dir_path.iterdir() if p.is_file()]
+    return [_file_entry(p) for p in sorted(files)]
+
+
+def _profile_prefix(path: Path) -> str:
+    name = path.name
+    for suffix in (".nsys-rep", ".ncu-rep"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return path.stem
+
+
+def _collect_profile_files(paths: List[Path]) -> List[Path]:
+    files: set[Path] = set()
+    for path in paths:
+        prefix = _profile_prefix(path)
+        for candidate in path.parent.glob(f"{prefix}*"):
+            if candidate.is_file():
+                files.add(candidate)
+    return sorted(files)
+
+
+def _summarize_bench_artifacts(results_json: Path) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {}
+    try:
+        payload = json.loads(results_json.read_text())
+    except Exception as exc:
+        summary["artifact_summary_error"] = f"Failed to read results JSON: {exc}"
+        return summary
+
+    results = payload.get("results")
+    if not isinstance(results, list):
+        summary["artifact_summary_error"] = "Unexpected benchmark results schema"
+        return summary
+
+    run_dir = results_json.parent.parent
+    artifact_links = {
+        "run_dir": str(run_dir),
+        "manifest": _file_entry(run_dir / "manifest.json"),
+        "results": _collect_dir_files(run_dir / "results"),
+        "reports": _collect_dir_files(run_dir / "reports"),
+        "logs": _collect_dir_files(run_dir / "logs"),
+        "progress": _collect_dir_files(run_dir / "progress"),
+        "profiles": _collect_dir_files(run_dir / "profiles"),
+    }
+
+    profiling_summary: List[Dict[str, Any]] = []
+    profile_files: set[Path] = set()
+
+    for result in results:
+        chapter = result.get("chapter")
+        benchmarks = result.get("benchmarks", [])
+        if not isinstance(benchmarks, list):
+            continue
+        for bench in benchmarks:
+            example = bench.get("example") or bench.get("name") or bench.get("benchmark")
+            if chapter and example:
+                benchmark_id = f"{chapter}:{example}"
+            else:
+                benchmark_id = example or chapter or "unknown"
+
+            baseline_nsys = _resolve_artifact_path(bench.get("baseline_nsys_rep"))
+            baseline_ncu = _resolve_artifact_path(bench.get("baseline_ncu_rep"))
+            baseline_paths = [p for p in (baseline_nsys, baseline_ncu) if p]
+            baseline_files = _collect_profile_files(baseline_paths) if baseline_paths else []
+            profile_files.update(baseline_files)
+
+            baseline_entry = {
+                "nsys_rep": str(baseline_nsys) if baseline_nsys else None,
+                "ncu_rep": str(baseline_ncu) if baseline_ncu else None,
+                "metrics": bench.get("baseline_profiler_metrics", {}),
+                "files": [_file_entry(p) for p in baseline_files],
+            }
+
+            optimizations: List[Dict[str, Any]] = []
+            for opt in bench.get("optimizations", []) or []:
+                opt_nsys = _resolve_artifact_path(opt.get("optimized_nsys_rep"))
+                opt_ncu = _resolve_artifact_path(opt.get("optimized_ncu_rep"))
+                opt_paths = [p for p in (opt_nsys, opt_ncu) if p]
+                opt_files = _collect_profile_files(opt_paths) if opt_paths else []
+                profile_files.update(opt_files)
+                optimizations.append(
+                    {
+                        "label": opt.get("file")
+                        or opt.get("technique")
+                        or opt.get("name")
+                        or "optimized",
+                        "status": opt.get("status"),
+                        "nsys_rep": str(opt_nsys) if opt_nsys else None,
+                        "ncu_rep": str(opt_ncu) if opt_ncu else None,
+                        "metrics": opt.get("optimized_profiler_metrics", {}),
+                        "files": [_file_entry(p) for p in opt_files],
+                    }
+                )
+
+            profiling_summary.append(
+                {
+                    "benchmark": benchmark_id,
+                    "baseline": baseline_entry,
+                    "optimizations": optimizations,
+                }
+            )
+
+    if profile_files:
+        artifact_links["profiling_files"] = [_file_entry(p) for p in sorted(profile_files)]
+
+    summary["artifact_links"] = artifact_links
+    summary["profiling_summary"] = profiling_summary
+    return summary
+
+
 def _attach_bench_artifact_paths(result: Dict[str, Any]) -> Dict[str, Any]:
     """Attach {results_json, run_dir} to a bench CLI result when discoverable."""
     results_json = _extract_bench_results_json(result)
@@ -744,6 +879,9 @@ def _attach_bench_artifact_paths(result: Dict[str, Any]) -> Dict[str, Any]:
     if run_dir:
         enriched["run_dir"] = str(run_dir)
         enriched["run_id"] = run_dir.name
+    summary = _summarize_bench_artifacts(results_json)
+    if summary:
+        enriched.update(summary)
     return enriched
 
 

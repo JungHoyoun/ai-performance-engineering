@@ -5222,37 +5222,54 @@ def _rebenchmark_patched_variant(
             'patched_file': patched_file,
         }
         
-        # Profile the patched variant if requested
+        # Profile the patched variant if requested.
         if enable_profiling and profile_type != "none":
-            profile_path = None
             patch_name = Path(patched_file).stem
             profile_env = _harden_profile_env(None, repo_root, path.parent)
-            
+
             if profile_output_dir:
                 profile_output_dir.mkdir(parents=True, exist_ok=True)
-            
-            if profile_type in ("nsys", "nsys+ncu"):
+
+            profile_preset = str(profile_type).lower()
+            config = replace(config, profile_type=profile_preset)
+            profiler_config = build_profiler_config_from_benchmark(config)
+
+            if check_nsys_available():
                 try:
                     import subprocess
-                    nsys_output = profile_output_dir / f"{patch_name}_nsys.nsys-rep" if profile_output_dir else Path(f"{patch_name}_nsys.nsys-rep")
-                    cmd = ["nsys", "profile", "-o", str(nsys_output.with_suffix('')), "--force-overwrite", "true", 
-                           "python", patched_file]
+                    nsys_output = (
+                        profile_output_dir / f"{patch_name}_nsys.nsys-rep"
+                        if profile_output_dir
+                        else Path(f"{patch_name}_nsys.nsys-rep")
+                    )
+                    cmd = profiler_config.get_nsys_command(
+                        str(nsys_output.with_suffix("")),
+                        patched_file,
+                        python_executable=sys.executable,
+                    )
                     subprocess.run(cmd, capture_output=True, timeout=120, env=profile_env)
                     if nsys_output.exists():
-                        profile_path = str(nsys_output)
-                        response['nsys_profile'] = profile_path
+                        response["nsys_profile"] = str(nsys_output)
                 except Exception as e:
                     logger.warning(f"Failed to profile patch with nsys: {e}")
-            
-            if profile_type in ("ncu", "nsys+ncu"):
+
+            if check_ncu_available():
                 try:
                     import subprocess
-                    ncu_output = profile_output_dir / f"{patch_name}_ncu.ncu-rep" if profile_output_dir else Path(f"{patch_name}_ncu.ncu-rep")
-                    cmd = ["ncu", "--force-overwrite", "-o", str(ncu_output.with_suffix('')), "--set", "full", 
-                           "python", patched_file]
+                    ncu_output = (
+                        profile_output_dir / f"{patch_name}_ncu.ncu-rep"
+                        if profile_output_dir
+                        else Path(f"{patch_name}_ncu.ncu-rep")
+                    )
+                    cmd = profiler_config.get_ncu_command(
+                        str(ncu_output.with_suffix("")),
+                        patched_file,
+                        python_executable=sys.executable,
+                    )
+                    cmd.insert(1, "--force-overwrite")
                     subprocess.run(cmd, capture_output=True, timeout=300, env=profile_env)
                     if ncu_output.exists():
-                        response['ncu_profile'] = str(ncu_output)
+                        response["ncu_profile"] = str(ncu_output)
                 except Exception as e:
                     logger.warning(f"Failed to profile patch with ncu: {e}")
         
