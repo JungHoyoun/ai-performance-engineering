@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2022-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # See LICENSE for license information.
 """JAX multi-head attention modules"""
@@ -386,23 +386,57 @@ def _obtain_batch_and_max_seqlen(qkv, qkv_layout):
     return batch, q_max_seqlen, kv_max_seqlen
 
 
-def reorder_causal_load_balancing(tensor, strategy: ReorderStrategy, cp_size: int, seq_dim: int):
+def reorder_causal_load_balancing(
+    tensor, strategy: ReorderStrategy, cp_size: int, seq_dim: int, stripe_size: int | None = None
+):
     """Reorders a tensor for load balancing the compute of causal attention."""
     if strategy == ReorderStrategy.DualChunkSwap:
+        if stripe_size is not None:
+            raise ValueError(
+                f"Incorrect value for CP dual chunk reordering {stripe_size=}. stripe_size must be"
+                " None"
+            )
         return tex.attention.reorder_causal_dual_chunk_swap(tensor, cp_size, seq_dim, False)
     if strategy == ReorderStrategy.Striped:
-        return tex.attention.reorder_causal_striped(tensor, cp_size, seq_dim, False)
+        # stripe_size > 1 is only supported for CP+THD+AG+Striped>1+SWA
+        # stripe_size = 128 is recommended for CP+THD+AG+Striped>1+SWA
+        if stripe_size is not None and stripe_size <= 0:
+            raise ValueError(
+                f"Incorrect value for CP striped reordering {stripe_size=}. stripe_size must be a"
+                " positive integer"
+            )
+        # Supporting old API defaults of stripe_size=1
+        effective_stripe_size = 1 if stripe_size is None else stripe_size
+        return tex.attention.reorder_causal_striped(
+            tensor, cp_size, seq_dim, False, effective_stripe_size
+        )
     raise ValueError(f"Unsupported {strategy=}")
 
 
 def inverse_reorder_causal_load_balancing(
-    tensor, strategy: ReorderStrategy, cp_size: int, seq_dim: int
+    tensor, strategy: ReorderStrategy, cp_size: int, seq_dim: int, stripe_size: int | None = None
 ):
     """Inverse operation of `reorder_causal_load_balancing`."""
     if strategy == ReorderStrategy.DualChunkSwap:
+        if stripe_size is not None:
+            raise ValueError(
+                f"Incorrect value for CP dual chunk reordering {stripe_size=}. stripe_size must be"
+                " None"
+            )
         return tex.attention.reorder_causal_dual_chunk_swap(tensor, cp_size, seq_dim, True)
     if strategy == ReorderStrategy.Striped:
-        return tex.attention.reorder_causal_striped(tensor, cp_size, seq_dim, True)
+        # stripe_size > 1 is only supported for CP+THD+AG+Striped>1+SWA
+        # stripe_size = 128 is recommended for CP+THD+AG+Striped>1+SWA
+        if stripe_size is not None and stripe_size <= 0:
+            raise ValueError(
+                f"Incorrect value for CP reordering {stripe_size=}. stripe_size must be a positive"
+                " integer"
+            )
+        # Supporting old API defaults of stripe_size=1
+        effective_stripe_size = 1 if stripe_size is None else stripe_size
+        return tex.attention.reorder_causal_striped(
+            tensor, cp_size, seq_dim, True, effective_stripe_size
+        )
     raise ValueError(f"Unsupported {strategy=}")
 
 
@@ -624,7 +658,7 @@ class SequenceDescriptor:
     - SequenceDescriptor.from_seqlens_and_offsets
       For THD (packed) cases, where each batch may have not only 1 sequence.
     - SequenceDescriptor.from_segment_ids_and_pos
-      Experimental feature for THD (packed) cases with context parallelism.
+      Experimental feature for BSHD (with and without reordering) and THD (packed) cases without reordering
     """
 
     seqlens: Optional[Tuple[jnp.ndarray, jnp.ndarray]]
@@ -762,9 +796,14 @@ class SequenceDescriptor:
         cls,
         segment_ids: Union[jnp.ndarray, Tuple[jnp.ndarray, jnp.ndarray]],
         segment_pos: Optional[Union[jnp.ndarray, Tuple[jnp.ndarray, jnp.ndarray]]] = None,
+        *,
+        is_thd: bool,
+        is_segment_ids_reordered: bool,
     ) -> SequenceDescriptor:
         """
-        Experimental factory method for inputs with segment IDs and optional positions. (THD)
+        Experimental factory method for inputs with segment IDs and optional positions.
+        segment_pos = None to be used only for: BSHD with or without load balancing and,
+                                                THD without load balancing
         Args:
             segment_ids(Tuple(jnp.ndarray, jnp.ndarray)) = (q_segment_ids, kv_segment_ids):
                 - q_segment_ids (jnp.ndarray):
@@ -778,22 +817,84 @@ class SequenceDescriptor:
                   The position inside each segment for query, with shape [batch, max_seqlen].
                 - kv_segment_pos (jnp.ndarray):
                   The position inside each segment for key, value, with shape [batch, max_seqlen].
+            is_thd(bool): If True, QKVLayout is of type THD, else it is BSHD
+            is_segment_ids_reordered(bool): If True, the segment ids have been reordered for load balancing.
+            Only THD with load balancing is expected to have this flag set to True
         Return:
             A SequenceDescriptor with segment_ids/segment_pos initialized.
         """
         q_seg_ids, kv_seg_ids = cls._expand_to_pair(segment_ids)
 
-        if segment_pos is not None:
-            segment_pos = cls._expand_to_pair(segment_pos)
-        else:
+        # Using defaults : segment pos has to be generated.
+        if segment_pos is None:
+            # THD + load balanced segment_ids are not supported in this function
+            # BSHD + load balanced segment_ids are incorrect as BSHD handles reordering within the primitive itself
+            if is_segment_ids_reordered:
+                assert not is_thd, (
+                    f"{segment_pos=} default arg is not supported for load balanced reordered"
+                    " (Striped) THD inputs. Please pass the load balanced reordered segment_pos"
+                    " and segment_ids explicitly to {from_segment_ids_and_pos.__qualname__}"
+                    " using convenience function reorder_causal_load_balancing()"
+                )
+                assert is_thd, (
+                    f"{segment_pos=} default arg is not supported for load balanced reordered (Dual"
+                    " Chunk) BSHD inputs. BSHD segment_pos and segment_ids do not need to be load"
+                    " balanced reordered. The reordering for these is performed within the"
+                    " primitive"
+                )
 
-            def generate_default_pos(segment_ids):
-                seqlen = segment_ids.shape[-1]
-                return jnp.broadcast_to(jnp.arange(seqlen), segment_ids.shape)
+            # Generate the default pos for THD and BSHD non-reordered segment_ids
+            def generate_default_pos(seg_ids):
+                if is_thd:
+                    batch_size, seq_size = seg_ids.shape
+                    # Assume that the first token belongs to a segment and is not a padded token
+                    first_is_segment = jnp.full((batch_size, 1), True, dtype=bool)
+                    # Get segment start positions
+                    segment_start = jnp.concatenate(
+                        [
+                            first_is_segment,
+                            (seg_ids[..., 1:] != seg_ids[..., :-1]) & (seg_ids[..., 1:] != 0),
+                        ],
+                        axis=-1,
+                    )
+                    # Get offset for location where new segment starts
+                    segment_start_idx = jax.vmap(lambda row: jnp.arange(row.size) * row)(
+                        segment_start
+                    )
+                    segment_start_offsets = jax.vmap(jnp.maximum.accumulate)(segment_start_idx)
+
+                    # Get the last non-zero index - after this everything is padding
+                    # (B,)
+                    last_nonzero_idx = jax.vmap(
+                        lambda segids_row: jnp.max(
+                            jnp.where(segids_row != 0, jnp.arange(seq_size), -1)
+                        )
+                    )(seg_ids)
+                    seg_pos_no_thd = jnp.arange(seq_size)
+                    # Get a mask which can be used to zero out all the padding at the end (after the non-zero index)
+                    mask = seg_pos_no_thd <= last_nonzero_idx[:, None]
+
+                    # Get the unmasked seg_pos for the THD sequence
+                    seg_pos = (
+                        jnp.broadcast_to(jnp.arange(seq_size), seg_ids.shape)
+                        - segment_start_offsets
+                    )
+
+                    # Use the mask to zero out the padding at the end (after the non-zero index)
+                    segment_pos = jax.vmap(
+                        lambda pos_row, mask_row: jnp.where(mask_row, pos_row, 0)
+                    )(seg_pos, mask)
+                    return segment_pos
+
+                seqlen = seg_ids.shape[-1]
+                return jnp.broadcast_to(jnp.arange(seqlen), seg_ids.shape)
 
             q_seg_pos = generate_default_pos(q_seg_ids)
             kv_seg_pos = generate_default_pos(kv_seg_ids)
             segment_pos = (q_seg_pos, kv_seg_pos)
+        # Explicitly passed segment_pos
+        else:
+            segment_pos = cls._expand_to_pair(segment_pos)
 
         return cls(
             segment_ids=(q_seg_ids, kv_seg_ids),
@@ -988,7 +1089,7 @@ def fused_attn_thd(
     return output
 
 
-@partial(jax.custom_vjp, nondiff_argnums=(5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17))
+@partial(jax.custom_vjp, nondiff_argnums=(5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18))
 def _fused_attn(
     qkv: Tuple[jnp.ndarray, ...],
     bias: Optional[jnp.ndarray],
@@ -1008,6 +1109,7 @@ def _fused_attn(
     context_parallel_causal_load_balanced: bool,
     context_parallel_axis: str,
     context_checkpoint_name: str = "context",
+    stripe_size: int | None = None,
 ):
     output, _ = _fused_attn_fwd_rule(
         qkv,
@@ -1028,6 +1130,7 @@ def _fused_attn(
         context_parallel_causal_load_balanced,
         context_parallel_axis,
         context_checkpoint_name=context_checkpoint_name,
+        stripe_size=stripe_size,
     )
     return output
 
@@ -1051,6 +1154,7 @@ def _fused_attn_fwd_rule(
     context_parallel_causal_load_balanced,
     context_parallel_axis,
     context_checkpoint_name,
+    stripe_size,
 ):
     output, softmax_aux, rng_state = tex.fused_attn_fwd(
         qkv,
@@ -1070,6 +1174,7 @@ def _fused_attn_fwd_rule(
         context_parallel_strategy=context_parallel_strategy,
         context_parallel_causal_load_balanced=context_parallel_causal_load_balanced,
         context_parallel_axis=context_parallel_axis,
+        stripe_size=stripe_size,
     )
     output = checkpoint_name(output, context_checkpoint_name)
     softmax_aux = checkpoint_name(softmax_aux, context_checkpoint_name)
@@ -1099,6 +1204,7 @@ def _fused_attn_bwd_rule(
     context_parallel_causal_load_balanced,
     context_parallel_axis,
     context_checkpoint_name,
+    stripe_size,
     ctx,
     dz,
 ):
@@ -1133,6 +1239,7 @@ def _fused_attn_bwd_rule(
         context_parallel_strategy=context_parallel_strategy,
         context_parallel_causal_load_balanced=context_parallel_causal_load_balanced,
         context_parallel_axis=context_parallel_axis,
+        stripe_size=stripe_size,
     )
     if attn_bias_type == AttnBiasType.NO_BIAS:
         grad_bias = None
@@ -1169,6 +1276,7 @@ def fused_attn(
     context_parallel_axis: str = "",
     context_checkpoint_name: str = "context",
     softmax_offset: Optional[jnp.ndarray] = None,
+    stripe_size: int | None = None,
 ):
     """
     Perform cuDNN fused attention.
@@ -1206,6 +1314,11 @@ def fused_attn(
         softmax_offset (Optional[jnp.ndarray]): An optional learnable softmax offset tensor with shape
             [1, num_heads, 1, 1]. Used when softmax_type is AttnSoftmaxType.LEARNABLE_SOFTMAX.
             If provided, this parameter will receive gradients during backpropagation.
+        stripe_size (int |  None):
+            Indicates the striping size to be used when using ReorderStrategy.Striped.
+            Currently, a stripe_size > 1 is only supported for CP + THD + Striped + AG, whereas a stripe_size=1
+            is supported for both, CP + THD + Striped + AG and CP + THD + Striped + P2P(Ring)
+            None indicates no striping strategy
     Returns:
         (jnp.ndarray): The output tensor from the fused attention.
 
@@ -1283,5 +1396,6 @@ def fused_attn(
         context_parallel_causal_load_balanced=context_parallel_causal_load_balanced,
         context_parallel_axis=context_parallel_axis,
         context_checkpoint_name=context_checkpoint_name,
+        stripe_size=stripe_size,
     )
     return output

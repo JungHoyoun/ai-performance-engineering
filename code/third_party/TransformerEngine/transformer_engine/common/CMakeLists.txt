@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2022-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # See LICENSE for license information.
 
@@ -125,7 +125,6 @@ list(APPEND transformer_engine_cpp_sources
 list(APPEND transformer_engine_cuda_sources
      common.cu
      multi_tensor/adam.cu
-     multi_tensor/compute_scale.cu
      multi_tensor/l2norm.cu
      multi_tensor/scale.cu
      multi_tensor/sgd.cu
@@ -167,15 +166,20 @@ list(APPEND transformer_engine_cuda_sources
      comm_gemm_overlap/userbuffers/userbuffers.cu)
 
 list(APPEND transformer_engine_cuda_arch_specific_sources
-     gemm/cutlass_grouped_gemm.cu
-     cast/cast.cu
      activation/gelu.cu
      activation/relu.cu
      activation/swiglu.cu
-     transpose/quantize_transpose_square_blockwise.cu
-     transpose/quantize_transpose_vector_blockwise_fp4.cu
+     cast/cast.cu
+     gemm/cutlass_grouped_gemm.cu
+     hadamard_transform/group_hadamard_transform.cu
      hadamard_transform/hadamard_transform.cu
-     hadamard_transform/hadamard_transform_cast_fusion.cu)
+     hadamard_transform/hadamard_transform_cast_fusion.cu
+     hadamard_transform/group_hadamard_transform_cast_fusion.cu
+     hadamard_transform/group_row_cast_col_hadamard_transform_cast_fusion.cu
+     multi_tensor/compute_scale.cu
+     recipe/mxfp8_scaling.cu
+     transpose/quantize_transpose_square_blockwise.cu
+     transpose/quantize_transpose_vector_blockwise_fp4.cu)
 
 # Compiling the files with the worst compilation time first to hopefully overlap
 # better with the faster-compiling cpp files
@@ -226,12 +230,24 @@ add_library(transformer_engine SHARED ${transformer_engine_SOURCES})
 target_include_directories(transformer_engine PUBLIC
                            "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
-# CUTLASS kernels require SM90a and cause hang in debug build
+# Grouped GEMM kernels require SM90a
 set_property(
   SOURCE gemm/cutlass_grouped_gemm.cu
   APPEND
   PROPERTY
-  COMPILE_OPTIONS "--generate-code=arch=compute_90a,code=sm_90a;-g0")
+  COMPILE_OPTIONS "--generate-code=arch=compute_90a,code=sm_90a")
+
+# CUTLASS kernels could cause hang in debug build
+set(CUTLASS_KERNEL_SOURCES
+    gemm/cutlass_grouped_gemm.cu
+    hadamard_transform/group_hadamard_transform_cast_fusion.cu
+    hadamard_transform/group_row_cast_col_hadamard_transform_cast_fusion.cu
+    hadamard_transform/hadamard_transform_cast_fusion.cu)
+set_property(
+  SOURCE ${CUTLASS_KERNEL_SOURCES}
+  APPEND
+  PROPERTY
+  COMPILE_OPTIONS "-g0;-dopt=on")
 
 # Configure dependencies
 target_link_libraries(transformer_engine PUBLIC

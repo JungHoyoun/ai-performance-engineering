@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2022-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # See LICENSE for license information.
 """Test transformer_engine.jax.flax.TransformerLayer"""
@@ -430,6 +430,9 @@ class EncoderRunner(BaseRunner):
         "attention/DotProductAttention_0/_UnfusedDotProductAttention_0/softmax_offset": (
             "attention/DotProductAttention_0/softmax_offset"
         ),
+        "attention/DotProductAttention_0/_FusedDotProductAttention_0/softmax_offset": (
+            "attention/DotProductAttention_0/softmax_offset"
+        ),
         "mlp/wi_kernel": "mlp/wi/kernel",
         "mlp/wi_bias": "mlp/wi/bias",
         "mlp/wo_kernel": "mlp/wo/kernel",
@@ -478,11 +481,17 @@ class DecoderRunner(BaseRunner):
         "encoder_decoder_attention/DotProductAttention_0/_UnfusedDotProductAttention_0/softmax_offset": (
             "encoder_decoder_attention/DotProductAttention_0/softmax_offset"
         ),
+        "encoder_decoder_attention/DotProductAttention_0/_FusedDotProductAttention_0/softmax_offset": (
+            "encoder_decoder_attention/DotProductAttention_0/softmax_offset"
+        ),
         "self_attention/qkv/scale": "pre_self_attention_layer_norm/scale",
         "self_attention/qkv/ln_bias": "pre_self_attention_layer_norm/ln_bias",
         "self_attention/query/scale": "pre_self_attention_layer_norm/scale",
         "self_attention/query/ln_bias": "pre_self_attention_layer_norm/ln_bias",
         "self_attention/DotProductAttention_0/_UnfusedDotProductAttention_0/softmax_offset": (
+            "self_attention/DotProductAttention_0/softmax_offset"
+        ),
+        "self_attention/DotProductAttention_0/_FusedDotProductAttention_0/softmax_offset": (
             "self_attention/DotProductAttention_0/softmax_offset"
         ),
         "mlp/wi_kernel": "mlp/wi/kernel",
@@ -552,7 +561,7 @@ class BaseTester:
         """Test forward with fp8 enabled"""
         # Empty MeshResource is used as we are running on a single device
         with autocast(enabled=True, recipe=fp8_recipe, mesh_resource=MeshResource()):
-            self.runner(attrs).test_forward(data_shape, dtype, rtol=1e-4, atol=1e-3)
+            self.runner(attrs).test_forward(data_shape, dtype)
 
     @pytest.mark.skipif(not is_fp8_supported, reason=reason)
     @pytest.mark.parametrize("fp8_recipe", QUANTIZE_RECIPES)
@@ -560,7 +569,7 @@ class BaseTester:
         """Test backward with fp8 enabled"""
         # Empty MeshResource is used as we are running on a single device
         with autocast(enabled=True, recipe=fp8_recipe, mesh_resource=MeshResource()):
-            self.runner(attrs).test_backward(data_shape, dtype, rtol=1e-4, atol=1e-3)
+            self.runner(attrs).test_backward(data_shape, dtype)
 
 
 class TestEncoderLayer(BaseTester):

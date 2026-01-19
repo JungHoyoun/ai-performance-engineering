@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2022-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # See LICENSE for license information.
 
@@ -377,13 +377,13 @@ def fuse_userbuffers_forward_linear(
 
     Parameters
     ----------
-    ops: list of tuples
+    ops : list of tuples
         Forward pass operations and the indices of the corresponding
         basic operations.
 
     Returns
     -------
-    ops: list of tuples
+    ops : list of tuples
         Updated forward pass operations
 
     """

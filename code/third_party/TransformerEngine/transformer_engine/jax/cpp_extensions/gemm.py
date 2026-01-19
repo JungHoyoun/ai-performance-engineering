@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2022-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # See LICENSE for license information.
 """JAX te modules"""
@@ -39,12 +39,12 @@ from ..quantize import (
     Quantizer,
     GroupedQuantizer,
     QuantizerSet,
-    QuantizeLayout,
     noop_quantizer_set,
     is_fp8_gemm_with_all_layouts_supported,
     apply_padding_to_scale_inv,
     get_quantize_config_with_recipe,
     get_global_quantize_recipe,
+    QuantizeLayout,
 )
 from .misc import get_padded_spec, is_all_reduce_in_float32
 from ..sharding import (

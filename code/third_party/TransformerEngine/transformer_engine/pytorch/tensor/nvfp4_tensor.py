@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2022-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # See LICENSE for license information.
 
@@ -193,6 +193,7 @@ class NVFP4Quantizer(Quantizer):
             stochastic_rounding=self.stochastic_rounding,
         )
         quantizer.internal = self.internal
+        quantizer.optimize_for_gemm = self.optimize_for_gemm
         quantizer.rht_matrix = self.rht_matrix
         quantizer.rht_matrix_random_sign_mask_t = self.rht_matrix_random_sign_mask_t
 
@@ -359,6 +360,7 @@ class NVFP4Quantizer(Quantizer):
             fp4_dtype=self.dtype,
             quantizer=self,
             requires_grad=requires_grad,
+            with_gemm_swizzled_scales=False,
         )
 
     def calibrate(self, tensor: torch.Tensor) -> None:
@@ -382,26 +384,26 @@ class NVFP4Tensor(NVFP4TensorStorage, QuantizedTensor):
 
     Parameters
     ----------
-    rowwise_data: torch.Tensor
+    rowwise_data : torch.Tensor
         Raw FP4 data in a uint8 tensor (rowwise layout).
-    rowwise_scale_inv: torch.Tensor
+    rowwise_scale_inv : torch.Tensor
         Reciprocal of the scaling factor applied when
         casting to FP4, i.e. the scaling factor that must
         be applied when casting from FP4 to higher
         precision (rowwise).
-    columnwise_data: torch.Tensor, optional
+    columnwise_data : torch.Tensor, optional
         Raw FP4 data in a uint8 tensor (columnwise layout).
-    columnwise_scale_inv: torch.Tensor, optional
+    columnwise_scale_inv : torch.Tensor, optional
         Reciprocal of the scaling factor for columnwise FP4 data.
-    amax_rowwise: torch.Tensor, optional
+    amax_rowwise : torch.Tensor, optional
         Rowwise amax tracking tensor.
-    amax_columnwise: torch.Tensor, optional
+    amax_columnwise : torch.Tensor, optional
         Columnwise amax tracking tensor.
-    fp4_dtype: TE_DType
+    fp4_dtype : TE_DType
         The FP4 data type used for quantization.
-    quantizer: Quantizer
+    quantizer : Quantizer
         The quantizer instance used for this tensor.
-    dtype: torch.dtype, default = torch.float32
+    dtype : torch.dtype, default = torch.float32
         Nominal tensor datatype, used in dequantize.
     """
 
@@ -418,6 +420,7 @@ class NVFP4Tensor(NVFP4TensorStorage, QuantizedTensor):
         amax_columnwise: Optional[torch.Tensor],
         fp4_dtype: TE_DType,
         quantizer: Quantizer,
+        with_gemm_swizzled_scales: bool,
         **kwargs,
     ):
         instance = super().__new__(
@@ -430,6 +433,7 @@ class NVFP4Tensor(NVFP4TensorStorage, QuantizedTensor):
             amax_columnwise,
             fp4_dtype,
             quantizer,
+            with_gemm_swizzled_scales,
             *args,
             **kwargs,
         )
@@ -592,6 +596,7 @@ class NVFP4Tensor(NVFP4TensorStorage, QuantizedTensor):
                 amax_columnwise=amax_columnwise,
                 quantizer=tensor._quantizer,
                 requires_grad=tensor.requires_grad,
+                with_gemm_swizzled_scales=tensor._with_gemm_swizzled_scales,
             )
 
         # Default case
@@ -610,6 +615,7 @@ class NVFP4Tensor(NVFP4TensorStorage, QuantizedTensor):
         fp4_dtype: TE_DType,
         dtype: torch.dtype,
         quantizer: Quantizer,
+        with_gemm_swizzled_scales: bool = False,
     ) -> NVFP4Tensor:
         """Build NVFP4Tensor, for use in __reduce__
 
@@ -629,6 +635,7 @@ class NVFP4Tensor(NVFP4TensorStorage, QuantizedTensor):
             amax_columnwise=amax_columnwise,
             quantizer=quantizer,
             requires_grad=False,
+            with_gemm_swizzled_scales=with_gemm_swizzled_scales,
         )
 
     def __reduce_ex__(self, protocol: int) -> tuple:
@@ -646,6 +653,7 @@ class NVFP4Tensor(NVFP4TensorStorage, QuantizedTensor):
                 self._fp4_dtype,
                 self.dtype,
                 self._quantizer,
+                self._with_gemm_swizzled_scales,
             ),
         )
 
@@ -696,6 +704,7 @@ class NVFP4Tensor(NVFP4TensorStorage, QuantizedTensor):
             self._columnwise_scale_inv = tensor._columnwise_scale_inv
             self._amax_rowwise = tensor._amax_rowwise
             self._amax_columnwise = tensor._amax_columnwise
+            self._with_gemm_swizzled_scales = tensor._with_gemm_swizzled_scales
             return
 
         # Quantize to FP8
@@ -782,6 +791,7 @@ class _ViewFunc(torch.autograd.Function):
             quantizer=tensor._quantizer,
             fp4_dtype=tensor._fp4_dtype,
             requires_grad=tensor.requires_grad,
+            with_gemm_swizzled_scales=tensor._with_gemm_swizzled_scales,
         )
 
     @staticmethod
@@ -823,6 +833,7 @@ class _ViewFunc(torch.autograd.Function):
                 quantizer=grad._quantizer,
                 fp4_dtype=grad._fp4_dtype,
                 requires_grad=grad.requires_grad,
+                with_gemm_swizzled_scales=grad._with_gemm_swizzled_scales,
             )
             return dgrad, None
         return grad.view(ctx.shape), None
@@ -902,6 +913,7 @@ class _ReshapeFunc(torch.autograd.Function):
             quantizer=tensor._quantizer,
             fp4_dtype=tensor._fp4_dtype,
             requires_grad=tensor.requires_grad,
+            with_gemm_swizzled_scales=tensor._with_gemm_swizzled_scales,
         )
 
     @staticmethod
@@ -943,6 +955,7 @@ class _ReshapeFunc(torch.autograd.Function):
                 quantizer=grad._quantizer,
                 fp4_dtype=grad._fp4_dtype,
                 requires_grad=grad.requires_grad,
+                with_gemm_swizzled_scales=grad._with_gemm_swizzled_scales,
             )
             return dgrad, None
         return grad.view(ctx.shape), None

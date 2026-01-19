@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2022-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # See LICENSE for license information.
 
@@ -13,7 +13,7 @@ import torch
 import transformer_engine_torch as tex
 
 from transformer_engine.common.recipe import Recipe
-from transformer_engine.pytorch import torch_version
+from transformer_engine.pytorch.torch_version import torch_version
 
 from .base import (
     fill_userbuffers_buffer_for_all_gather,
@@ -428,7 +428,8 @@ class _Linear(torch.autograd.Function):
                     # weights if weights are externally touched outside this module
                     ctx.weight_object = weight
 
-            mark_not_offload(weight, weightmat, bias)
+            if cpu_offloading:
+                mark_not_offload(weight, weightmat, bias)
             # TODO(ksivamani): Check memory usage
             tensors_to_save, tensor_objects = prepare_for_saving(
                 saved_inputmat,
@@ -985,7 +986,7 @@ class _Linear(torch.autograd.Function):
 class Linear(TransformerEngineBaseModule):
     """Applies a linear transformation to the incoming data :math:`y = xA^T + b`
 
-    On NVIDIA GPUs it is a drop-in replacement for `torch.nn.Linear`.
+    On NVIDIA GPUs it is a drop-in replacement for ``torch.nn.Linear``.
 
     Parameters
     ----------
@@ -993,14 +994,14 @@ class Linear(TransformerEngineBaseModule):
                  size of each input sample.
     out_features : int
                   size of each output sample.
-    bias : bool, default = `True`
-          if set to `False`, the layer will not learn an additive bias.
-    init_method : Callable, default = `None`
-                 used for initializing weights in the following way: `init_method(weight)`.
-                 When set to `None`, defaults to `torch.nn.init.normal_(mean=0.0, std=0.023)`.
-    get_rng_state_tracker : Callable, default = `None`
+    bias : bool, default = True
+          if set to ``False``, the layer will not learn an additive bias.
+    init_method : Callable, default = None
+                 used for initializing weights in the following way: ``init_method(weight)``.
+                 When set to ``None``, defaults to ``torch.nn.init.normal_(mean=0.0, std=0.023)``.
+    get_rng_state_tracker : Callable, default = None
                  used to get the random number generator state tracker for initializing weights.
-    rng_tracker_name : str, default = `None`
+    rng_tracker_name : str, default = None
                  the param passed to get_rng_state_tracker to get the specific rng tracker.
     parameters_split : Optional[Union[Tuple[str, ...], Dict[str, int]]], default = None
                       Configuration for splitting the weight and bias tensors along dim 0 into
@@ -1008,62 +1009,62 @@ class Linear(TransformerEngineBaseModule):
                       they are used to make the names of equally-sized parameters. If a dict
                       (preferably an OrderedDict) is provided, the keys are used as names and
                       values as split sizes along dim 0. The resulting parameters will have
-                      names that end in `_weight` or `_bias`, so trailing underscores are
+                      names that end in ``_weight`` or ``_bias``, so trailing underscores are
                       stripped from any provided names.
     device : Union[torch.device, str], default = "cuda"
           The device on which the parameters of the model will be allocated. It is the user's
           responsibility to ensure all parameters are moved to the GPU before running the
           forward pass.
-    name: str, default = `None`
+    name : str, default = None
         name of the module, currently used for debugging purposes.
 
     Parallelism parameters
     ----------------------
-    sequence_parallel : bool, default = `False`
-                       if set to `True`, uses sequence parallelism.
-    tp_group : ProcessGroup, default = `None`
+    sequence_parallel : bool, default = False
+                       if set to ``True``, uses sequence parallelism.
+    tp_group : ProcessGroup, default = None
               tensor parallel process group.
     tp_size : int, default = 1
              used as TP (tensor parallel) world size when TP groups are not formed during
              initialization. In this case, users must call the
-             `set_tensor_parallel_group(tp_group)` method on the initialized module before the
+             ``set_tensor_parallel_group(tp_group)`` method on the initialized module before the
              forward pass to supply the tensor parallel group needed for tensor and sequence
              parallel collectives.
-    parallel_mode : {None, 'column', 'row'}, default = `None`
+    parallel_mode : {None, 'column', 'row'}, default = None
                    used to decide whether this Linear layer is Column Parallel Linear or Row
                    Parallel Linear as described `here <https://arxiv.org/pdf/1909.08053.pdf>`_.
-                   When set to `None`, no communication is performed.
+                   When set to ``None``, no communication is performed.
 
     Optimization parameters
     -----------------------
     fuse_wgrad_accumulation : bool, default = 'False'
-                             if set to `True`, enables fusing of creation and accumulation of
+                             if set to ``True``, enables fusing of creation and accumulation of
                              the weight gradient. When enabled, it is assumed that the weights
-                             have an additional `main_grad` attribute (used instead of the
-                             regular `grad`) which is a pre-allocated buffer of the correct
+                             have an additional ``main_grad`` attribute (used instead of the
+                             regular ``grad``) which is a pre-allocated buffer of the correct
                              size to accumulate gradients in. This argument along with
                              weight tensor having attribute 'overwrite_main_grad' set to True
-                             will overwrite `main_grad` instead of accumulating.
-    return_bias : bool, default = `False`
-                 when set to `True`, this module will not apply the additive bias itself, but
+                             will overwrite ``main_grad`` instead of accumulating.
+    return_bias : bool, default = False
+                 when set to ``True``, this module will not apply the additive bias itself, but
                  instead return the bias value during the forward pass together with the
                  output of the linear transformation :math:`y = xA^T`. This is useful when
                  the bias addition can be fused to subsequent operations.
-    params_dtype : torch.dtype, default = `torch.get_default_dtype()`
+    params_dtype : torch.dtype, default = torch.get_default_dtype()
                   it controls the type used to allocate the initial parameters. Useful when
                   the model is trained with lower precision and the original FP32 parameters
                   would not fit in GPU memory.
-    delay_wgrad_compute : bool, default = `False`
-                         Whether or not to delay weight gradient computation. If set to `True`,
-                         it's the user's responsibility to call `module.backward_dw` to compute
+    delay_wgrad_compute : bool, default = False
+                         Whether or not to delay weight gradient computation. If set to ``True``,
+                         it's the user's responsibility to call ``module.backward_dw`` to compute
                          weight gradients.
     symmetric_ar_type : {None, 'multimem_all_reduce', 'two_shot', 'one_shot'}, default = None
                    Type of symmetric memory all-reduce to use during the forward pass.
                    This can help in latency bound communication situations.
-                   Requires PyTorch version 2.7.0 or higher. When set to None, standard all-reduce
+                   Requires PyTorch version 2.7.0 or higher. When set to ``None``, standard all-reduce
                    is used.
-    save_original_input : bool, default = `False`
-                       If set to `True`, always saves the original input tensor rather than the
+    save_original_input : bool, default = False
+                       If set to ``True``, always saves the original input tensor rather than the
                        cast tensor. In some scenarios, the input tensor is used by multiple modules,
                        and saving the original input tensor may reduce the memory usage.
                        Cannot work with FP8 DelayedScaling recipe.
@@ -1312,15 +1313,12 @@ class Linear(TransformerEngineBaseModule):
         """Init scales and amaxes for fwd | bwd."""
         super().set_meta_tensor(fwd, recipe)
 
-        # customize quantizers based on each recipe & layer configs
+        # Recipe-specific quantizer configuration
         recipe = FP8GlobalStateManager.get_fp8_recipe()
         if recipe.float8_current_scaling():
             self._customize_quantizers_float8_current_scaling(fwd, recipe)
-        elif recipe.float8_block_scaling():
-            self._customize_quantizers_float8_blockwise_scaling(fwd, recipe)
         elif recipe.nvfp4():
             self._customize_quantizers_nvfp4(fwd, recipe)
-        # elif for other recipes (mxfp8, etc.)
 
     def reset_parameters(self, defer_init=False):
         super().reset_parameters(defer_init=defer_init)
@@ -1488,12 +1486,16 @@ class Linear(TransformerEngineBaseModule):
         output_quantizer = None
         input_quantizer = self.quantizers["scaling_fwd"][tex.FP8FwdTensors.GEMM1_INPUT]
         input_quantizer.internal = True
+        if not (self.parallel_mode == "column" and self.sequence_parallel):
+            input_quantizer.optimize_for_gemm = True
         (weight_quantizer,) = self._get_weight_quantizers()
         if fp8_output:
             output_quantizer = self.quantizers["scaling_fwd"][tex.FP8FwdTensors.GEMM1_OUTPUT]
         if is_grad_enabled:
             grad_output_quantizer = self.quantizers["scaling_bwd"][tex.FP8BwdTensors.GRAD_OUTPUT1]
             grad_output_quantizer.internal = True
+            if not (self.parallel_mode == "row" and self.sequence_parallel):
+                grad_output_quantizer.optimize_for_gemm = True
             if fp8_grad:
                 grad_input_quantizer = self.quantizers["scaling_bwd"][tex.FP8BwdTensors.GRAD_INPUT1]
         return (
@@ -1536,25 +1538,11 @@ class Linear(TransformerEngineBaseModule):
     def _get_weight_and_bias_tensors(self) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         # Get concatenated weight and bias tensors
         unfused_weights = self._get_weight_tensors()
-        if any(isinstance(w, QuantizedTensor) for w in unfused_weights):
-            if self.fp8:
-                if len(unfused_weights) != 1:
-                    raise RuntimeError(
-                        "Splitting QuantizedTensor into multiple params is not supported"
-                    )
-            else:
-                warnings.warn(
-                    "You are using quantized weights without quantized compute. "
-                    "Please make sure this is intentional."
-                )
-                unfused_weights = [w.dequantize() for w in unfused_weights]
-
         weight_tensor = noop_cat(unfused_weights)
         if self.use_bias:
             bias_tensor = noop_cat([getattr(self, name) for name in self.bias_names])
         else:
             bias_tensor = None
-
         return weight_tensor, bias_tensor
 
     def onnx_forward(
@@ -1682,22 +1670,3 @@ class Linear(TransformerEngineBaseModule):
         weight_quantizer = self.quantizers["scaling_fwd"][tex.FP8FwdTensors.GEMM1_WEIGHT]
         weight_quantizer.internal = True
         return [weight_quantizer]
-
-    def _customize_quantizers_float8_blockwise_scaling(self, fwd: bool, recipe: Recipe) -> None:
-        """Customize quantizers based on blockwise scaling recipe + linear."""
-        assert (
-            recipe.float8_block_scaling()
-        ), "blockwise scaling recipe quantizer customization here"
-
-        if fwd:
-            if self.sequence_parallel and self.parallel_mode == "column":
-                # set compact for inp tensor X
-                self.quantizers["scaling_fwd"][
-                    tex.FP8FwdTensors.GEMM1_INPUT
-                ].all_gather_usage = True
-        else:
-            if self.sequence_parallel and self.parallel_mode == "row":
-                # set compact for grad_output tensor dY
-                self.quantizers["scaling_bwd"][
-                    tex.FP8BwdTensors.GRAD_OUTPUT1
-                ].all_gather_usage = True

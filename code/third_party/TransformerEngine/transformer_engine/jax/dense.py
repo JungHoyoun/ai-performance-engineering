@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2022-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # See LICENSE for license information.
 """Dense layer transformation operations for Transformer Engine in JAX.
@@ -21,12 +21,12 @@ from .quantize import (
     ScaledTensorFactory,
     ScaledTensor,
     ScalingMode,
-    QuantizeLayout,
     QuantizerSet,
     noop_quantizer_set,
     with_sharding_constraint_by_logical_axes,
     is_fp8_gemm_with_all_layouts_supported,
     TensorUsage,
+    QuantizeLayout,
 )
 
 

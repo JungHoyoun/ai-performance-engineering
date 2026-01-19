@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2022-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # See LICENSE for license information.
 
@@ -20,7 +20,6 @@ import torch.nn.functional as F
 from torch.distributed.tensor import DTensor
 
 import transformer_engine_torch as tex
-from transformer_engine.common.recipe import Recipe
 
 from ._common import _ParameterInitMeta, noop_cat
 from ..quantization import (
@@ -46,6 +45,7 @@ from ..tensor.mxfp8_tensor import MXFP8Quantizer
 from ..tensor.float8_blockwise_tensor import Float8BlockQuantizer
 from ..tensor.storage.float8_tensor_storage import Float8TensorStorage
 from ..tensor.storage.mxfp8_tensor_storage import MXFP8TensorStorage
+from ..tensor.storage.nvfp4_tensor_storage import NVFP4TensorStorage
 from ..utils import (
     is_non_tn_fp8_gemm_supported,
     torch_get_autocast_gpu_dtype,
@@ -104,55 +104,55 @@ def initialize_ub(
 ) -> None:
     r"""
     Initialize the Userbuffers communicator for overlapping tensor-parallel communications with
-    GEMM compute in te.Linear, te.LayerNormLinear and te.LayerNormMLP modules.
+    GEMM compute in ``te.Linear``, ``te.LayerNormLinear`` and ``te.LayerNormMLP`` modules.
 
     Parameters
     ----------
     shape : list
             shape of the communication buffer, typically set to be the same as the global shape of
-            the input tensor to a te.TransformerLayer forward pass, with the sequence and batch
-            dimensions collapsed together -- i.e.: `(sequence_length * batch_size, hidden_size)`
+            the input tensor to a ``te.TransformerLayer`` forward pass, with the sequence and batch
+            dimensions collapsed together -- i.e.: ``(sequence_length * batch_size, hidden_size)``
     tp_size : int
               number of GPUs in the tensor-parallel process group
     use_fp8 : bool = False
               allocate the communication buffer for FP8 GEMM inputs/outputs.
-              DEPRECATED: Please use `quantization_modes` instead.
+              DEPRECATED: Please use ``quantization_modes`` instead.
     quantization_modes : List[UserBufferQuantizationMode] = None
               if a list of UserBufferQuantizationMode is provided, a UB communicator is created for each quantization setting in the list.
-              falls back to the legacy `use_fp8` parameter if `None` is provided.
+              falls back to the legacy ``use_fp8`` parameter if ``None`` is provided.
     dtype : torch.dtype = torch.bfloat16
-            non-FP8 data type of the communication buffer when `use_fp8 = False`
-    ub_cfgs: dict = None
-             Configuration dictionary with the structure
-             ```
-             {
-                <gemm_name> : {
-                    "method": <"ring_exchange" or "pipeline">,
-                    "is_reduce_scatter": bool,
-                    "num_sm": int,
-                    "cga_size": int,
-                    "set_sm_margin": bool,
-                    "num_splits": int,
-                    "aggregate": bool,
-                    "atomic_gemm": bool,
-                    "use_ce": bool,
-                    "fp8_buf": bool,
-                }
-             }
-             ```
-             for `te.TransformerLayer` GEMM layers in `["qkv_fprop", "qkv_dgrad", "qkv_wgrad",
+            non-FP8 data type of the communication buffer when ``use_fp8 = False``
+    ub_cfgs : dict = None
+             Configuration dictionary with the structure::
+
+                 {
+                    <gemm_name> : {
+                        "method": <"ring_exchange" or "pipeline">,
+                        "is_reduce_scatter": bool,
+                        "num_sm": int,
+                        "cga_size": int,
+                        "set_sm_margin": bool,
+                        "num_splits": int,
+                        "aggregate": bool,
+                        "atomic_gemm": bool,
+                        "use_ce": bool,
+                        "fp8_buf": bool,
+                    }
+                 }
+
+             for ``te.TransformerLayer`` GEMM layers in ``["qkv_fprop", "qkv_dgrad", "qkv_wgrad",
              "proj_fprop", "proj_dgrad", "proj_wgrad", "fc1_fprop", "fc1_dgrad", "fc2_dgrad",
-             "fc2_fprop", "fc2_wgrad"]`.
-             a list may be provided to specify different overlap configurations for different the quantization settings in `quantization_modes`
+             "fc2_fprop", "fc2_wgrad"]``.
+             a list may be provided to specify different overlap configurations for different the quantization settings in ``quantization_modes``
     bootstrap_backend : str = None
-                        `torch.distributed` communication backend for the all-gather, broadcast and
+                        ``torch.distributed`` communication backend for the all-gather, broadcast and
                         barrier collectives during Userbuffers initialization. Not all backends are
                         valid for every cluster configuration and distributed launch method even if
                         they are available in PyTorch. When left unset, the initialization prefers
                         to use the MPI backend, falling back first on Gloo and then NCCL if MPI is
-                        not available. Setting `NVTE_UB_WITH_MPI=1` when building TE overrides this
+                        not available. Setting ``NVTE_UB_WITH_MPI=1`` when building TE overrides this
                         option and always initializes Userbuffers with direct MPI calls in C++,
-                        which also requires `MPI_HOME=/path/to/mpi/root` to be set at compile time.
+                        which also requires ``MPI_HOME=/path/to/mpi/root`` to be set at compile time.
     """
     if not tex.device_supports_multicast():
         assert bool(int(os.getenv("UB_SKIPMC", "0"))), (
@@ -560,6 +560,8 @@ def fill_userbuffers_buffer_for_all_gather(
                 "Userbuffers requires MXFP8 tensor dims that are divisible by 128, "
                 f"but got MXFP8 tensor with shape={tuple(local_shape)}"
             )
+        if local_tensor._with_gemm_swizzled_scales:
+            raise ValueError("Userbuffers assumes MXFP8 tensors have unswizzled scales")
         local_scale_inv = (
             local_tensor._rowwise_scale_inv
             if with_rowwise_data
@@ -592,6 +594,7 @@ def fill_userbuffers_buffer_for_all_gather(
             columnwise_scale_inv=columnwise_scale_inv,
             fp8_dtype=local_tensor._fp8_dtype,
             quantizer=quantizer,
+            with_gemm_swizzled_scales=False,
         )
         return global_tensor, local_tensor
 
@@ -951,7 +954,7 @@ class TransformerEngineBaseModule(torch.nn.Module, ABC):
 
         Parameters
         ----------
-        tp_group : ProcessGroup, default = `None`
+        tp_group : ProcessGroup, default = None
                   tensor parallel process group.
         """
         self.tp_group = tp_group
@@ -1165,18 +1168,7 @@ class TransformerEngineBaseModule(torch.nn.Module, ABC):
         # bgrad only if wgrad is in FP8, otherwise it is fused with wgrad and we return None
         if ctx.debug:
             grad_output_ = quantizer(grad_output)
-            if (
-                isinstance(
-                    grad_output_.get_tensor(True),
-                    (
-                        QuantizedTensor,
-                        Float8TensorStorage,
-                        MXFP8TensorStorage,
-                        Float8BlockwiseQTensorStorage,
-                    ),
-                )
-                and ctx.use_bias
-            ):
+            if ctx.use_bias:
                 grad_bias = grad_output.view(-1, grad_output.shape[-1]).sum(dim=0)
             else:
                 grad_bias = None
@@ -1356,7 +1348,7 @@ class TransformerEngineBaseModule(torch.nn.Module, ABC):
             workspace is being constructed or updated.
         cache_name: str, optional
             Key for caching.
-        update_workspace: bool, default = `True`
+        update_workspace: bool, default = True
             Update workspace with values from `tensor`.
         skip_update_flag: torch.Tensor, optional
             GPU flag to skip updating the workspace. Take precedence
@@ -1396,6 +1388,11 @@ class TransformerEngineBaseModule(torch.nn.Module, ABC):
                 ):
                     reset_cache = True
             elif isinstance(out, MXFP8TensorStorage):
+                if quantizer.rowwise_usage and out._rowwise_data is None:
+                    reset_cache = True
+                elif quantizer.columnwise_usage and out._columnwise_data is None:
+                    reset_cache = True
+            elif isinstance(out, NVFP4TensorStorage):
                 if quantizer.rowwise_usage and out._rowwise_data is None:
                     reset_cache = True
                 elif quantizer.columnwise_usage and out._columnwise_data is None:
@@ -1539,6 +1536,12 @@ class TransformerEngineBaseModule(torch.nn.Module, ABC):
             # If this is the same iteration as previous invocation of the module,
             # we use the debug value from the first invocation in the iteration.
             debug = self.debug_enabled_in_this_iteration
+
+        self.debug_last_iteration = TEDebugState.get_iteration()
+
+        if self.wgrad_store is not None:
+            if debug and self.wgrad_store.delay_wgrad_compute():
+                raise RuntimeError("Delayed wgrad compute is not supported in debug mode.")
 
         return debug
 

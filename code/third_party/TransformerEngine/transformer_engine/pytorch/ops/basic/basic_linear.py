@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2022-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # See LICENSE for license information.
 
@@ -53,27 +53,27 @@ class BasicLinear(BasicOperation):
 
     Parameters
     ----------
-    in_features: int
+    in_features : int
         Inner dimension of input tensor
-    out_features: int
+    out_features : int
         Inner dimension of output tensor
-    device: torch.device, default = default CUDA device
+    device : torch.device, default = default CUDA device
         Tensor device
-    dtype: torch.dtype, default = default dtype
+    dtype : torch.dtype, default = default dtype
         Tensor datatype
-    tensor_parallel_mode: {`None`, "column", "row"}, default = `None`
+    tensor_parallel_mode : {`None`, "column", "row"}, default = `None`
         Mode for tensor parallelism
-    tensor_parallel_group: torch.distributed.ProcessGroup, default = world group
+    tensor_parallel_group : torch.distributed.ProcessGroup, default = world group
         Process group for tensor parallelism
-    sequence_parallel: bool, default = `False`
+    sequence_parallel : bool, default = `False`
         Whether to apply sequence parallelism together with tensor
         parallelism, i.e. distributing input or output tensors along
         outer dimension (sequence or batch dim) when not distributing
         along inner dimension (embedding dim)
-    rng_state_tracker_function: callable
+    rng_state_tracker_function : callable
         Function that returns `CudaRNGStatesTracker`, which is used
         for model-parallel weight initialization
-    accumulate_into_main_grad: bool, default = `False`
+    accumulate_into_main_grad : bool, default = `False`
         Whether to directly accumulate weight gradients into the
         weight's `main_grad` attribute instead of relying on PyTorch
         autograd. The weight's `main_grad` must be set externally and
@@ -137,8 +137,10 @@ class BasicLinear(BasicOperation):
             out_features=out_features,
         )
 
-        # Whether weight tensor is natively quantized
+        # Initialize recipe state if needed for natively quantized weight
         self._with_quantized_weight: bool = FP8GlobalStateManager.with_fp8_parameters()
+        if self._with_quantized_weight:
+            self.reset_recipe_state(recipe=FP8GlobalStateManager.get_fp8_recipe())
 
         # Initialize parameters if needed
         weight = torch.empty(
@@ -340,15 +342,21 @@ class BasicLinear(BasicOperation):
     def reset_recipe_state(self, *, recipe: Optional[Recipe]) -> None:
         super().reset_recipe_state(recipe=recipe)
 
-        # Input/grad output quantizers use internal tensors
+        # Configure input/grad output tensor
+        # Note: These tensors are only used internally. If there is no
+        # tensor-parallel communication, they are only used for GEMM.
         input_quantizer = self.get_quantizer("forward", 0)
         grad_output_quantizer = self.get_quantizer("backward", 0)
         if input_quantizer is not None:
             input_quantizer.internal = True
+            if not (self.tensor_parallel_mode == "column" and self.sequence_parallel):
+                input_quantizer.optimize_for_gemm = True
         if grad_output_quantizer is not None:
             grad_output_quantizer.internal = True
+            if not (self.tensor_parallel_mode == "row" and self.sequence_parallel):
+                grad_output_quantizer.optimize_for_gemm = True
 
-        # Handle weight quantizer
+        # Configure weight quantizer
         # Note: This function may be called in base class constructor,
         # before any basic linear attrs have been set.
         weight_quantizer = self.get_quantizer("forward", 1)
