@@ -23,7 +23,8 @@ class OptimizedStreamOrderedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         super().__init__()
         # Must match baseline for a fair comparison.
         self.elements = 1 << 12  # 4,096 floats (~16KB) per stream buffer
-        self.inner_iterations = 200
+        # Increased from 200 to 500 to match baseline and better demonstrate speedup.
+        self.inner_iterations = 500
         self.num_streams = 8
         self.output: Optional[torch.Tensor] = None
         self._payload_inputs: Optional[dict] = None

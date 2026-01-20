@@ -184,7 +184,7 @@ ENTRIES["README.md"] = Entry(
     ],
     notes=[
         "`core/scripts/profile_all_workloads.sh` and `ncu_template.ini` capture Nsight traces with consistent metric sets.",
-        "`benchmark_profiles/` and `artifacts/` hold run outputs; clean them via `python cleanup.py` when rotating hardware.",
+        "`artifacts/runs/` holds run outputs (results/profiles/reports/logs); clean them via `python cleanup.py` when rotating hardware.",
         "`docs/perf_intake_and_triage.md` outlines the standard intake bundle for performance investigations.",
     ],
 )
@@ -941,7 +941,7 @@ ENTRIES["labs/cudnn_sdpa_bench"] = lab_entry(
     ],
     notes=[
         "Backend selection is CLI-only; environment variables are intentionally ignored.",
-        "Profiling outputs are stored under `benchmark_profiles/labs/cudnn_sdpa_bench/<run_id>` with harness artifacts in `artifacts/<run_id>/`.",
+        "Profiling outputs are stored under `artifacts/runs/<run_id>/profiles/bench/labs_cudnn_sdpa_bench/` with harness artifacts in `artifacts/runs/<run_id>/`.",
     ],
 )
 

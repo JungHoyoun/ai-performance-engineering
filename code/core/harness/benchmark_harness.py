@@ -417,6 +417,9 @@ def _is_chapter_or_labs_benchmark(benchmark: Any) -> bool:
 
 _configure_quick_wins()
 
+_VERIFY_OUTPUT_MAX_BYTES = 64 * 1024 * 1024
+"""Maximum verify_output payload size (bytes) before spilling to file."""
+
 
 def _extract_skip_reason_from_messages(messages: Sequence[str]) -> Optional[str]:
     """Return the SKIPPED reason embedded in harness error messages."""
@@ -2551,6 +2554,13 @@ class BenchmarkHarness:
             "device": str(self.device) if self.device else None,
             "initial_state": initial_state or None,
         }
+        try:
+            fd, verify_output_path = tempfile.mkstemp(prefix="aisp_verify_output_", suffix=".pt")
+            os.close(fd)
+        except Exception as e:
+            raise RuntimeError(f"Failed to allocate verify_output file for subprocess: {e}") from e
+        input_data["verify_output_path"] = verify_output_path
+        input_data["verify_output_max_bytes"] = _VERIFY_OUTPUT_MAX_BYTES
         
         # Spawn subprocess using isolated runner
         runner_script = Path(__file__).parent / "isolated_runner.py"
@@ -2702,6 +2712,16 @@ class BenchmarkHarness:
                                 kind = verify_output_data.get("kind") or "tensor"
                                 if kind == "tensor":
                                     benchmark._subprocess_verify_output = _deserialize_tensor(verify_output_data)
+                                elif kind == "tensor_file":
+                                    path = verify_output_data.get("path")
+                                    if not path:
+                                        raise ValueError("verify_output kind='tensor_file' missing path")
+                                    loaded = torch.load(path, map_location="cpu")
+                                    if not isinstance(loaded, torch.Tensor):
+                                        raise TypeError(
+                                            f"verify_output tensor_file expected torch.Tensor, got {type(loaded)}"
+                                        )
+                                    benchmark._subprocess_verify_output = loaded
                                 elif kind == "dict":
                                     tensors_obj = verify_output_data.get("tensors")
                                     if not isinstance(tensors_obj, dict) or not tensors_obj:
@@ -2710,6 +2730,16 @@ class BenchmarkHarness:
                                         name: _deserialize_tensor(tensor_dict)
                                         for name, tensor_dict in tensors_obj.items()
                                     }
+                                elif kind == "dict_file":
+                                    path = verify_output_data.get("path")
+                                    if not path:
+                                        raise ValueError("verify_output kind='dict_file' missing path")
+                                    loaded = torch.load(path, map_location="cpu")
+                                    if not isinstance(loaded, dict):
+                                        raise TypeError(
+                                            f"verify_output dict_file expected dict, got {type(loaded)}"
+                                        )
+                                    benchmark._subprocess_verify_output = loaded
                                 else:
                                     raise ValueError(f"Unknown verify_output kind '{kind}'")
                             except Exception as e:

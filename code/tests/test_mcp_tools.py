@@ -14,13 +14,14 @@ import mcp.mcp_server as mcp_server
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-ARTIFACT_DIR = REPO_ROOT / "artifacts" / "mcp-profiles"
+ARTIFACT_RUNS_DIR = REPO_ROOT / "artifacts" / "runs"
+ARTIFACT_DIR = ARTIFACT_RUNS_DIR
 MICROBENCH_DIR = REPO_ROOT / "artifacts" / "mcp-microbench"
 REPORT_OUTPUT = REPO_ROOT / "artifacts" / "mcp-report.pdf"
 EXPORT_OUTPUT = REPO_ROOT / "artifacts" / "mcp-export.csv"
 BENCH_FILE = REPO_ROOT / "benchmark_test_results.json"
-PROFILE_FIXTURE_DIR = REPO_ROOT / "benchmark_profiles" / "ch04"
-NSYS_SAMPLE = PROFILE_FIXTURE_DIR / "baseline_nccl_baseline.nsys-rep"
+PROFILE_FIXTURE_DIR = ARTIFACT_RUNS_DIR / "mcp-fixtures" / "profiles" / "bench" / "ch04"
+NSYS_SAMPLE = PROFILE_FIXTURE_DIR / "baseline_nccl_baseline.nsys-summary.csv"
 NCU_SAMPLE = PROFILE_FIXTURE_DIR / "baseline_nvlink_baseline.ncu-rep"
 
 
@@ -231,7 +232,8 @@ TOOL_PARAMS: Dict[str, Dict[str, Any]] = {
     "aisp_profile_nsys": {
         "command": ["python", "-c", "print('nsys')"],
         "output_name": "mcp_nsys_test",
-        "output_dir": str(ARTIFACT_DIR),
+        "output_dir": str(ARTIFACT_RUNS_DIR),
+        "run_id": "mcp_nsys_test",
         "preset": "light",
         "full_timeline": False,
         "trace_forks": False,
@@ -240,7 +242,8 @@ TOOL_PARAMS: Dict[str, Dict[str, Any]] = {
     "aisp_profile_ncu": {
         "command": ["python", "-c", "print('ncu')"],
         "output_name": "mcp_ncu_test",
-        "output_dir": str(ARTIFACT_DIR),
+        "output_dir": str(ARTIFACT_RUNS_DIR),
+        "run_id": "mcp_ncu_test",
         "workload_type": "memory_bound",
         "include_context": False,
     },
@@ -282,8 +285,16 @@ TOOL_PARAMS: Dict[str, Dict[str, Any]] = {
         "force_llm": True,
         "llm_explain": True,
     },
-    "aisp_profile_torch": {"script": str(REPO_ROOT / "tests" / "fixtures" / "mcp_torch_profile_target.py")},
-    "aisp_profile_hta": {"command": ["python", "-c", "print('hta')"]},
+    "aisp_profile_torch": {
+        "script": str(REPO_ROOT / "tests" / "fixtures" / "mcp_torch_profile_target.py"),
+        "output_dir": str(ARTIFACT_RUNS_DIR),
+        "run_id": "mcp_torch_test",
+    },
+    "aisp_profile_hta": {
+        "command": ["python", "-c", "print('hta')"],
+        "output_dir": str(ARTIFACT_RUNS_DIR),
+        "run_id": "mcp_hta_test",
+    },
     "aisp_hf": {"action": "search", "query": "llama", "limit": 3},
     "aisp_cluster_slurm": {"model": "7b", "nodes": 1, "gpus": 2},
     "aisp_cost_estimate": {"model_size": 7, "training_tokens": 100, "provider": "aws"},
@@ -319,6 +330,12 @@ def prepare_artifacts() -> None:
     ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
     MICROBENCH_DIR.mkdir(parents=True, exist_ok=True)
     PROFILE_FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
+    nsys_csv = PROFILE_FIXTURE_DIR / "baseline_nccl_baseline.nsys-summary.csv"
+    if not nsys_csv.exists():
+        nsys_csv.write_text(
+            "Section,Metric Name,Metric Value,Time (%)\n"
+            "NVTX,range0,123,45.6\n"
+        )
 
 
 @pytest.fixture()
@@ -375,6 +392,19 @@ def test_tool_response_is_text_only(server: mcp_server.MCPServer):
     assert isinstance(payload, dict)
 
 
+def test_nsys_summary_uses_fixture_csv(server: mcp_server.MCPServer):
+    result = server.call_tool(
+        "aisp_nsys_summary",
+        {"report_path": str(NSYS_SAMPLE), "include_context": False},
+    )
+    payload = _payload_from_result(result)
+    assert payload["tool"] == "aisp_nsys_summary"
+    assert payload["status"] == "ok"
+    tool_result = payload["result"]
+    assert tool_result.get("success") is True
+    assert tool_result.get("metrics")
+
+
 FAST_TOOL_CASES = [case for case in ALL_TOOL_CASES if not case.slow]
 
 
@@ -424,6 +454,11 @@ def test_slow_tools_opt_in_execution(server: mcp_server.MCPServer, case: ToolCas
         tool_result = payload["result"]
         assert tool_result.get("success") is True
         assert Path(tool_result["analysis_json"]).exists()
+    if case.name == "aisp_run_benchmarks":
+        tool_result = payload["result"]
+        if tool_result.get("returncode", 1) == 0 and tool_result.get("results_json"):
+            assert "triage" in tool_result
+            assert "report" in tool_result
 
 
 def test_benchmark_export_runs_inprocess(server: mcp_server.MCPServer, tmp_path: Path):

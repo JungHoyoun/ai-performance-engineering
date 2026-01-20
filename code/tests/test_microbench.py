@@ -46,7 +46,7 @@ def test_microbench_pcie_mem_tensor_sfu_cuda():
 def test_nsys_ncu_available_keys():
     from core.profiling.nsight_automation import NsightAutomation
 
-    automation = NsightAutomation(Path("artifacts/mcp-profiles"))
+    automation = NsightAutomation(Path("artifacts/runs"))
     # We only assert keys exist; availability may depend on environment.
     assert "nsys_available" in {"nsys_available": automation.nsys_available}
     assert "ncu_available" in {"ncu_available": automation.ncu_available}

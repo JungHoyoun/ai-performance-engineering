@@ -755,7 +755,7 @@ class PerformanceCore(http.server.SimpleHTTPRequestHandler):
                 self.send_json_response(res)
         elif self.path == '/api/nsight/availability':
             from core.profiling.nsight_automation import NsightAutomation
-            automation = NsightAutomation(Path("artifacts/mcp-profiles"))
+            automation = NsightAutomation(Path("artifacts/runs"))
             self.send_json_response({
                 "nsys_available": automation.nsys_available,
                 "ncu_available": automation.ncu_available,
@@ -1991,28 +1991,10 @@ class PerformanceCore(http.server.SimpleHTTPRequestHandler):
         including CUDA API timing bars, kernel breakdown, and speedup metrics.
         """
         from core.profile_insights import generate_flamegraph_comparison
-        
-        # Find the chapter directory
-        chapter_dir = None
-        for dir_path in discover_all_chapters(self.bench_root, bench_roots=self.bench_roots):
-            rel = self._relative_to_bench_root(dir_path)
-            if chapter in rel or rel.endswith(chapter):
-                chapter_dir = dir_path
-                break
-        
-        if not chapter_dir:
-            # Try artifacts directory
-            artifacts_dir = self.bench_root / "artifacts" / chapter
-            if artifacts_dir.exists():
-                chapter_dir = artifacts_dir
-            else:
-                # Try benchmark_profiles directory
-                profiles_dir = self.bench_root / "benchmark_profiles" / chapter
-                if profiles_dir.exists():
-                    chapter_dir = profiles_dir
-        
+
+        chapter_dir = self._find_profile_directory(chapter)
         if not chapter_dir or not chapter_dir.exists():
-            return {"error": f"Chapter not found: {chapter}", "chapter": chapter}
+            return {"error": f"Profiles not found for chapter: {chapter}", "chapter": chapter}
         
         # Generate comparison
         result = generate_flamegraph_comparison(chapter_dir)
@@ -2096,8 +2078,15 @@ class PerformanceCore(http.server.SimpleHTTPRequestHandler):
         
         # Check for profiles
         rel_path = Path(self._relative_to_bench_root(directory))
-        profile_dir = self.bench_root / 'benchmark_profiles' / rel_path
-        has_profiles = profile_dir.exists() and any(profile_dir.iterdir()) if profile_dir.exists() else False
+        profile_key = str(rel_path).replace("/", "_").replace("\\", "_")
+        has_profiles = False
+        runs_root = self.bench_root / "artifacts" / "runs"
+        if runs_root.exists():
+            for run_dir in runs_root.iterdir():
+                profile_dir = run_dir / "profiles" / "bench" / profile_key
+                if profile_dir.exists() and any(profile_dir.iterdir()):
+                    has_profiles = True
+                    break
         
         # Count LLM analysis files
         llm_analysis_count = 0
@@ -2316,22 +2305,19 @@ class PerformanceCore(http.server.SimpleHTTPRequestHandler):
         """Load ALL LLM analysis files from entire codebase."""
         analysis = []
         
-        # 1. Scan benchmark_profiles directory
-        profiles_dir = self.bench_root / 'benchmark_profiles'
-        if profiles_dir.exists():
-            for md_file in profiles_dir.rglob('llm_analysis*.md'):
+        # 1. Scan artifact runs for LLM analysis
+        runs_root = self.bench_root / "artifacts" / "runs"
+        if runs_root.exists():
+            for md_file in runs_root.rglob("llm_analysis*.md"):
                 try:
                     content = md_file.read_text()
-                    parts = md_file.relative_to(profiles_dir).parts
-                    chapter = parts[0] if parts else 'unknown'
-                    name = md_file.stem.replace('llm_analysis_', '')
-                    
+                    name = md_file.stem.replace("llm_analysis_", "")
                     analysis.append({
-                        'chapter': chapter,
-                        'name': name,
-                        'content': content,
-                        'path': str(md_file.relative_to(self.bench_root)),
-                        'source': 'benchmark_profiles',
+                        "chapter": "unknown",
+                        "name": name,
+                        "content": content,
+                        "path": str(md_file.relative_to(self.bench_root)),
+                        "source": "artifacts_runs",
                     })
                 except Exception as e:
                     print(f"Error loading {md_file}: {e}")
@@ -2371,7 +2357,7 @@ class PerformanceCore(http.server.SimpleHTTPRequestHandler):
             "analyses": analysis, 
             "count": len(analysis),
             "sources": {
-                "benchmark_profiles": len([a for a in analysis if a.get('source') == 'benchmark_profiles']),
+                "artifacts_runs": len([a for a in analysis if a.get('source') == 'artifacts_runs']),
                 "bench_dirs": len([a for a in analysis if a.get('source') in ('bench_dir', 'chapter', 'lab')]),
                 "root": len([a for a in analysis if a.get('source') == 'root']),
             }
@@ -2381,34 +2367,40 @@ class PerformanceCore(http.server.SimpleHTTPRequestHandler):
         """Load available profile data from ALL sources."""
         profiles = []
         
-        # Scan benchmark_profiles directory
-        profiles_dir = self.bench_root / 'benchmark_profiles'
-        if profiles_dir.exists():
-            for chapter_dir in profiles_dir.iterdir():
-                if chapter_dir.is_dir():
-                    chapter = str(chapter_dir.relative_to(profiles_dir))
+        # Scan artifact runs for profiles
+        runs_root = self.bench_root / "artifacts" / "runs"
+        if runs_root.exists():
+            for run_dir in runs_root.iterdir():
+                profiles_root = run_dir / "profiles"
+                if not profiles_root.exists():
+                    continue
+                for chapter_dir in profiles_root.rglob("*"):
+                    if not chapter_dir.is_dir():
+                        continue
+                    chapter = str(chapter_dir.relative_to(profiles_root))
                     chapter_profiles = {
-                        'chapter': chapter,
-                        'nsys_reports': [],
-                        'ncu_reports': [],
-                        'torch_traces': [],
-                        'sqlite_dbs': [],
+                        "chapter": chapter,
+                        "nsys_reports": [],
+                        "ncu_reports": [],
+                        "torch_traces": [],
+                        "sqlite_dbs": [],
                     }
-                    
                     for f in chapter_dir.iterdir():
-                        if f.suffix == '.nsys-rep':
-                            chapter_profiles['nsys_reports'].append(f.name)
-                        elif f.suffix == '.ncu-rep':
-                            chapter_profiles['ncu_reports'].append(f.name)
-                        elif f.suffix == '.json' and 'torch_trace' in f.name:
-                            chapter_profiles['torch_traces'].append(f.name)
-                        elif f.suffix == '.sqlite':
-                            chapter_profiles['sqlite_dbs'].append(f.name)
-                    
-                    if any([chapter_profiles['nsys_reports'], 
-                            chapter_profiles['ncu_reports'],
-                            chapter_profiles['torch_traces'],
-                            chapter_profiles['sqlite_dbs']]):
+                        if f.suffix == ".nsys-rep":
+                            chapter_profiles["nsys_reports"].append(f.name)
+                        elif f.suffix == ".ncu-rep":
+                            chapter_profiles["ncu_reports"].append(f.name)
+                        elif f.suffix == ".json" and "torch_trace" in f.name:
+                            chapter_profiles["torch_traces"].append(f.name)
+                        elif f.suffix == ".sqlite":
+                            chapter_profiles["sqlite_dbs"].append(f.name)
+
+                    if any([
+                        chapter_profiles["nsys_reports"],
+                        chapter_profiles["ncu_reports"],
+                        chapter_profiles["torch_traces"],
+                        chapter_profiles["sqlite_dbs"],
+                    ]):
                         profiles.append(chapter_profiles)
         
         return {
@@ -3054,8 +3046,16 @@ class PerformanceCore(http.server.SimpleHTTPRequestHandler):
 
         preset = params.get("preset", "full")
         full_timeline = bool(params.get("full_timeline")) or preset == "full"
-        output_dir = Path(params.get("output_dir") or "artifacts/mcp-profiles")
         output_name = params.get("output_name") or "dashboard_nsys"
+        base_dir = Path(params.get("output_dir") or (self.bench_root / "artifacts" / "runs"))
+        if not base_dir.is_absolute():
+            base_dir = (self.bench_root / base_dir).resolve()
+        from core.benchmark.artifact_manager import ArtifactManager, build_run_id, slugify
+        run_label = output_name or "run"
+        run_id = params.get("run_id") or build_run_id("profile-nsys", run_label, base_dir=base_dir)
+        artifacts = ArtifactManager(base_dir=base_dir, run_id=run_id, run_kind="profile-nsys", run_label=run_label)
+        output_dir = artifacts.profiles_dir / "tools" / "nsys" / slugify(run_label)
+        output_dir.mkdir(parents=True, exist_ok=True)
         precheck_only = bool(params.get("precheck_only"))
         dry_run = bool(params.get("dry_run"))
         run_async = bool(params.get("async") or params.get("queue"))
@@ -3067,11 +3067,13 @@ class PerformanceCore(http.server.SimpleHTTPRequestHandler):
         precheck = {
             "nsys_available": automation.nsys_available,
             "ncu_available": automation.ncu_available,
-            "output_dir": str(output_dir),
+            "run_dir": str(artifacts.run_dir),
+            "profiles_dir": str(output_dir),
             "preset": preset,
             "full_timeline": full_timeline,
             "command": command_list,
             "force_lineinfo": force_lineinfo,
+            "run_id": run_id,
         }
         if precheck_only:
             return {"precheck_only": True, **precheck}
@@ -3083,6 +3085,9 @@ class PerformanceCore(http.server.SimpleHTTPRequestHandler):
                 **precheck,
                 "planned_output": str(output_dir / f"{output_name}.nsys-rep"),
                 "timeout_seconds": timeout_seconds,
+                "run_id": run_id,
+                "run_dir": str(artifacts.run_dir),
+                "profiles_dir": str(output_dir),
             }
 
         def _runner():
@@ -3109,6 +3114,9 @@ class PerformanceCore(http.server.SimpleHTTPRequestHandler):
                 "timeout_hit": bool(getattr(auto, "last_run", {}).get("timeout_hit", False)),
                 "error": auto.last_error if path is None else None,
                 "run_details": getattr(auto, "last_run", {}),
+                "run_id": run_id,
+                "run_dir": str(artifacts.run_dir),
+                "profiles_dir": str(output_dir),
             }
 
         if run_async:
@@ -3124,8 +3132,16 @@ class PerformanceCore(http.server.SimpleHTTPRequestHandler):
 
         workload_type = params.get("workload_type", "memory_bound")
         kernel_filter = params.get("kernel_filter")
-        output_dir = Path(params.get("output_dir") or "artifacts/mcp-profiles")
         output_name = params.get("output_name") or "dashboard_ncu"
+        base_dir = Path(params.get("output_dir") or (self.bench_root / "artifacts" / "runs"))
+        if not base_dir.is_absolute():
+            base_dir = (self.bench_root / base_dir).resolve()
+        from core.benchmark.artifact_manager import ArtifactManager, build_run_id, slugify
+        run_label = output_name or "run"
+        run_id = params.get("run_id") or build_run_id("profile-ncu", run_label, base_dir=base_dir)
+        artifacts = ArtifactManager(base_dir=base_dir, run_id=run_id, run_kind="profile-ncu", run_label=run_label)
+        output_dir = artifacts.profiles_dir / "tools" / "ncu" / slugify(run_label)
+        output_dir.mkdir(parents=True, exist_ok=True)
         precheck_only = bool(params.get("precheck_only"))
         dry_run = bool(params.get("dry_run"))
         run_async = bool(params.get("async") or params.get("queue"))
@@ -3139,11 +3155,13 @@ class PerformanceCore(http.server.SimpleHTTPRequestHandler):
         precheck = {
             "nsys_available": automation.nsys_available,
             "ncu_available": automation.ncu_available,
-            "output_dir": str(output_dir),
+            "run_dir": str(artifacts.run_dir),
+            "profiles_dir": str(output_dir),
             "workload_type": workload_type,
             "command": command_list,
             "force_lineinfo": force_lineinfo,
             "pm_sampling_interval": sampling_interval,
+            "run_id": run_id,
         }
         if precheck_only:
             return {"precheck_only": True, **precheck}
@@ -3156,6 +3174,9 @@ class PerformanceCore(http.server.SimpleHTTPRequestHandler):
                 "planned_output": str(output_dir / f"{output_name}.ncu-rep"),
                 "timeout_seconds": timeout_seconds,
                 "pm_sampling_interval": sampling_interval,
+                "run_id": run_id,
+                "run_dir": str(artifacts.run_dir),
+                "profiles_dir": str(output_dir),
             }
 
         def _runner():
@@ -3179,6 +3200,9 @@ class PerformanceCore(http.server.SimpleHTTPRequestHandler):
                 "timeout_hit": bool(getattr(auto, "last_run", {}).get("timeout_hit", False)),
                 "error": auto.last_error if path is None else None,
                 "run_details": getattr(auto, "last_run", {}),
+                "run_id": run_id,
+                "run_dir": str(artifacts.run_dir),
+                "profiles_dir": str(output_dir),
             }
 
         if run_async:

@@ -51,8 +51,6 @@ IGNORE_DIRS = {
     "dist",
     "out",
     "artifacts",
-    "benchmark_profiles",
-    "benchmark_profiles_chXX",
     "profiling_results",
     "hta_output",
     "gpt-oss-20b",
@@ -73,7 +71,6 @@ def _iter_named_dirs(repo_root: Path, names: set[str]) -> Iterable[Path]:
                 d in IGNORE_DIRS
                 or d.startswith(".")
                 or d.startswith("artifacts")
-                or d.startswith("benchmark_profiles")
             ):
                 continue
             if d in names:

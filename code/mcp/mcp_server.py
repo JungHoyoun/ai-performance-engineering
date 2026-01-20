@@ -203,7 +203,7 @@ _CONTEXT_PARAMS_SCHEMA: Dict[str, Any] = {
 
 # Only the most problematic aliases that cause real errors
 _COMMON_ALIASES: Dict[str, Dict[str, str]] = {
-    "profile": {"full": "deep_dive", "deep": "deep_dive", "nsys": "deep_dive"},
+    "profile": {"full": "deep_dive", "deep": "deep_dive"},
     "preset": {"deep": "full", "complete": "full"},
     "format": {"md": "markdown"},
     "collective": {"allreduce": "all_reduce", "allgather": "all_gather"},
@@ -244,13 +244,13 @@ _OUTPUT_ENVELOPE_SUMMARY = (
 
 # Explicit overrides for tools that have notable runtime/side effects.
 _EXPECTATION_OVERRIDES: Dict[str, str] = {
-    "aisp_run_benchmarks": "Runs the bench CLI; can take minutes and writes artifacts/logs. Use artifacts_dir to control output location. For full baseline-vs-optimized profiling + diffs, use profile='deep_dive' or aisp_benchmark_deep_dive_compare.",
-    "aisp_benchmark_deep_dive_compare": "Runs bench with profile='deep_dive' (slow) and then compares baseline vs optimized profiles (nsys+ncu). Writes a timestamped run directory under output_dir.",
+    "aisp_run_benchmarks": "Runs the bench CLI; can take minutes and writes artifacts/logs under artifacts/runs/<run_id>/ by default. Run IDs are self-describing (timestamp + run kind + targets). Also runs triage + HTML report generation unless auto_analyze/auto_report are disabled. Use artifacts_dir to control output location. For full baseline-vs-optimized profiling + diffs, use profile='deep_dive' or aisp_benchmark_deep_dive_compare.",
+    "aisp_benchmark_deep_dive_compare": "Runs bench with profile='deep_dive' (slow) and then compares baseline vs optimized profiles (nsys+ncu). Writes a self-describing run directory under output_dir (default: artifacts/runs).",
     "aisp_benchmark_report": "Generates a report from existing benchmark JSON; writes PDF/HTML to the chosen output.",
     "aisp_benchmark_export": "Exports existing benchmark JSON to csv/markdown/json; writes to the chosen output file.",
     "aisp_benchmark_compare_runs": "Diffs two benchmark JSON files; CPU-bound and quick, writes only if an output is specified.",
-    "aisp_profile_nsys": "Calls Nsight Systems; requires nsys installed and writes .nsys-rep into output_dir. Slow/interactive; run aisp_status or aisp_triage first. Default preset is full; set preset=light explicitly to shrink traces.",
-    "aisp_profile_ncu": "Calls Nsight Compute; requires ncu installed and writes .ncu-rep into output_dir. Slow/interactive; run aisp_status or aisp_triage first. Defaults to memory_bound metric set; opt into heavier modes explicitly.",
+    "aisp_profile_nsys": "Calls Nsight Systems; requires nsys installed and writes .nsys-rep under artifacts/runs/<run_id>/profiles/tools/<tool>/<label>/ by default. Slow/interactive; run aisp_status or aisp_triage first. Default preset is full; set preset=light explicitly to shrink traces.",
+    "aisp_profile_ncu": "Calls Nsight Compute; requires ncu installed and writes .ncu-rep under artifacts/runs/<run_id>/profiles/tools/<tool>/<label>/ by default. Slow/interactive; run aisp_status or aisp_triage first. Defaults to memory_bound metric set; opt into heavier modes explicitly.",
     "aisp_profile_compare": "Generates flame graph comparison; parses NSYS reports and may traverse multiple files; allow extra runtime.",
     "aisp_hw_speed": "Runs GPU/host micro-benchmarks; stresses hardware briefly. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
     "aisp_hw_roofline": "Runs roofline micro-benchmark; stresses memory subsystem briefly. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
@@ -748,6 +748,13 @@ def _collect_dir_files(dir_path: Path) -> List[Dict[str, Any]]:
     return [_file_entry(p) for p in sorted(files)]
 
 
+def _collect_dir_files_recursive(dir_path: Path) -> List[Dict[str, Any]]:
+    if not dir_path.exists():
+        return []
+    files = [p for p in dir_path.rglob("*") if p.is_file()]
+    return [_file_entry(p) for p in sorted(files)]
+
+
 def _profile_prefix(path: Path) -> str:
     name = path.name
     for suffix in (".nsys-rep", ".ncu-rep"):
@@ -787,7 +794,7 @@ def _summarize_bench_artifacts(results_json: Path) -> Dict[str, Any]:
         "reports": _collect_dir_files(run_dir / "reports"),
         "logs": _collect_dir_files(run_dir / "logs"),
         "progress": _collect_dir_files(run_dir / "progress"),
-        "profiles": _collect_dir_files(run_dir / "profiles"),
+        "profiles": _collect_dir_files_recursive(run_dir / "profiles"),
     }
 
     profiling_summary: List[Dict[str, Any]] = []
@@ -885,12 +892,70 @@ def _attach_bench_artifact_paths(result: Dict[str, Any]) -> Dict[str, Any]:
     return enriched
 
 
-def _default_run_id() -> str:
-    return datetime.now().strftime("%Y%m%d_%H%M%S")
+def _default_benchmark_report_path(result: Dict[str, Any], fmt: str) -> Optional[Path]:
+    run_dir = result.get("run_dir")
+    if run_dir:
+        return Path(str(run_dir)) / "reports" / f"benchmark_report.{fmt}"
+    results_json = result.get("results_json")
+    if results_json:
+        try:
+            return Path(str(results_json)).parent.parent / "reports" / f"benchmark_report.{fmt}"
+        except Exception:
+            return None
+    return None
+
+
+def _maybe_run_post_benchmark_steps(
+    result: Dict[str, Any],
+    *,
+    auto_analyze: bool,
+    auto_report: bool,
+    report_format: str,
+) -> Dict[str, Any]:
+    if not isinstance(result, dict):
+        return result
+    if int(result.get("returncode", 0) or 0) != 0 or result.get("error"):
+        return result
+    results_json = result.get("results_json")
+    if not results_json:
+        return result
+
+    include_context = False
+    context_level = "summary"
+    updated = dict(result)
+    if auto_analyze:
+        updated["triage"] = tool_benchmark_triage(
+            {
+                "data_file": str(results_json),
+                "include_context": include_context,
+                "context_level": context_level,
+            }
+        )
+    if auto_report:
+        fmt = normalize_param("format", report_format, "html")
+        if fmt not in {"pdf", "html"}:
+            fmt = "html"
+        report_path = _default_benchmark_report_path(updated, fmt)
+        report_output = str(report_path) if report_path else f"benchmark_report.{fmt}"
+        updated["report"] = tool_benchmark_report(
+            {
+                "data_file": str(results_json),
+                "output": report_output,
+                "format": fmt,
+                "include_context": include_context,
+                "context_level": context_level,
+            }
+        )
+    return updated
+
+
+def _default_run_id(kind: str, label: str, base_dir: Optional[Path]) -> str:
+    from core.benchmark.artifact_manager import build_run_id
+    return build_run_id(kind, label, base_dir=base_dir)
 
 
 def _resolve_run_dir(artifacts_dir: Optional[str], run_id: str) -> Path:
-    base_dir = Path(artifacts_dir) if artifacts_dir else CODE_ROOT / "artifacts"
+    base_dir = Path(artifacts_dir) if artifacts_dir else CODE_ROOT / "artifacts" / "runs"
     if not base_dir.is_absolute():
         base_dir = (CODE_ROOT / base_dir).resolve()
     return base_dir / run_id
@@ -904,6 +969,26 @@ def _progress_path_for_run(run_dir: Optional[Path], run_id: Optional[str]) -> Op
 
 def _progress_path_in_dir(output_dir: Path, run_id: str) -> Path:
     return output_dir / "progress" / f"run_{run_id}.json"
+
+
+def _prepare_profile_run(
+    output_dir_param: Optional[str],
+    run_id_param: Optional[str],
+    tool_key: str,
+    label: str,
+) -> tuple[Path, Path, str]:
+    """Resolve standard run + profile directories for profiling tools."""
+    from core.benchmark.artifact_manager import ArtifactManager, slugify
+
+    base_dir = Path(output_dir_param) if output_dir_param else CODE_ROOT / "artifacts" / "runs"
+    if not base_dir.is_absolute():
+        base_dir = (CODE_ROOT / base_dir).resolve()
+    run_label = label or "run"
+    run_id = run_id_param or _default_run_id(f"profile-{tool_key}", run_label, base_dir)
+    artifact_manager = ArtifactManager(base_dir=base_dir, run_id=run_id, run_kind=f"profile-{tool_key}", run_label=run_label)
+    profile_dir = artifact_manager.profiles_dir / "tools" / slugify(tool_key) / slugify(run_label)
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    return artifact_manager.run_dir, profile_dir, run_id
 
 
 def _read_progress_payload(progress_path: Optional[Path]) -> Optional[Dict[str, Any]]:
@@ -1370,11 +1455,13 @@ def tool_system_dependencies(params: Dict[str, Any]) -> Dict[str, Any]:
     "6. aisp_benchmark_triage → analyze results and get recommendations. "
     "DEEP DIVE WORKFLOW (manual): "
     "1) aisp_benchmark_targets → pick target like 'ch10:atomic_reduction' "
-    "2) aisp_run_benchmarks(targets=['ch10:atomic_reduction'], profile='deep_dive', artifacts_dir='artifacts/mcp-deep-dive') "
+    "2) aisp_run_benchmarks(targets=['ch10:atomic_reduction'], profile='deep_dive', artifacts_dir='artifacts/runs') "
     "3) aisp_benchmark_triage(data_file=results_json from step 2) "
     "4) aisp_profile_compare / aisp_compare_nsys / aisp_compare_ncu (point at a profiles_dir that contains baseline+optimized .nsys-rep/.ncu-rep). "
     "DEEP DIVE WORKFLOW (one-shot): use aisp_benchmark_deep_dive_compare for run+profile+diff in one call. "
     "WORKFLOW: aisp_status → aisp_list_chapters → aisp_run_benchmarks → aisp_benchmark_triage. "
+    "By default, MCP runs post-benchmark triage + HTML report generation for richer detail. "
+    "Disable with auto_analyze=false or auto_report=false if you only want raw results. "
     "NOT FOR: Quick GPU health (use aisp_hw_speed first).",
     {
         "type": "object",
@@ -1396,11 +1483,11 @@ def tool_system_dependencies(params: Dict[str, Any]) -> Dict[str, Any]:
             },
             "artifacts_dir": {
                 "type": "string",
-                "description": "Base directory for artifacts (bench creates a timestamped run dir underneath).",
+                "description": "Base directory for run artifacts (default: ./artifacts/runs).",
             },
             "run_id": {
                 "type": "string",
-                "description": "Run ID for artifacts (default: timestamp)",
+                "description": "Run ID for artifacts (default: <timestamp>__bench__profile-<type>__targets-<...>)",
             },
             "iterations": {
                 "type": "integer",
@@ -1467,6 +1554,22 @@ def tool_system_dependencies(params: Dict[str, Any]) -> Dict[str, Any]:
                 ),
                 "default": False,
             },
+            "auto_analyze": {
+                "type": "boolean",
+                "description": "Automatically run aisp_benchmark_triage after a successful run.",
+                "default": True,
+            },
+            "auto_report": {
+                "type": "boolean",
+                "description": "Automatically generate a benchmark report after a successful run.",
+                "default": True,
+            },
+            "report_format": {
+                "type": "string",
+                "description": "Report format used when auto_report=true (html or pdf).",
+                "enum": ["html", "pdf"],
+                "default": "html",
+            },
         }),
         "required": ["targets"],
     },
@@ -1481,11 +1584,19 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
     run_id_param = params.get("run_id")
     run_id = run_id_param.strip() if isinstance(run_id_param, str) else run_id_param
     if not run_id:
-        run_id = _default_run_id()
+        from core.benchmark.artifact_manager import build_bench_run_label
+        base_dir = Path(artifacts_dir) if artifacts_dir else CODE_ROOT / "artifacts" / "runs"
+        if not base_dir.is_absolute():
+            base_dir = (CODE_ROOT / base_dir).resolve()
+        run_label = build_bench_run_label(targets, profile)
+        run_id = _default_run_id("bench", run_label, base_dir)
     iterations_param = params.get("iterations")
     warmup_param = params.get("warmup")
     allow_invalid_environment = bool(params.get("allow_invalid_environment", False))
     allow_virtualization = bool(params.get("allow_virtualization", False))
+    auto_analyze = bool(params.get("auto_analyze", True))
+    auto_report = bool(params.get("auto_report", True))
+    report_format = params.get("report_format", "html")
 
     # Validate profile value
     valid_profiles = ["none", "minimal", "deep_dive", "roofline"]
@@ -1616,8 +1727,14 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     def _execute_benchmarks():
-        return _attach_bench_artifact_paths(
+        base_result = _attach_bench_artifact_paths(
             _run_bench_cli(args, timeout=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None)
+        )
+        return _maybe_run_post_benchmark_steps(
+            base_result,
+            auto_analyze=auto_analyze,
+            auto_report=auto_report,
+            report_format=report_format,
         )
 
     if run_async:
@@ -1714,11 +1831,11 @@ def _benchmark_next_steps(result: Dict[str, Any]) -> List[Dict[str, Any]]:
             },
             "artifacts_dir": {
                 "type": "string",
-                "description": "Base directory for artifacts (bench creates a timestamped run dir underneath).",
+                "description": "Base directory for artifacts (bench creates a self-describing run dir underneath).",
             },
             "run_id": {
                 "type": "string",
-                "description": "Run ID for artifacts (default: timestamp)",
+                "description": "Run ID for artifacts (default: <timestamp>__bench__profile-<type>__targets-<...>)",
             },
             "iterations": {
                 "type": "integer",
@@ -1797,11 +1914,11 @@ def tool_benchmark_variants(params: Dict[str, Any]) -> Dict[str, Any]:
     "aisp_benchmark_deep_dive_compare",
     "Tags: benchmark, deep_dive, compare, baseline, optimized, nsys, ncu, torch, one-shot, workflow. "
     "ONE-SHOT deep-dive workflow: run benchmarks with profile='deep_dive' AND return structured diffs from Nsight Systems + Nsight Compute (+ any available profiler artifacts). "
-    "Writes outputs under a timestamped run dir (output_dir/<timestamp>/...) and returns {run_dir, results_json, analysis_json} plus per-benchmark profiles_dir + followup_tool_calls for chaining. "
+    "Writes outputs under artifacts/runs/<run_id>/ by default and returns {run_dir, results_json, analysis_json} plus per-benchmark profiles_dir + followup_tool_calls for chaining. "
     "Selection rule: for each example, compares baseline vs the best succeeded optimization by speedup (ties break arbitrarily); surfaces the chosen optimized file in the output. "
     "Defaults: iterations=1, warmup=5 to keep deep profiling fast; override if you need more stable timing stats. "
     "USE when: You want the common chain 'bench run → deep_dive profile → compare nsys+ncu' in one tool call. "
-    "Example: targets=['ch10:atomic_reduction'], output_dir='artifacts/mcp-deep-dive'. "
+    "Example: targets=['ch10:atomic_reduction'], output_dir='artifacts/runs'. "
     "Follow-ups: you can re-run the comparisons later by calling aisp_profile_compare / aisp_compare_nsys / aisp_compare_ncu with the returned profiles_dir.",
     {
         "type": "object",
@@ -1817,12 +1934,12 @@ def tool_benchmark_variants(params: Dict[str, Any]) -> Dict[str, Any]:
                 },
                 "output_dir": {
                     "type": "string",
-                    "description": "Base directory for artifacts; a timestamped run dir is created inside.",
-                    "default": "artifacts/mcp-deep-dive",
+                    "description": "Base directory for run artifacts (default: artifacts/runs).",
+                    "default": "artifacts/runs",
                 },
                 "run_id": {
                     "type": "string",
-                    "description": "Run ID for artifacts (default: timestamp)",
+                    "description": "Run ID for artifacts (default: <timestamp>__deep-dive__profile-deep_dive__targets-<...>)",
                 },
                 "iterations": {
                     "type": "integer",
@@ -1873,11 +1990,16 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
 
     include_context, context_level = extract_context_opts(params)
     targets = params.get("targets") or []
-    output_dir = params.get("output_dir") or "artifacts/mcp-deep-dive"
+    output_dir = params.get("output_dir") or "artifacts/runs"
     run_id_param = params.get("run_id")
     run_id = run_id_param.strip() if isinstance(run_id_param, str) else run_id_param
     if not run_id:
-        run_id = _default_run_id()
+        from core.benchmark.artifact_manager import build_bench_run_label
+        base_dir = Path(output_dir)
+        if not base_dir.is_absolute():
+            base_dir = (CODE_ROOT / base_dir).resolve()
+        run_label = build_bench_run_label(targets, "deep_dive")
+        run_id = _default_run_id("deep-dive", run_label, base_dir)
     iterations = params.get("iterations", 1)
     warmup = params.get("warmup", 5)
     allow_invalid_environment = bool(params.get("allow_invalid_environment", False))
@@ -2022,28 +2144,39 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
                     shutil.copy2(src, dst)
                     return str(dst)
 
-                safe_chapter = str(chapter).replace("/", "_") if chapter else "unknown_chapter"
-                safe_example = str(example).replace("/", "_") if example else "unknown_example"
-                profiles_dir = run_dir_path / "profiles" / f"{safe_chapter}__{safe_example}"
+                from core.benchmark.artifact_manager import slugify
+
+                safe_chapter = slugify(str(chapter)) if chapter else "unknown_chapter"
+                safe_example = slugify(str(example)) if example else "unknown_example"
+                technique_label = best_opt.get("technique") or "default"
+                safe_pair = slugify(str(technique_label))
+                profiles_dir = (
+                    run_dir_path
+                    / "profiles"
+                    / "bench"
+                    / safe_chapter
+                    / safe_example
+                    / f"pair__{safe_pair}"
+                )
 
                 copied = {
                     "baseline_nsys_rep": _copy_profile(
-                        baseline_paths["nsys"], profiles_dir, dest_stem=f"baseline_{safe_example}"
+                        baseline_paths["nsys"], profiles_dir, dest_stem=f"{safe_example}__baseline"
                     ),
                     "optimized_nsys_rep": _copy_profile(
-                        optimized_paths["nsys"], profiles_dir, dest_stem=f"optimized_{safe_example}"
+                        optimized_paths["nsys"], profiles_dir, dest_stem=f"{safe_example}__optimized"
                     ),
                     "baseline_ncu_rep": _copy_profile(
-                        baseline_paths["ncu"], profiles_dir, dest_stem=f"baseline_{safe_example}"
+                        baseline_paths["ncu"], profiles_dir, dest_stem=f"{safe_example}__baseline"
                     ),
                     "optimized_ncu_rep": _copy_profile(
-                        optimized_paths["ncu"], profiles_dir, dest_stem=f"optimized_{safe_example}"
+                        optimized_paths["ncu"], profiles_dir, dest_stem=f"{safe_example}__optimized"
                     ),
                     "baseline_torch_trace": _copy_profile(
-                        baseline_paths["torch"], profiles_dir, dest_stem=f"baseline_{safe_example}"
+                        baseline_paths["torch"], profiles_dir, dest_stem=f"{safe_example}__baseline"
                     ),
                     "optimized_torch_trace": _copy_profile(
-                        optimized_paths["torch"], profiles_dir, dest_stem=f"optimized_{safe_example}"
+                        optimized_paths["torch"], profiles_dir, dest_stem=f"{safe_example}__optimized"
                     ),
                 }
 
@@ -2227,13 +2360,13 @@ def _extract_promoted_targets(results_json: Path) -> List[Dict[str, Any]]:
                 },
                 "output_dir": {
                     "type": "string",
-                    "description": "Base directory for artifacts from the LLM patch run.",
-                    "default": "artifacts/mcp-llm-loop",
+                    "description": "Base directory for run artifacts (default: artifacts/runs).",
+                    "default": "artifacts/runs",
                 },
                 "compare_output_dir": {
                     "type": "string",
-                    "description": "Base directory for artifacts from the follow-up compare run.",
-                    "default": "artifacts/mcp-llm-loop-compare",
+                    "description": "Base directory for compare-run artifacts (default: artifacts/runs).",
+                    "default": "artifacts/runs",
                 },
                 "iterations": {
                     "type": "integer",
@@ -2302,8 +2435,8 @@ def tool_benchmark_llm_patch_loop(params: Dict[str, Any]) -> Dict[str, Any]:
     if not targets:
         return make_error("targets is required", include_context, context_level)
 
-    output_dir = params.get("output_dir") or "artifacts/mcp-llm-loop"
-    compare_output_dir = params.get("compare_output_dir") or "artifacts/mcp-llm-loop-compare"
+    output_dir = params.get("output_dir") or "artifacts/runs"
+    compare_output_dir = params.get("compare_output_dir") or "artifacts/runs"
     iterations = params.get("iterations", 1)
     warmup = params.get("warmup", 5)
     compare_iterations = params.get("compare_iterations", 1)
@@ -3422,7 +3555,9 @@ def tool_profile_roofline(params: Dict[str, Any]) -> Dict[str, Any]:
     "Returns: {speedup, cuda_api_comparison, kernel_breakdown, flame_diff, html_output (if requested)}. "
     "USE when: Understanding optimization impact visually, presenting before/after comparison. "
     "Example: \"Compare baseline vs optimized streams profiles\" or \"Why is the optimized code faster?\". "
-    "Provide chapter (e.g., 'ch11') OR profiles_dir path (for example, benchmarks[].profiles_dir from aisp_benchmark_deep_dive_compare). Outputs interactive HTML if output_html set. 🕐 MEDIUM (~5s). WORKFLOW: profile baseline → optimize → aisp_profile_compare. NOT FOR: Raw comparison (use aisp_compare_nsys/ncu).",
+    "Provide chapter (e.g., 'ch11') OR profiles_dir path (for example, benchmarks[].profiles_dir from aisp_benchmark_deep_dive_compare). "
+    "If multiple pairs exist, provide pair to select one. Outputs interactive HTML if output_html set. "
+    "🕐 MEDIUM (~5s). WORKFLOW: profile baseline → optimize → aisp_profile_compare. NOT FOR: Raw comparison (use aisp_compare_nsys/ncu).",
     {"type": "object", "properties": with_context_params({
         "chapter": {
             "type": "string",
@@ -3430,12 +3565,16 @@ def tool_profile_roofline(params: Dict[str, Any]) -> Dict[str, Any]:
         },
         "profiles_dir": {
             "type": "string",
-            "description": "Direct path to directory with baseline/optimized .nsys-rep (alternative to chapter)"
+            "description": "Direct path to a profile pair dir or a parent profiles dir (alternative to chapter)"
         },
         "output_html": {
             "type": "string",
             "description": "Path to write interactive HTML comparison (optional, great for sharing)",
             "default": None
+        },
+        "pair": {
+            "type": "string",
+            "description": "Profile pair key to select when multiple exist"
         },
     })}
 )
@@ -3448,6 +3587,7 @@ def tool_profile_compare(params: Dict[str, Any]) -> Dict[str, Any]:
     chapter = params.get("chapter")
     profiles_dir_param = params.get("profiles_dir")
     output_html = params.get("output_html")
+    pair_key = params.get("pair")
     include_context, context_level = extract_context_opts(params)
 
     core = PerformanceCoreBase()
@@ -3474,7 +3614,7 @@ def tool_profile_compare(params: Dict[str, Any]) -> Dict[str, Any]:
     if not profiles_dir or not profiles_dir.exists():
         return make_error(f"profiles_dir not found: {profiles_dir}", include_context, context_level)
 
-    result = profile_insights.generate_flamegraph_comparison(profiles_dir)
+    result = profile_insights.generate_flamegraph_comparison(profiles_dir, pair_key=pair_key)
     if result is None:
         return {
             "error": "No baseline/optimized nsys profiles found",
@@ -3489,7 +3629,7 @@ def tool_profile_compare(params: Dict[str, Any]) -> Dict[str, Any]:
     # This adds improvements/regressions analysis and bottleneck shift detection
     if chapter:
         try:
-            metric_comparison = core.compare_profiles(chapter)
+            metric_comparison = core.compare_profiles(chapter, pair_key=pair_key)
             if metric_comparison and not metric_comparison.get("error"):
                 if "metric_analysis" in metric_comparison:
                     result["metric_analysis"] = metric_comparison["metric_analysis"]
@@ -3533,13 +3673,17 @@ def tool_profile_compare(params: Dict[str, Any]) -> Dict[str, Any]:
         },
         "output_name": {
             "type": "string",
-            "description": "Base name for output file (without extension)",
+            "description": "Label for the profile (used in profiles/tools/<tool>/<label>/ and output stem)",
             "default": "mcp_nsys"
+        },
+        "run_id": {
+            "type": "string",
+            "description": "Run ID for the artifact directory (default: <timestamp>__profile-nsys__<label>)",
         },
         "output_dir": {
             "type": "string",
-            "description": "Directory to write profiling outputs (default: artifacts/mcp-profiles)",
-            "default": "artifacts/mcp-profiles"
+            "description": "Base directory for run artifacts (default: artifacts/runs)",
+            "default": "artifacts/runs"
         },
         "trace_cuda": {"type": "boolean", "default": True, "description": "Trace CUDA API calls"},
         "trace_nvtx": {"type": "boolean", "default": True, "description": "Trace NVTX ranges"},
@@ -3590,9 +3734,13 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
         return make_error("command is required", include_context, context_level)
 
     output_name = params.get("output_name", "mcp_nsys")
-    output_dir = Path(params.get("output_dir", "artifacts/mcp-profiles"))
-    run_id = output_name
-    progress_path = _progress_path_in_dir(output_dir, run_id)
+    run_dir, profile_dir, run_id = _prepare_profile_run(
+        params.get("output_dir"),
+        params.get("run_id"),
+        "nsys",
+        output_name,
+    )
+    progress_path = _progress_path_in_dir(run_dir, run_id)
     trace_cuda = bool(params.get("trace_cuda", True))
     trace_nvtx = bool(params.get("trace_nvtx", True))
     trace_osrt = bool(params.get("trace_osrt", True))
@@ -3606,13 +3754,14 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
     timeout_param = params.get("timeout_seconds")
     timeout_seconds = None if timeout_param is None else int(timeout_param)
 
-    automation = NsightAutomation(output_dir)
+    automation = NsightAutomation(profile_dir)
     cuda_check = _cuda_precheck()
     precheck = {
         "nsys_available": automation.nsys_available,
         "ncu_available": automation.ncu_available,
         "cuda": cuda_check,
-        "output_dir": str(output_dir),
+        "run_dir": str(run_dir),
+        "profiles_dir": str(profile_dir),
         "command_provided": bool(command),
     }
 
@@ -3630,7 +3779,7 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
     if not cuda_check.get("ok", True):
         return make_error(cuda_check.get("reason", "CUDA not available"), include_context, context_level, **precheck)
 
-    output_path = output_dir / f"{output_name}.nsys-rep"
+    output_path = profile_dir / f"{output_name}.nsys-rep"
     if dry_run:
         return {
             "dry_run": True,
@@ -3642,6 +3791,8 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
             "planned_output": str(output_path),
             "note": "Set dry_run=false to execute; use async=true to background the run. Default preset is full; set preset=light for smaller/faster traces.",
             "run_id": run_id,
+            "run_dir": str(run_dir),
+            "profiles_dir": str(profile_dir),
             "progress_path": str(progress_path),
         }
 
@@ -3658,7 +3809,7 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
                 percent_complete=0.0,
             ),
         )
-        auto = NsightAutomation(output_dir)
+        auto = NsightAutomation(profile_dir)
         path = auto.profile_nsys(
             command=command,
             output_name=output_name,
@@ -3675,7 +3826,7 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
             "success": path is not None,
             "output": str(path) if path else None,
             "nsys_available": auto.nsys_available,
-            "cwd": str(output_dir),
+            "cwd": str(profile_dir),
             "preset": preset,
             "full_timeline": full_timeline or preset == "full",
             "force_lineinfo": force_lineinfo,
@@ -3690,6 +3841,8 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
                 "If capture fails, try preset=light to reduce trace size."
             ],
             "run_id": run_id,
+            "run_dir": str(run_dir),
+            "profiles_dir": str(profile_dir),
             "progress_path": str(progress_path),
         }
         _emit_progress_safe(
@@ -3709,7 +3862,8 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
     if run_async:
         run_metadata = {
             "run_id": run_id,
-            "run_dir": str(output_dir),
+            "run_dir": str(run_dir),
+            "profiles_dir": str(profile_dir),
             "progress_path": str(progress_path),
         }
         queued = _queue_job("aisp_profile_nsys", _execute_capture, params, run_metadata=run_metadata)
@@ -3739,13 +3893,17 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
         },
         "output_name": {
             "type": "string",
-            "description": "Base name for output file (without extension)",
+            "description": "Label for the profile (used in profiles/tools/<tool>/<label>/ and output stem)",
             "default": "mcp_ncu"
+        },
+        "run_id": {
+            "type": "string",
+            "description": "Run ID for the artifact directory (default: <timestamp>__profile-ncu__<label>)",
         },
         "output_dir": {
             "type": "string",
-            "description": "Directory to write profiling outputs (default: artifacts/mcp-profiles)",
-            "default": "artifacts/mcp-profiles"
+            "description": "Base directory for run artifacts (default: artifacts/runs)",
+            "default": "artifacts/runs"
         },
         "workload_type": {
             "type": "string",
@@ -3800,9 +3958,13 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
         return make_error("command is required", include_context, context_level)
 
     output_name = params.get("output_name", "mcp_ncu")
-    output_dir = Path(params.get("output_dir", "artifacts/mcp-profiles"))
-    run_id = output_name
-    progress_path = _progress_path_in_dir(output_dir, run_id)
+    run_dir, profile_dir, run_id = _prepare_profile_run(
+        params.get("output_dir"),
+        params.get("run_id"),
+        "ncu",
+        output_name,
+    )
+    progress_path = _progress_path_in_dir(run_dir, run_id)
     workload_type = normalize_param("workload_type", params.get("workload_type"), "memory_bound")
     kernel_filter = params.get("kernel_filter")
     force_lineinfo = bool(params.get("force_lineinfo", True))
@@ -3814,13 +3976,14 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
     sampling_param = params.get("pm_sampling_interval") if "pm_sampling_interval" in params else params.get("sampling_interval")
     sampling_interval = None if sampling_param in (None, "") else int(sampling_param)
 
-    automation = NsightAutomation(output_dir)
+    automation = NsightAutomation(profile_dir)
     cuda_check = _cuda_precheck()
     precheck = {
         "nsys_available": automation.nsys_available,
         "ncu_available": automation.ncu_available,
         "cuda": cuda_check,
-        "output_dir": str(output_dir),
+        "run_dir": str(run_dir),
+        "profiles_dir": str(profile_dir),
         "command_provided": bool(command),
         "pm_sampling_interval": sampling_interval,
     }
@@ -3839,7 +4002,7 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
     if not cuda_check.get("ok", True):
         return make_error(cuda_check.get("reason", "CUDA not available"), include_context, context_level, **precheck)
 
-    output_path = output_dir / f"{output_name}.ncu-rep"
+    output_path = profile_dir / f"{output_name}.ncu-rep"
     if dry_run:
         return {
             "dry_run": True,
@@ -3852,6 +4015,8 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
             "planned_output": str(output_path),
             "note": "Set dry_run=false to execute; use async=true to background the run.",
             "run_id": run_id,
+            "run_dir": str(run_dir),
+            "profiles_dir": str(profile_dir),
             "progress_path": str(progress_path),
         }
 
@@ -3868,7 +4033,7 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
                 percent_complete=0.0,
             ),
         )
-        auto = NsightAutomation(output_dir)
+        auto = NsightAutomation(profile_dir)
         path = auto.profile_ncu(
             command=command,
             output_name=output_name,
@@ -3884,7 +4049,7 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
             "output": str(path) if path else None,
             "workload_type": workload_type,
             "ncu_available": auto.ncu_available,
-            "cwd": str(output_dir),
+            "cwd": str(profile_dir),
             "force_lineinfo": force_lineinfo,
             "timeout_seconds": timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
             "pm_sampling_interval": sampling_interval,
@@ -3892,6 +4057,8 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
             "error": auto.last_error if path is None else None,
             "run_details": getattr(auto, "last_run", {}),  # type: ignore[attr-defined]
             "run_id": run_id,
+            "run_dir": str(run_dir),
+            "profiles_dir": str(profile_dir),
             "progress_path": str(progress_path),
         }
         _emit_progress_safe(
@@ -3911,7 +4078,8 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
     if run_async:
         run_metadata = {
             "run_id": run_id,
-            "run_dir": str(output_dir),
+            "run_dir": str(run_dir),
+            "profiles_dir": str(profile_dir),
             "progress_path": str(progress_path),
         }
         queued = _queue_job("aisp_profile_ncu", _execute_capture, params, run_metadata=run_metadata)
@@ -3934,8 +4102,9 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
     {"type": "object", "properties": with_context_params({
         "script": {"type": "string", "description": "Path to Python script to profile"},
         "script_args": {"type": "array", "items": {"type": "string"}, "description": "Args forwarded to the script"},
-        "output_name": {"type": "string", "description": "Base name for the capture folder", "default": "mcp_torch"},
-        "output_dir": {"type": "string", "description": "Output root (default: artifacts/mcp-profiles/torch)", "default": "artifacts/mcp-profiles/torch"},
+        "output_name": {"type": "string", "description": "Label for the capture (used in profiles/tools/<tool>/<label>/)", "default": "mcp_torch"},
+        "run_id": {"type": "string", "description": "Run ID for the artifact directory (default: <timestamp>__profile-torch__<label>)"},
+        "output_dir": {"type": "string", "description": "Base directory for run artifacts (default: artifacts/runs)", "default": "artifacts/runs"},
         "mode": {"type": "string", "description": "Profiler preset", "enum": ["full", "memory", "flops", "modules", "blackwell"], "default": "full"},
         "nvtx_label": {"type": "string", "description": "NVTX/record_function range label", "default": "aisp_torch_profile"},
         "use_nvtx": {"type": "boolean", "description": "Emit NVTX range around the profiled run", "default": True},
@@ -3957,10 +4126,14 @@ def tool_profile_torch(params: Dict[str, Any]) -> Dict[str, Any]:
         return make_error("script is required", include_context, context_level)
 
     script_path = Path(script)
-    output_dir = Path(params.get("output_dir", "artifacts/mcp-profiles/torch"))
     output_name = params.get("output_name") or script_path.stem or "mcp_torch"
-    run_id = output_name
-    progress_path = _progress_path_in_dir(output_dir, run_id)
+    run_dir, profile_dir, run_id = _prepare_profile_run(
+        params.get("output_dir"),
+        params.get("run_id"),
+        "torch",
+        output_name,
+    )
+    progress_path = _progress_path_in_dir(run_dir, run_id)
     mode = normalize_param("torch_mode", params.get("mode"), "full")
     script_args = params.get("script_args") or []
     if isinstance(script_args, str):
@@ -3989,7 +4162,8 @@ def tool_profile_torch(params: Dict[str, Any]) -> Dict[str, Any]:
         "torch_available": torch_available,
         "cuda_available": cuda_available,
         "torch_error": torch_error,
-        "output_dir": str(output_dir),
+        "run_dir": str(run_dir),
+        "profiles_dir": str(profile_dir),
         "script_exists": script_path.exists(),
         "force_lineinfo": force_lineinfo,
         "nvtx_label": nvtx_label,
@@ -3999,7 +4173,7 @@ def tool_profile_torch(params: Dict[str, Any]) -> Dict[str, Any]:
     if not script_path.exists():
         return make_error(f"script not found: {script}", include_context, context_level, **precheck)
     if dry_run:
-        planned = output_dir / f"{output_name}_<timestamp>"
+        planned = profile_dir / f"{output_name}_<timestamp>"
         return {
             "dry_run": True,
             **precheck,
@@ -4007,6 +4181,8 @@ def tool_profile_torch(params: Dict[str, Any]) -> Dict[str, Any]:
             "timeout_seconds": timeout_seconds,
             "mode": mode,
             "run_id": run_id,
+            "run_dir": str(run_dir),
+            "profiles_dir": str(profile_dir),
             "progress_path": str(progress_path),
         }
 
@@ -4023,7 +4199,7 @@ def tool_profile_torch(params: Dict[str, Any]) -> Dict[str, Any]:
                 percent_complete=0.0,
             ),
         )
-        runner = TorchProfilerAutomation(output_dir)
+        runner = TorchProfilerAutomation(profile_dir)
         result = runner.profile(
             script=script_path,
             output_name=output_name,
@@ -4038,6 +4214,8 @@ def tool_profile_torch(params: Dict[str, Any]) -> Dict[str, Any]:
         if not result.get("success"):
             result.setdefault("error", runner.last_error or "torch profiler failed")
         result["run_id"] = run_id
+        result["run_dir"] = str(run_dir)
+        result["profiles_dir"] = str(profile_dir)
         result["progress_path"] = str(progress_path)
         _emit_progress_safe(
             progress_recorder,
@@ -4056,7 +4234,8 @@ def tool_profile_torch(params: Dict[str, Any]) -> Dict[str, Any]:
     if run_async:
         run_metadata = {
             "run_id": run_id,
-            "run_dir": str(output_dir),
+            "run_dir": str(run_dir),
+            "profiles_dir": str(profile_dir),
             "progress_path": str(progress_path),
         }
         queued = _queue_job("aisp_profile_torch", _execute_capture, params, run_metadata=run_metadata)
@@ -4079,8 +4258,9 @@ def tool_profile_torch(params: Dict[str, Any]) -> Dict[str, Any]:
     "Produces .nsys-rep + trace.json + hta_report.json with actionable insights. 🕐 MEDIUM (~30s). WORKFLOW: aisp_profile_torch → operators → optimize. NOT FOR: CUDA-level (use aisp_profile_nsys).",
     {"type": "object", "properties": with_context_params({
         "command": {"type": "array", "items": {"type": "string"}, "description": "Command to profile (argv list)"},
-        "output_name": {"type": "string", "description": "Base name for output files", "default": "mcp_hta"},
-        "output_dir": {"type": "string", "description": "Directory for outputs (default: artifacts/hta)", "default": "artifacts/hta"},
+        "output_name": {"type": "string", "description": "Label for the capture (used in profiles/tools/<tool>/<label>/)", "default": "mcp_hta"},
+        "run_id": {"type": "string", "description": "Run ID for the artifact directory (default: <timestamp>__profile-hta__<label>)"},
+        "output_dir": {"type": "string", "description": "Base directory for run artifacts (default: artifacts/runs)", "default": "artifacts/runs"},
         "preset": {"type": "string", "description": "nsys preset", "enum": ["light", "full"], "default": "full"},
         "force_lineinfo": {"type": "boolean", "description": "Force -lineinfo for source/line mapping", "default": True},
         "precheck_only": {"type": "boolean", "description": "Return prereqs without running", "default": False},
@@ -4103,10 +4283,14 @@ def tool_profile_hta(params: Dict[str, Any]) -> Dict[str, Any]:
     if not command_list:
         return make_error("command is required", include_context, context_level)
 
-    output_dir = Path(params.get("output_dir", "artifacts/hta"))
     output_name = params.get("output_name", "mcp_hta")
-    run_id = output_name
-    progress_path = _progress_path_in_dir(output_dir, run_id)
+    run_dir, profile_dir, run_id = _prepare_profile_run(
+        params.get("output_dir"),
+        params.get("run_id"),
+        "hta",
+        output_name,
+    )
+    progress_path = _progress_path_in_dir(run_dir, run_id)
     preset = normalize_param("preset", params.get("preset"), "full")
     force_lineinfo = bool(params.get("force_lineinfo", True))
     precheck_only = bool(params.get("precheck_only"))
@@ -4115,7 +4299,7 @@ def tool_profile_hta(params: Dict[str, Any]) -> Dict[str, Any]:
     timeout_param = params.get("timeout_seconds")
     timeout_seconds = None if timeout_param is None else int(timeout_param)
 
-    nsight = NsightAutomation(output_dir)
+    nsight = NsightAutomation(profile_dir)
     try:
         import hta  # noqa: F401
         hta_available = True
@@ -4125,7 +4309,8 @@ def tool_profile_hta(params: Dict[str, Any]) -> Dict[str, Any]:
     precheck = {
         "nsys_available": nsight.nsys_available,
         "hta_available": hta_available,
-        "output_dir": str(output_dir),
+        "run_dir": str(run_dir),
+        "profiles_dir": str(profile_dir),
         "preset": preset,
         "command_provided": bool(command_list),
         "force_lineinfo": force_lineinfo,
@@ -4135,13 +4320,15 @@ def tool_profile_hta(params: Dict[str, Any]) -> Dict[str, Any]:
     if not nsight.nsys_available:
         return make_error("nsys is not installed or not on PATH", include_context, context_level, **precheck)
     if dry_run:
-        base = output_dir / f"{output_name}.nsys-rep"
+        base = profile_dir / f"{output_name}.nsys-rep"
         return {
             "dry_run": True,
             **precheck,
             "planned_output": str(base),
             "timeout_seconds": timeout_seconds,
             "run_id": run_id,
+            "run_dir": str(run_dir),
+            "profiles_dir": str(profile_dir),
             "progress_path": str(progress_path),
         }
 
@@ -4158,7 +4345,7 @@ def tool_profile_hta(params: Dict[str, Any]) -> Dict[str, Any]:
                 percent_complete=0.0,
             ),
         )
-        runner = HTACaptureAutomation(output_dir)
+        runner = HTACaptureAutomation(profile_dir)
         result = runner.capture(
             command=command_list,
             output_name=output_name,
@@ -4170,6 +4357,8 @@ def tool_profile_hta(params: Dict[str, Any]) -> Dict[str, Any]:
         if not result.get("success"):
             result.setdefault("error", runner.last_error or "HTA capture failed")
         result["run_id"] = run_id
+        result["run_dir"] = str(run_dir)
+        result["profiles_dir"] = str(profile_dir)
         result["progress_path"] = str(progress_path)
         _emit_progress_safe(
             progress_recorder,
@@ -4188,7 +4377,8 @@ def tool_profile_hta(params: Dict[str, Any]) -> Dict[str, Any]:
     if run_async:
         run_metadata = {
             "run_id": run_id,
-            "run_dir": str(output_dir),
+            "run_dir": str(run_dir),
+            "profiles_dir": str(profile_dir),
             "progress_path": str(progress_path),
         }
         queued = _queue_job("aisp_profile_hta", _execute_capture, params, run_metadata=run_metadata)
@@ -4959,7 +5149,7 @@ def tool_info_features(params: Dict[str, Any]) -> Dict[str, Any]:
     "aisp_nsys_summary",
     "Tags: nsys, nsight, summary, quick, stats. "
     "Quick Nsight Systems summary stats without full profile capture. "
-    "Returns: {cuda_api_summary, kernel_stats, memory_ops, timeline_overview}. "
+    "Returns: {metrics: [...], count, report_path}. "
     "⚡ FAST (~3s). USE when: Quick nsys stats without full profiling. WORKFLOW: aisp_profile_nsys → aisp_nsys_summary. NOT FOR: Full profiling (use aisp_profile_nsys).",
     {"type": "object", "properties": with_context_params({
         "report_path": {"type": "string", "description": "Path to existing .nsys-rep file to summarize"},
@@ -4972,7 +5162,7 @@ def tool_nsys_summary(params: Dict[str, Any]) -> Dict[str, Any]:
     try:
         core = PerformanceCoreBase()
         report_path = params.get("report_path")
-        result = core.get_nsys_summary(report_path) if hasattr(core, 'get_nsys_summary') else {"error": "nsys summary not available"}
+        result = core.summarize_nsys_report(report_path)
         return attach_context_if_requested(result, include_context, context_level)
     except Exception as e:
         return make_error(f"nsys summary failed: {e}", include_context, context_level)
@@ -5039,9 +5229,13 @@ def tool_gpu_topology_matrix(params: Dict[str, Any]) -> Dict[str, Any]:
     "Tags: compare, nsys, nsight-systems, baseline, optimized, diff. "
     "Compare baseline vs optimized Nsight Systems reports. "
     "Returns: {speedup, baseline_metrics, optimized_metrics, kernel_comparison}. "
-    "🕐 MEDIUM (~5s). USE when: Comparing before/after nsys profiles. Tip: if you used aisp_benchmark_deep_dive_compare, pass benchmarks[].profiles_dir here. WORKFLOW: aisp_profile_nsys → optimize → aisp_compare_nsys. NOT FOR: Kernel metrics (use aisp_compare_ncu).",
+    "🕐 MEDIUM (~5s). USE when: Comparing before/after nsys profiles. "
+    "Tip: if you used aisp_benchmark_deep_dive_compare, pass benchmarks[].profiles_dir here. "
+    "If multiple pairs exist, provide pair to select one. "
+    "WORKFLOW: aisp_profile_nsys → optimize → aisp_compare_nsys. NOT FOR: Kernel metrics (use aisp_compare_ncu).",
     {"type": "object", "properties": with_context_params({
-        "profiles_dir": {"type": "string", "description": "Directory with baseline/optimized .nsys-rep files"},
+        "profiles_dir": {"type": "string", "description": "Directory with baseline/optimized .nsys-rep files (pair dir or a parent dir; use pair to select a sub-pair)"},
+        "pair": {"type": "string", "description": "Profile pair key to select when multiple exist"},
     }), "required": ["profiles_dir"]}
 )
 def tool_compare_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -5050,10 +5244,11 @@ def tool_compare_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
     from core import profile_insights
     include_context, context_level = extract_context_opts(params)
     profiles_dir = Path(params.get("profiles_dir", ""))
+    pair_key = params.get("pair")
     if not profiles_dir.exists():
         return make_error(f"profiles_dir not found: {profiles_dir}", include_context, context_level)
     try:
-        result = profile_insights.compare_nsys_files(profiles_dir)
+        result = profile_insights.compare_nsys_files(profiles_dir, pair_key=pair_key)
         if result is None:
             result = {"error": "No comparable nsys files found", "success": False}
         return attach_context_if_requested(result, include_context, context_level)
@@ -5066,9 +5261,13 @@ def tool_compare_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
     "Tags: compare, ncu, nsight-compute, baseline, optimized, kernel-metrics. "
     "Compare baseline vs optimized Nsight Compute kernel metrics. "
     "Returns: {kernel_comparison: [{kernel, baseline_metrics, optimized_metrics}]}. "
-    "🕐 MEDIUM (~5s). USE when: Deep-diving into kernel-level improvements. Tip: if you used aisp_benchmark_deep_dive_compare, pass benchmarks[].profiles_dir here. WORKFLOW: aisp_profile_ncu → optimize → aisp_compare_ncu. NOT FOR: Timeline comparison (use aisp_compare_nsys).",
+    "🕐 MEDIUM (~5s). USE when: Deep-diving into kernel-level improvements. "
+    "Tip: if you used aisp_benchmark_deep_dive_compare, pass benchmarks[].profiles_dir here. "
+    "If multiple pairs exist, provide pair to select one. "
+    "WORKFLOW: aisp_profile_ncu → optimize → aisp_compare_ncu. NOT FOR: Timeline comparison (use aisp_compare_nsys).",
     {"type": "object", "properties": with_context_params({
-        "profiles_dir": {"type": "string", "description": "Directory with baseline/optimized .ncu-rep files"},
+        "profiles_dir": {"type": "string", "description": "Directory with baseline/optimized .ncu-rep files (pair dir or a parent dir; use pair to select a sub-pair)"},
+        "pair": {"type": "string", "description": "Profile pair key to select when multiple exist"},
     }), "required": ["profiles_dir"]}
 )
 def tool_compare_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -5077,10 +5276,11 @@ def tool_compare_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
     from core import profile_insights
     include_context, context_level = extract_context_opts(params)
     profiles_dir = Path(params.get("profiles_dir", ""))
+    pair_key = params.get("pair")
     if not profiles_dir.exists():
         return make_error(f"profiles_dir not found: {profiles_dir}", include_context, context_level)
     try:
-        result = profile_insights.compare_ncu_files(profiles_dir)
+        result = profile_insights.compare_ncu_files(profiles_dir, pair_key=pair_key)
         if result is None:
             result = {"error": "No comparable ncu files found", "success": False}
         return attach_context_if_requested(result, include_context, context_level)

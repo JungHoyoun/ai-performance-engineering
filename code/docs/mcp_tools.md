@@ -25,7 +25,7 @@ One-shot (recommended): `aisp_benchmark_deep_dive_compare`
 ```json
 {
   "targets": ["ch10:atomic_reduction"],
-  "output_dir": "artifacts/mcp-deep-dive",
+  "output_dir": "artifacts/runs",
   "async": true
 }
 ```
@@ -33,6 +33,18 @@ One-shot (recommended): `aisp_benchmark_deep_dive_compare`
 This runs `bench run` with `profile=\"deep_dive\"`, writes outputs under a timestamped run dir, and returns:
 - `run_dir`, `results_json`, `analysis_json`
 - per-benchmark `profiles_dir` + `followup_tool_calls` for `aisp_profile_compare` / `aisp_compare_nsys` / `aisp_compare_ncu`
+
+## Common Workflow: Standard Benchmark Run (Minimal Profile)
+
+Default: `aisp_run_benchmarks` uses `profile="minimal"` unless you explicitly request `deep_dive`.
+It also runs post-benchmark triage and generates an HTML report unless you set
+`auto_analyze=false` or `auto_report=false`.
+
+```json
+{
+  "targets": ["ch10:atomic_reduction"]
+}
+```
 
 ## Tool Names
 

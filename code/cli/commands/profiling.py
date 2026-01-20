@@ -6,6 +6,7 @@ import json
 import shlex
 from pathlib import Path
 from typing import Optional, Any, Dict, List
+from datetime import datetime
 import typer
 
 from core.profile_insights import generate_flamegraph_comparison
@@ -15,6 +16,23 @@ from core.perf_core_base import PerformanceCoreBase
 def _get_core() -> PerformanceCoreBase:
     """Get an instance of PerformanceCoreBase for profile operations."""
     return PerformanceCoreBase()
+
+
+def _prepare_profile_run(output_dir_opt: Optional[str], tool_key: str, label: str) -> tuple[Path, Path]:
+    from core.benchmark.artifact_manager import (
+        ArtifactManager,
+        build_run_id,
+        default_artifacts_root,
+        slugify,
+    )
+
+    base_dir = Path(output_dir_opt) if output_dir_opt else default_artifacts_root(Path.cwd())
+    run_label = label or "run"
+    run_id = build_run_id(f"profile-{tool_key}", run_label, base_dir=base_dir)
+    artifacts = ArtifactManager(base_dir=base_dir, run_id=run_id, run_kind=f"profile-{tool_key}", run_label=run_label)
+    profile_root = artifacts.profiles_dir / "tools" / slugify(tool_key) / slugify(run_label)
+    profile_root.mkdir(parents=True, exist_ok=True)
+    return artifacts.run_dir, profile_root
 
 
 def compare_profiles(args) -> None:
@@ -438,9 +456,9 @@ def torch_profiler(args) -> int:
         return 1
 
     output_dir_opt = getattr(args, "output_dir", None)
-    output_root = Path(output_dir_opt) if output_dir_opt else Path("artifacts/torch-profiles")
     mode = getattr(args, "mode", "full")
     output_name = getattr(args, "output_name", None) or script_path.stem
+    _, output_root = _prepare_profile_run(output_dir_opt, "torch", output_name)
     nvtx_label = getattr(args, "nvtx_label", "aisp_torch_profile")
     force_lineinfo = bool(getattr(args, "force_lineinfo", True))
     use_nvtx = bool(getattr(args, "use_nvtx", True))
@@ -489,8 +507,8 @@ def hta_capture(args) -> int:
         return 1
 
     output_dir_opt = getattr(args, "output_dir", None)
-    output_root = Path(output_dir_opt) if output_dir_opt else Path("artifacts/hta")
     output_name = getattr(args, "output_name", "hta_capture")
+    _, output_root = _prepare_profile_run(output_dir_opt, "hta", output_name)
     preset = getattr(args, "preset", "full")
     force_lineinfo = bool(getattr(args, "force_lineinfo", True))
     timeout_seconds = getattr(args, "timeout_seconds", None)

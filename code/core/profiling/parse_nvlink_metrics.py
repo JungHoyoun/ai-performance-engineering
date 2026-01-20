@@ -2,7 +2,7 @@
 """Extract NVLink throughput summaries from Nsight Systems reports.
 
 Usage:
-    python core/profiling/parse_nvlink_metrics.py artifacts/<run>/<file>.nsys-rep
+    python core/profiling/parse_nvlink_metrics.py artifacts/runs/<run_id>/<file>.nsys-rep
 
 The script shells out to ``nsys stats --report nvlink --format csv`` and prints
 the rows that contain throughput/byte metrics so teams can diff the values
@@ -118,7 +118,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "reports",
         nargs="+",
         type=Path,
-        help=".nsys-rep files emitted by the benchmark CLI (under artifacts/<run_id>/.../*.nsys-rep)",
+        help=".nsys-rep files emitted by the benchmark CLI (under artifacts/runs/<run_id>/.../*.nsys-rep)",
     )
     args = parser.parse_args(argv)
 

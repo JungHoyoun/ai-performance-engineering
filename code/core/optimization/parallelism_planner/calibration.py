@@ -149,8 +149,7 @@ class CalibrationEngine:
         """
         if benchmark_dirs is None:
             benchmark_dirs = [
-                self.repo_root / "artifacts",
-                self.repo_root / "benchmark_profiles",
+                self.repo_root / "artifacts" / "runs",
             ]
         
         loaded = 0

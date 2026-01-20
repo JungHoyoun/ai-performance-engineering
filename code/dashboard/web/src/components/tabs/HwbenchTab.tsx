@@ -95,7 +95,7 @@ export function HwbenchTab() {
   const nsightAvail = useSWRMutation('nsightAvail', fetchJson);
   const compareNsys = useSWRMutation('compareNsys', fetchJson);
   const compareNcu = useSWRMutation('compareNcu', fetchJson);
-  const [compareDir, setCompareDir] = useState<string>('artifacts/mcp-profiles');
+  const [compareDir, setCompareDir] = useState<string>('artifacts/runs');
   const [detailedCsv, setDetailedCsv] = useState<boolean>(false);
   const [precheckOnly, setPrecheckOnly] = useState(false);
   const [dryRun, setDryRun] = useState(false);

@@ -37,6 +37,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from core.harness.arch_config import configure_optimizations as _configure_arch_optimizations
+from core.benchmark.artifact_manager import default_artifacts_root, build_run_id, slugify
 
 _configure_arch_optimizations()
 
@@ -1770,13 +1771,34 @@ def _harden_profile_env(
     return env
 
 
+def _profile_bench_dir(profile_root: Path, chapter_id: str) -> Path:
+    safe_chapter = slugify(str(chapter_id).replace("/", "_").replace("\\", "_"))
+    return profile_root / "bench" / safe_chapter
+
+
+def _profile_example_dir(profile_root: Path, chapter_id: str, example_name: str) -> Path:
+    safe_example = slugify(example_name)
+    return _profile_bench_dir(profile_root, chapter_id) / safe_example
+
+
+def _profile_pair_dir(
+    profile_root: Path,
+    chapter_id: str,
+    example_name: str,
+    pair_key: str,
+) -> Path:
+    safe_pair = slugify(pair_key or "default")
+    return _profile_example_dir(profile_root, chapter_id, example_name) / f"pair__{safe_pair}"
+
+
 def profile_python_benchmark(
     benchmark: Any,  # Benchmark instance
     benchmark_path: Path,
     chapter_dir: Path,
     output_dir: Path,
     config: Optional[BenchmarkConfig] = None,
-    variant: str = "baseline"
+    variant: str = "baseline",
+    output_stem: Optional[str] = None,
 ) -> Optional[Path]:
     """Profile a Python benchmark using nsys by wrapping benchmark execution.
     
@@ -1796,8 +1818,8 @@ def profile_python_benchmark(
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Create output filename based on benchmark name
-    benchmark_name = benchmark_path.stem
-    nsys_output = output_dir / f"{benchmark_name}_{variant}.nsys-rep"
+    benchmark_name = output_stem or benchmark_path.stem
+    nsys_output = output_dir / f"{benchmark_name}__{variant}.nsys-rep"
     
     bench_config = config
     if bench_config is None and hasattr(benchmark, "get_config"):
@@ -1904,7 +1926,8 @@ def profile_cuda_executable(
     executable: Path,
     chapter_dir: Path,
     output_dir: Path,
-    variant: str = "baseline"
+    variant: str = "baseline",
+    output_stem: Optional[str] = None,
 ) -> Optional[Path]:
     """Profile a CUDA executable using nsys.
     
@@ -1923,8 +1946,8 @@ def profile_cuda_executable(
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Create output filename based on executable name
-    exec_name = executable.stem
-    nsys_output = output_dir / f"{exec_name}_{variant}.nsys-rep"
+    exec_name = output_stem or executable.stem
+    nsys_output = output_dir / f"{exec_name}__{variant}.nsys-rep"
     
     # Build nsys command
     nsys_command = [
@@ -1991,7 +2014,8 @@ def profile_python_benchmark_ncu(
     chapter_dir: Path,
     output_dir: Path,
     config: Optional[BenchmarkConfig],
-    variant: str = "baseline"
+    variant: str = "baseline",
+    output_stem: Optional[str] = None,
 ) -> Optional[Path]:
     """Profile a Python benchmark using ncu (NVIDIA Compute Profiler).
     
@@ -2012,8 +2036,8 @@ def profile_python_benchmark_ncu(
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Create output filename based on benchmark name
-    benchmark_name = benchmark_path.stem
-    ncu_output = output_dir / f"{benchmark_name}_{variant}.ncu-rep"
+    benchmark_name = output_stem or benchmark_path.stem
+    ncu_output = output_dir / f"{benchmark_name}__{variant}.ncu-rep"
     
     if config is None:
         config = BenchmarkConfig()
@@ -2137,7 +2161,7 @@ benchmark.teardown()
             _terminate_process_group(process, f"{benchmark_name}_{variant}")
             return None
 
-        log_base = output_dir / f"{benchmark_name}_{variant}_ncu"
+        log_base = output_dir / f"{benchmark_name}__{variant}__ncu"
         if stdout_text:
             log_base.with_suffix(".stdout.log").write_text(stdout_text)
         if stderr_text:
@@ -2149,11 +2173,11 @@ benchmark.teardown()
             if ncu_output.exists():
                 return ncu_output
             # Try alternative path
-            alt_path = output_dir / f"{benchmark_name}_{variant}.ncu-rep"
+            alt_path = output_dir / f"{benchmark_name}__{variant}.ncu-rep"
             if alt_path.exists():
                 return alt_path
             # Check for any .ncu-rep file matching the pattern
-            for ncu_file in output_dir.glob(f"{benchmark_name}_{variant}*.ncu-rep"):
+            for ncu_file in output_dir.glob(f"{benchmark_name}__{variant}*.ncu-rep"):
                 return ncu_file
         return None
     except (subprocess.SubprocessError, OSError):
@@ -2168,7 +2192,8 @@ def profile_cuda_executable_ncu(
     chapter_dir: Path,
     output_dir: Path,
     config: BenchmarkConfig,
-    variant: str = "baseline"
+    variant: str = "baseline",
+    output_stem: Optional[str] = None,
 ) -> Optional[Path]:
     """Profile a CUDA executable using ncu (NVIDIA Compute Profiler).
     
@@ -2188,8 +2213,8 @@ def profile_cuda_executable_ncu(
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Create output filename based on executable name
-    exec_name = executable.stem
-    ncu_output = output_dir / f"{exec_name}_{variant}.ncu-rep"
+    exec_name = output_stem or executable.stem
+    ncu_output = output_dir / f"{exec_name}__{variant}.ncu-rep"
     
     profiler_config = build_profiler_config_from_benchmark(config)
     chapter_num = None
@@ -2224,16 +2249,16 @@ def profile_cuda_executable_ncu(
             stdout_text, stderr_text = process.communicate(timeout=ncu_timeout_seconds)
         except subprocess.TimeoutExpired:
             timed_out = True
-            _terminate_process_group(process, f"{exec_name}_{variant}", timeout_seconds=ncu_timeout_seconds)
+            _terminate_process_group(process, f"{exec_name}__{variant}", timeout_seconds=ncu_timeout_seconds)
             try:
                 stdout_text, stderr_text = process.communicate(timeout=2)
             except Exception:
                 pass
         except Exception:
-            _terminate_process_group(process, f"{exec_name}_{variant}")
+            _terminate_process_group(process, f"{exec_name}__{variant}")
             return None
 
-        log_base = output_dir / f"{exec_name}_{variant}_ncu"
+        log_base = output_dir / f"{exec_name}__{variant}__ncu"
         if stdout_text:
             log_base.with_suffix(".stdout.log").write_text(stdout_text)
         if stderr_text:
@@ -2245,11 +2270,11 @@ def profile_cuda_executable_ncu(
             if ncu_output.exists():
                 return ncu_output
             # Try alternative path
-            alt_path = output_dir / f"{exec_name}_{variant}.ncu-rep"
+            alt_path = output_dir / f"{exec_name}__{variant}.ncu-rep"
             if alt_path.exists():
                 return alt_path
             # Check for any .ncu-rep file matching the pattern
-            for ncu_file in output_dir.glob(f"{exec_name}_{variant}*.ncu-rep"):
+            for ncu_file in output_dir.glob(f"{exec_name}__{variant}*.ncu-rep"):
                 return ncu_file
         return None
     except (subprocess.TimeoutExpired, Exception):
@@ -2261,7 +2286,8 @@ def profile_python_benchmark_torch(
     benchmark_path: Path,
     chapter_dir: Path,
     output_dir: Path,
-    variant: str = "baseline"
+    variant: str = "baseline",
+    output_stem: Optional[str] = None,
 ) -> Optional[Path]:
     """Profile a Python benchmark using PyTorch profiler.
     
@@ -2286,8 +2312,8 @@ def profile_python_benchmark_torch(
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Create output filename based on benchmark name
-    benchmark_name = benchmark_path.stem
-    torch_output = output_dir / f"{benchmark_name}_{variant}_torch_trace.json"
+    benchmark_name = output_stem or benchmark_path.stem
+    torch_output = output_dir / f"{benchmark_name}__{variant}_torch_trace.json"
     
     try:
         # Warmup
@@ -2552,6 +2578,7 @@ def _test_chapter_impl(
     chapter_dir: Path,
     enable_profiling: bool = False,
     profile_type: str = "none",
+    profile_output_root: Optional[Path] = None,
     timeout_multiplier: float = 1.0,
     reproducible: bool = False,
     cold_start: bool = False,
@@ -2597,6 +2624,7 @@ def _test_chapter_impl(
     Args:
         chapter_dir: Path to chapter directory
         enable_profiling: If True, generate profiling files (nsys, ncu, PyTorch) alongside benchmarks
+        profile_output_root: Base directory for profiling artifacts (default: artifacts/runs/<run_id>/profiles)
         timeout_multiplier: Multiply all timeouts by this factor (e.g., 2.0 = double all timeouts)
         reproducible: If True, set all seeds to 42 and force deterministic algorithms (slower fallbacks; ops without deterministic support may fail)
         cold_start: If True, perform additional GPU state cleanup (gc.collect()) between benchmarks for cold start measurements. CUDA state is always reset by default.
@@ -2627,7 +2655,14 @@ def _test_chapter_impl(
     # Set up profiling output directory if profiling is enabled
     profiling_output_dir = None
     if enable_profiling:
-        profiling_output_dir = repo_root / "benchmark_profiles" / Path(chapter_id)
+        if profile_output_root is None:
+            profile_run_id = build_run_id(
+                "bench-profile",
+                f"chapter-{chapter_name}",
+                base_dir=default_artifacts_root(repo_root),
+            )
+            profile_output_root = default_artifacts_root(repo_root) / profile_run_id / "profiles"
+        profiling_output_dir = _profile_bench_dir(profile_output_root, chapter_id)
         profiling_output_dir.mkdir(parents=True, exist_ok=True)
         
         # Check which profilers are available
@@ -3273,6 +3308,14 @@ def _test_chapter_impl(
                         continue
 
                 # Profile baseline if profiling is enabled (nsys, ncu, PyTorch)
+                baseline_profile_paths: Dict[str, Optional[Path]] = {}
+                example_profile_root: Optional[Path] = None
+                example_profile_stem = slugify(example_name)
+                if enable_profiling and profiling_output_dir:
+                    example_profile_root = profiling_output_dir / example_profile_stem
+                    baseline_profile_dir = example_profile_root / "baseline"
+                    baseline_profile_dir.mkdir(parents=True, exist_ok=True)
+
                 if enable_profiling and profiling_output_dir:
                     logger.info(f"    Profiling baseline...")
                     profiler_results = []
@@ -3290,13 +3333,15 @@ def _test_chapter_impl(
                             baseline_benchmark,
                             baseline_path,
                             chapter_dir,
-                            profiling_output_dir,
+                            baseline_profile_dir,
                             baseline_config,
                             variant="baseline",
+                            output_stem=example_profile_stem,
                         )
                         if nsys_path:
                             result_entry['baseline_nsys_rep'] = str(nsys_path.relative_to(repo_root))
                             profiler_results.append("nsys✓")
+                            baseline_profile_paths["nsys"] = nsys_path
                             # Extract metrics
                             nsys_metrics = extract_from_nsys_report(nsys_path)
                             if nsys_metrics:
@@ -3318,13 +3363,15 @@ def _test_chapter_impl(
                             baseline_benchmark,
                             baseline_path,
                             chapter_dir,
-                            profiling_output_dir,
+                            baseline_profile_dir,
                             baseline_config,
                             variant="baseline",
+                            output_stem=example_profile_stem,
                         )
                         if ncu_path:
                             result_entry['baseline_ncu_rep'] = str(ncu_path.relative_to(repo_root))
                             profiler_results.append("ncu✓")
+                            baseline_profile_paths["ncu"] = ncu_path
                             # Extract metrics
                             ncu_metrics = extract_from_ncu_report(ncu_path)
                             if ncu_metrics:
@@ -3343,11 +3390,17 @@ def _test_chapter_impl(
                         )
                         logger.info(f"PyTorch...")
                         torch_path = profile_python_benchmark_torch(
-                            baseline_benchmark, baseline_path, chapter_dir, profiling_output_dir, variant="baseline"
+                            baseline_benchmark,
+                            baseline_path,
+                            chapter_dir,
+                            baseline_profile_dir,
+                            variant="baseline",
+                            output_stem=example_profile_stem,
                         )
                         if torch_path:
                             result_entry['baseline_torch_trace'] = str(torch_path.relative_to(repo_root))
                             profiler_results.append("torch✓")
+                            baseline_profile_paths["torch"] = torch_path
                             # Extract metrics
                             torch_metrics = extract_from_pytorch_trace(torch_path)
                             if torch_metrics:
@@ -3723,6 +3776,10 @@ def _test_chapter_impl(
                     
                     # Profile optimized if profiling is enabled (nsys, ncu, PyTorch)
                     if enable_profiling and profiling_output_dir:
+                        pair_dir = _profile_pair_dir(
+                            profile_output_root, chapter_id, example_name, technique
+                        )
+                        pair_dir.mkdir(parents=True, exist_ok=True)
                         logger.info(f"\n    Profiling optimized...")
                         profiler_results = []
                         optimized_metrics = {}
@@ -3739,9 +3796,10 @@ def _test_chapter_impl(
                                 optimized_benchmark,
                                 optimized_path,
                                 chapter_dir,
-                                profiling_output_dir,
+                                pair_dir,
                                 optimized_config,
-                                variant=f"optimized_{technique}",
+                                variant="optimized",
+                                output_stem=example_profile_stem,
                             )
                             if nsys_path:
                                 opt_result['optimized_nsys_rep'] = str(nsys_path.relative_to(repo_root))
@@ -3767,9 +3825,10 @@ def _test_chapter_impl(
                                 optimized_benchmark,
                                 optimized_path,
                                 chapter_dir,
-                                profiling_output_dir,
+                                pair_dir,
                                 optimized_config,
-                                variant=f"optimized_{technique}",
+                                variant="optimized",
+                                output_stem=example_profile_stem,
                             )
                             if ncu_path:
                                 opt_result['optimized_ncu_rep'] = str(ncu_path.relative_to(repo_root))
@@ -3792,8 +3851,12 @@ def _test_chapter_impl(
                             )
                             logger.info(f"PyTorch...")
                             torch_path = profile_python_benchmark_torch(
-                                optimized_benchmark, optimized_path, chapter_dir, profiling_output_dir,
-                                variant=f"optimized_{technique}"
+                                optimized_benchmark,
+                                optimized_path,
+                                chapter_dir,
+                                pair_dir,
+                                variant="optimized",
+                                output_stem=example_profile_stem,
                             )
                             if torch_path:
                                 opt_result['optimized_torch_trace'] = str(torch_path.relative_to(repo_root))
@@ -3808,6 +3871,10 @@ def _test_chapter_impl(
                             profiler_results.append("torch-")
                         
                         logger.info(f" ({', '.join(profiler_results)})")
+                        if baseline_profile_paths:
+                            for path in baseline_profile_paths.values():
+                                if path and path.exists():
+                                    shutil.copy2(path, pair_dir / path.name)
                         
                         # Display extracted metrics
                         if optimized_metrics:
@@ -4137,6 +4204,14 @@ def _test_chapter_impl(
                 logger.info(f"      🌡️ GPU Telemetry: {format_gpu_telemetry(baseline_gpu_metrics)}")
 
             # Profile baseline if profiling is enabled (nsys, ncu)
+            baseline_profile_paths: Dict[str, Optional[Path]] = {}
+            example_profile_root: Optional[Path] = None
+            example_profile_stem = slugify(example_name)
+            if enable_profiling and profiling_output_dir:
+                example_profile_root = profiling_output_dir / example_profile_stem
+                baseline_profile_dir = example_profile_root / "baseline"
+                baseline_profile_dir.mkdir(parents=True, exist_ok=True)
+
             if enable_profiling and profiling_output_dir:
                 logger.info(f"    Profiling baseline...")
                 profiler_results = []
@@ -4151,11 +4226,16 @@ def _test_chapter_impl(
                     )
                     logger.info(f"      nsys...")
                     nsys_path = profile_cuda_executable(
-                        baseline_executable, chapter_dir, profiling_output_dir, variant="baseline"
+                        baseline_executable,
+                        chapter_dir,
+                        baseline_profile_dir,
+                        variant="baseline",
+                        output_stem=example_profile_stem,
                     )
                     if nsys_path:
                         result_entry['baseline_nsys_rep'] = str(nsys_path.relative_to(repo_root))
                         profiler_results.append("nsys✓")
+                        baseline_profile_paths["nsys"] = nsys_path
                         # Extract metrics
                         nsys_metrics = extract_from_nsys_report(nsys_path)
                         if nsys_metrics:
@@ -4176,13 +4256,15 @@ def _test_chapter_impl(
                     ncu_path = profile_cuda_executable_ncu(
                         baseline_executable,
                         chapter_dir,
-                        profiling_output_dir,
+                        baseline_profile_dir,
                         base_config,
                         variant="baseline",
+                        output_stem=example_profile_stem,
                     )
                     if ncu_path:
                         result_entry['baseline_ncu_rep'] = str(ncu_path.relative_to(repo_root))
                         profiler_results.append("ncu✓")
+                        baseline_profile_paths["ncu"] = ncu_path
                         # Extract metrics
                         ncu_metrics = extract_from_ncu_report(ncu_path)
                         if ncu_metrics:
@@ -4346,6 +4428,10 @@ def _test_chapter_impl(
 
                 # Profile optimized if profiling is enabled (nsys, ncu)
                 if enable_profiling and profiling_output_dir:
+                    pair_dir = _profile_pair_dir(
+                        profile_output_root, chapter_id, example_name, technique
+                    )
+                    pair_dir.mkdir(parents=True, exist_ok=True)
                     logger.info(f"\n    Profiling optimized...")
                     profiler_results = []
                     optimized_metrics = {}
@@ -4359,8 +4445,11 @@ def _test_chapter_impl(
                         )
                         logger.info(f"      nsys...")
                         nsys_path = profile_cuda_executable(
-                            optimized_executable, chapter_dir, profiling_output_dir,
-                            variant=f"optimized_{technique}"
+                            optimized_executable,
+                            chapter_dir,
+                            pair_dir,
+                            variant="optimized",
+                            output_stem=example_profile_stem,
                         )
                         if nsys_path:
                             opt_result['optimized_nsys_rep'] = str(nsys_path.relative_to(repo_root))
@@ -4385,9 +4474,10 @@ def _test_chapter_impl(
                         ncu_path = profile_cuda_executable_ncu(
                             optimized_executable,
                             chapter_dir,
-                            profiling_output_dir,
+                            pair_dir,
                             base_config,
-                            variant=f"optimized_{technique}",
+                            variant="optimized",
+                            output_stem=example_profile_stem,
                         )
                         if ncu_path:
                             opt_result['optimized_ncu_rep'] = str(ncu_path.relative_to(repo_root))
@@ -4402,6 +4492,10 @@ def _test_chapter_impl(
                         profiler_results.append("ncu-")
 
                     logger.info(f" ({', '.join(profiler_results)})")
+                    if baseline_profile_paths:
+                        for path in baseline_profile_paths.values():
+                            if path and path.exists():
+                                shutil.copy2(path, pair_dir / path.name)
 
                     # Display extracted metrics
                     if optimized_metrics:
@@ -6336,6 +6430,7 @@ def test_chapter(
     chapter_dir: Path,
     enable_profiling: bool = False,
     profile_type: str = "none",
+    profile_output_root: Optional[Path] = None,
     timeout_multiplier: float = 1.0,
     reproducible: bool = False,
     cold_start: bool = False,
@@ -6380,6 +6475,7 @@ def test_chapter(
         chapter_dir,
         enable_profiling=enable_profiling,
         profile_type=profile_type,
+        profile_output_root=profile_output_root,
         timeout_multiplier=timeout_multiplier,
         reproducible=reproducible,
         cold_start=cold_start,
@@ -6952,6 +7048,15 @@ def main():
     except (ValueError, FileNotFoundError) as exc:
         logger.error(f"ERROR: {exc}")
         sys.exit(1)
+
+    profile_output_root = None
+    if args.profile != "none":
+        profile_run_id = build_run_id(
+            "bench-profile",
+            f"profile-{args.profile}",
+            base_dir=default_artifacts_root(active_bench_root),
+        )
+        profile_output_root = default_artifacts_root(active_bench_root) / profile_run_id / "profiles"
     
     # Test all chapters
     all_results = []
@@ -6982,6 +7087,7 @@ def main():
             chapter_dir,
             enable_profiling=args.profile != 'none',
             profile_type=args.profile,
+            profile_output_root=profile_output_root,
             timeout_multiplier=args.timeout_multiplier,
             reproducible=args.reproducible,
             cold_start=args.cold_start,

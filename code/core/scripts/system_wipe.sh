@@ -342,9 +342,7 @@ purge_ai_repo_artifacts() {
   [[ -d "$AI_REPO" ]] || return
   log_info "Removing generated artifacts from $AI_REPO"
   remove_path \
-    "$AI_REPO/artifacts" \
-    "$AI_REPO/benchmark_profiles" \
-    "$AI_REPO/profile_runs" \
+    "$AI_REPO/artifacts/runs" \
     "$AI_REPO/profiles" \
     "$AI_REPO/profiling_results" \
     "$AI_REPO/legacy_artifacts" \

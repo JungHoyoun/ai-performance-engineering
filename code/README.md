@@ -39,5 +39,5 @@ python -m cli.aisp bench run --targets ch01 --profile minimal
 
 ## Notes
 - `core/scripts/profile_all_workloads.sh` and `ncu_template.ini` capture Nsight traces with consistent metric sets.
-- `benchmark_profiles/` and `artifacts/` hold run outputs; clean them via `python cleanup.py` when rotating hardware.
+- `artifacts/runs/` holds run outputs (results/profiles/reports/logs); clean via `python cleanup.py` when rotating hardware.
 - `docs/perf_intake_and_triage.md` outlines the standard intake bundle for performance investigations.

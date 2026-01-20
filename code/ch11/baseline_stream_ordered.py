@@ -24,7 +24,9 @@ class BaselineStreamOrderedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         # Keep buffers small so allocator overhead dominates.
         self.elements = 1 << 12  # 4,096 floats (~16KB) per stream buffer
         # Many alloc/free cycles to amplify stream-ordered allocator benefit.
-        self.inner_iterations = 200
+        # Increased from 200 to 500 to better demonstrate the speedup from
+        # avoiding global synchronization in cudaMalloc/cudaFree.
+        self.inner_iterations = 500
         self.num_streams = 8
         self.output: Optional[torch.Tensor] = None
         self._payload_inputs: Optional[dict] = None

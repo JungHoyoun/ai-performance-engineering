@@ -101,6 +101,8 @@ def run_benchmark(input_data: Dict[str, Any]) -> Dict[str, Any]:
         device_str = input_data.get("device")
         initial_state = input_data.get("initial_state")
         mode_str = input_data.get("mode") or config_dict.pop("mode", None)
+        verify_output_path = input_data.get("verify_output_path")
+        verify_output_max_bytes = int(input_data.get("verify_output_max_bytes", 0) or 0)
 
         benchmark_name = class_name
 
@@ -175,6 +177,12 @@ def run_benchmark(input_data: Dict[str, Any]) -> Dict[str, Any]:
             output_tol = benchmark.get_output_tolerance()
             signature = benchmark.get_input_signature()
 
+            def _tensor_nbytes(t: "torch.Tensor") -> int:
+                return int(t.numel() * t.element_size())
+
+            def _dict_nbytes(tensors: Dict[str, "torch.Tensor"]) -> int:
+                return int(sum(_tensor_nbytes(t) for t in tensors.values()))
+
             def _serialize_tensor(t: "torch.Tensor") -> Dict[str, Any]:
                 return {
                     "shape": list(t.shape),
@@ -185,14 +193,33 @@ def run_benchmark(input_data: Dict[str, Any]) -> Dict[str, Any]:
             import torch  # local import after module load
 
             if isinstance(verify_output, torch.Tensor):
-                verify_output_data: Dict[str, Any] = {"kind": "tensor", **_serialize_tensor(verify_output)}
+                if verify_output_max_bytes and _tensor_nbytes(verify_output) > verify_output_max_bytes:
+                    if not verify_output_path:
+                        raise RuntimeError(
+                            "verify_output_path required when verify_output exceeds max bytes"
+                        )
+                    torch.save(verify_output.detach().cpu(), verify_output_path)
+                    verify_output_data = {"kind": "tensor_file", "path": verify_output_path}
+                else:
+                    verify_output_data = {"kind": "tensor", **_serialize_tensor(verify_output)}
             elif isinstance(verify_output, dict):
-                tensors: Dict[str, Any] = {}
+                tensor_map: Dict[str, torch.Tensor] = {}
                 for name, tensor in verify_output.items():
                     if not isinstance(tensor, torch.Tensor):
                         raise TypeError(f"verify_output['{name}'] must be a torch.Tensor, got {type(tensor)}")
-                    tensors[name] = _serialize_tensor(tensor)
-                verify_output_data = {"kind": "dict", "tensors": tensors}
+                    tensor_map[name] = tensor
+                if verify_output_max_bytes and _dict_nbytes(tensor_map) > verify_output_max_bytes:
+                    if not verify_output_path:
+                        raise RuntimeError(
+                            "verify_output_path required when verify_output exceeds max bytes"
+                        )
+                    torch.save({name: t.detach().cpu() for name, t in tensor_map.items()}, verify_output_path)
+                    verify_output_data = {"kind": "dict_file", "path": verify_output_path}
+                else:
+                    tensors: Dict[str, Any] = {}
+                    for name, tensor in tensor_map.items():
+                        tensors[name] = _serialize_tensor(tensor)
+                    verify_output_data = {"kind": "dict", "tensors": tensors}
             else:
                 raise TypeError(
                     f"get_verify_output() must return torch.Tensor or Dict[str, torch.Tensor], got {type(verify_output)}"

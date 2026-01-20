@@ -139,8 +139,6 @@ def _iter_benchmark_dirs(bench_root: Path) -> Iterable[Path]:
         "monitoring",
         "scripts",
         "tools",
-        "benchmark_profiles",
-        "benchmark_profiles_chXX",
         "profiling_results",
         "hta_output",
         "gpt-oss-20b",
@@ -156,7 +154,6 @@ def _iter_benchmark_dirs(bench_root: Path) -> Iterable[Path]:
             if d not in ignore_dirs
             and not d.startswith(".")
             and not d.startswith("artifacts")
-            and not d.startswith("benchmark_profiles")
             and not d.startswith("pymp-")
         ]
         if any(

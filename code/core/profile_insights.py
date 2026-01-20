@@ -453,7 +453,15 @@ def compare_nsys_files(
     optimized_nsys = list(profiles_dir.glob("*optimized*.nsys-rep"))
 
     if not baseline_nsys or not optimized_nsys:
-        return None
+        pair_dir, error = _select_pair_dir(profiles_dir, pair_key, label="nsys")
+        if error:
+            return error
+        if not pair_dir:
+            return None
+        baseline_nsys = list(pair_dir.glob("*baseline*.nsys-rep"))
+        optimized_nsys = list(pair_dir.glob("*optimized*.nsys-rep"))
+        if not baseline_nsys or not optimized_nsys:
+            return None
 
     pair, _, error = _select_profile_pair(
         baseline_nsys,
@@ -525,6 +533,16 @@ def compare_ncu_files(
 
     baseline_csv = list(profiles_dir.glob("*baseline*ncu*.csv"))
     optimized_csv = list(profiles_dir.glob("*optimized*ncu*.csv"))
+
+    if (not baseline_ncu or not optimized_ncu) and (not baseline_csv or not optimized_csv):
+        pair_dir, error = _select_pair_dir(profiles_dir, pair_key, label="ncu")
+        if error:
+            return error
+        if pair_dir:
+            baseline_ncu = list(pair_dir.glob("*baseline*.ncu-rep"))
+            optimized_ncu = list(pair_dir.glob("*optimized*.ncu-rep"))
+            baseline_csv = list(pair_dir.glob("*baseline*ncu*.csv"))
+            optimized_csv = list(pair_dir.glob("*optimized*ncu*.csv"))
 
     if baseline_csv and optimized_csv:
         pair, selected_key, error = _select_profile_pair(
@@ -947,6 +965,67 @@ def _select_profile_pair(
     )
 
 
+def _pair_key_from_dir(root: Path, pair_dir: Path) -> str:
+    rel = pair_dir.relative_to(root)
+    parts = [part.replace("pair__", "") for part in rel.parts]
+    return "/".join(parts)
+
+
+def _select_pair_dir(
+    profiles_dir: Path,
+    pair_key: Optional[str],
+    label: str,
+) -> tuple[Optional[Path], Optional[Dict[str, Any]]]:
+    if profiles_dir.name.startswith("pair__"):
+        return profiles_dir, None
+
+    pair_dirs = {
+        _pair_key_from_dir(profiles_dir, pair_dir): pair_dir
+        for pair_dir in profiles_dir.rglob("pair__*")
+        if pair_dir.is_dir()
+    }
+    if not pair_dirs:
+        return None, None
+
+    candidate_keys = sorted(pair_dirs.keys())
+    if pair_key is None:
+        if len(candidate_keys) > 1:
+            return (
+                None,
+                {
+                    "error": f"Multiple {label} profile pairs found; provide --pair to select one.",
+                    "candidates": candidate_keys,
+                },
+            )
+        return pair_dirs[candidate_keys[0]], None
+
+    key_tokens = set(_tokenize_profile_name(pair_key.replace("/", "_")))
+    best_key: Optional[str] = None
+    best_score = -1.0
+    for key in candidate_keys:
+        candidate_tokens = set(_tokenize_profile_name(key.replace("/", "_")))
+        overlap = len(key_tokens & candidate_tokens)
+        if overlap == 0 and pair_key not in key:
+            continue
+        score = overlap
+        if pair_key in key:
+            score += 1.0
+        if score > best_score:
+            best_score = score
+            best_key = key
+
+    if best_key is None:
+        return (
+            None,
+            {
+                "error": f"No matching {label} profile pair found for --pair={pair_key}.",
+                "candidates": candidate_keys,
+            },
+        )
+
+    return pair_dirs[best_key], None
+
+
 def _select_flamegraph_pair(
     profiles_dir: Path,
     pair_key: Optional[str] = None,
@@ -956,7 +1035,16 @@ def _select_flamegraph_pair(
     optimized_nsys = [path for path in nsys_files if "optimized" in path.name.lower()]
 
     if not baseline_nsys or not optimized_nsys:
-        return None, None
+        pair_dir, error = _select_pair_dir(profiles_dir, pair_key, label="nsys")
+        if error:
+            return None, error
+        if not pair_dir:
+            return None, None
+        nsys_files = sorted(pair_dir.glob("*.nsys-rep"))
+        baseline_nsys = [path for path in nsys_files if "baseline" in path.name.lower()]
+        optimized_nsys = [path for path in nsys_files if "optimized" in path.name.lower()]
+        if not baseline_nsys or not optimized_nsys:
+            return None, None
 
     pair, _, error = _select_profile_pair(
         baseline_nsys,

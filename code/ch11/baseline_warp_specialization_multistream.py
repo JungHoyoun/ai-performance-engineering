@@ -10,8 +10,8 @@ class BaselineWarpSpecializationStreamsBenchmark(StridedStreamBaseline):
         # Use same num_elements and num_segments as optimized for equivalent workload
         super().__init__(
             "baseline_warp_specialization_multistream",
-            num_elements=48_000_000,  # Same as optimized
-            num_segments=32,  # Same as optimized for equivalent chunking
+            num_elements=96_000_000,  # Same as optimized
+            num_segments=64,  # Same as optimized for equivalent chunking
         )
 
 

@@ -30,4 +30,4 @@ python -m cli.aisp bench run --targets labs/cudnn_sdpa_bench --profile minimal
 
 ## Notes
 - Backend selection is CLI-only; environment variables are intentionally ignored.
-- Profiling outputs are stored under `benchmark_profiles/labs/cudnn_sdpa_bench/<run_id>` with harness artifacts in `artifacts/<run_id>/`.
+- Profiling outputs are stored under `artifacts/runs/<run_id>/profiles/bench/labs_cudnn_sdpa_bench/` with harness artifacts in `artifacts/runs/<run_id>/`.

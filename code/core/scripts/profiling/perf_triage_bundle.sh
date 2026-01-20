@@ -11,8 +11,8 @@ Usage:
                         [--] <command to profile>
 
 Examples:
-  perf_triage_bundle.sh --output-root ./artifacts
-  perf_triage_bundle.sh --output-root ./artifacts --tag baseline -- \
+  perf_triage_bundle.sh --output-root ./artifacts/runs
+  perf_triage_bundle.sh --output-root ./artifacts/runs --tag baseline -- \
     python ch01/baseline_matmul.py --batch-size 32
   perf_triage_bundle.sh --output-root ./artifacts --nsys --duration 90 -- \
     python your_script.py --arg foo
@@ -26,7 +26,7 @@ Behavior:
 USAGE
 }
 
-OUTPUT_ROOT="${OUTPUT_ROOT:-$(pwd)/artifacts/perf_triage}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-$(pwd)/artifacts/runs}"
 TAG=""
 DURATION=60
 NSYS_MODE="auto"  # auto | on | off

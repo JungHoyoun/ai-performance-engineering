@@ -4,7 +4,7 @@ This repo already collects benchmark artifacts, but two quick additions make it 
 
 ## Quick Actions
 - Fill the one-page intake (`templates/performance_intake.yaml`) so goals, SLOs, workload shape, and constraints are explicit.
-- Run the triage bundle to gather a clean baseline: `core/scripts/profiling/perf_triage_bundle.sh --output-root ./artifacts --tag baseline -- <your command>`.
+- Run the triage bundle to gather a clean baseline: `core/scripts/profiling/perf_triage_bundle.sh --output-root ./artifacts/runs --tag baseline -- <your command>`.
 - Pick 2–3 high-ROI experiments (below) and A/B them with the same inputs, logging before/after metrics.
 
 ## One-Page Intake
@@ -16,15 +16,15 @@ The bundle captures hardware/software facts plus a short run with either Nsight 
 Usage:
 ```bash
 # Snapshots only (no runtime command)
-core/scripts/profiling/perf_triage_bundle.sh --output-root ./artifacts
+core/scripts/profiling/perf_triage_bundle.sh --output-root ./artifacts/runs
 
 # Snapshots + runtime capture for a representative command
-core/scripts/profiling/perf_triage_bundle.sh --output-root ./artifacts --tag baseline --nsys -- \
+core/scripts/profiling/perf_triage_bundle.sh --output-root ./artifacts/runs --tag baseline --nsys -- \
   python ch10/baseline_matmul.py --batch-size 32
 ```
 
 What it does:
-- Creates `artifacts/perf_triage_<host>_<timestamp>[_<tag>]` with GPU/CPU/memory/storage/network snapshots, CUDA/PyTorch versions, and manifest metadata.
+- Creates `artifacts/runs/perf_triage_<host>_<timestamp>[_<tag>]` with GPU/CPU/memory/storage/network snapshots, CUDA/PyTorch versions, and manifest metadata.
 - If Nsight Systems is available (and not disabled), runs the provided command under `nsys profile -t cuda,nvtx,osrt,cudnn,cublas` and emits both the `.nsys-rep` and a text summary.
 - Otherwise, samples `nvidia-smi dmon` while the command runs and stores a CSV timeseries for SM%, mem BW, power, and utilization.
 - Packs everything into a `.tgz` for sharing.

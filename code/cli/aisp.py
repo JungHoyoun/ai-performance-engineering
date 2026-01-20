@@ -63,6 +63,7 @@ from pathlib import Path
 from enum import Enum
 from types import SimpleNamespace
 from typing import List, Optional
+from datetime import datetime
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -604,18 +605,26 @@ if typer and profile_app is not None:
         ctx: typer.Context,
         command: str = typer.Argument(..., help='Command to profile (quote it), e.g., "python train.py"'),
         output_name: Optional[str] = typer.Option(None, "--output-name", "-o", help="Base name for output"),
-        output_dir: Optional[Path] = typer.Option(None, "--output-dir", help="Output directory"),
+        output_dir: Optional[Path] = typer.Option(None, "--output-dir", help="Base artifacts directory (default: ./artifacts/runs)"),
         preset: str = typer.Option("full", "--preset", help="Preset: full or light"),
     ) -> None:
         """Run Nsight Systems profiling on a command."""
         import shlex
+        from core.benchmark.artifact_manager import ArtifactManager, default_artifacts_root
         cmd_parts = shlex.split(command)
+        from core.benchmark.artifact_manager import build_run_id, slugify
+
         output = output_name or "profile"
-        out_dir = str(output_dir) if output_dir else "artifacts/profiles"
+        base_dir = output_dir if output_dir else default_artifacts_root(Path.cwd())
+        run_label = output or "run"
+        run_id = build_run_id("profile-nsys", run_label, base_dir=Path(base_dir))
+        artifacts = ArtifactManager(base_dir=base_dir, run_id=run_id, run_kind="profile-nsys", run_label=run_label)
+        out_dir = artifacts.profiles_dir / "tools" / "nsys" / slugify(run_label)
+        out_dir.mkdir(parents=True, exist_ok=True)
         
         nsys_cmd = [
             "nsys", "profile",
-            "-o", f"{out_dir}/{output}",
+            "-o", str((out_dir / output)),
             "--trace", "cuda,nvtx,osrt",
             "--cuda-memory-usage=true",
             *cmd_parts
@@ -640,7 +649,7 @@ if typer and profile_app is not None:
         script: Path = typer.Argument(..., help="Python script to profile"),
         mode: str = typer.Option("full", "--mode", help="Profiler preset (full/memory/flops/modules/blackwell)"),
         output_name: Optional[str] = typer.Option(None, "--output-name", "-o", help="Base name for capture folder"),
-        output_dir: Optional[Path] = typer.Option(None, "--output-dir", help="Output root (default: artifacts/torch-profiles)"),
+        output_dir: Optional[Path] = typer.Option(None, "--output-dir", help="Base artifacts directory (default: artifacts/runs)"),
         nvtx_label: str = typer.Option("aisp_torch_profile", "--nvtx-label", help="NVTX/record_function label for correlation"),
         no_nvtx: bool = typer.Option(False, "--no-nvtx", help="Disable NVTX range emission"),
         force_lineinfo: bool = typer.Option(True, "--force-lineinfo/--no-force-lineinfo", help="Force -lineinfo for better source mapping"),
@@ -764,7 +773,7 @@ if typer and profile_app is not None:
             None, "--targets", "-t", help="Chapter(s) or chapter:example pairs to profile"
         ),
         profile: ProfilePreset = typer.Option(
-            ProfilePreset.deep_dive,
+            ProfilePreset.minimal,
             "--profile",
             "-p",
             help="Benchmark CLI profile preset",

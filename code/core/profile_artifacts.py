@@ -79,6 +79,16 @@ def export_detailed_csv(data: Dict[str, Any]) -> str:
 # =============================================================================
 # Profiling artifact loaders
 # =============================================================================
+def _iter_profile_dirs(code_root: Path) -> List[Path]:
+    runs_root = code_root / "artifacts" / "runs"
+    profile_dirs: List[Path] = []
+    if runs_root.exists():
+        for run_dir in runs_root.iterdir():
+            profiles_dir = run_dir / "profiles"
+            if profiles_dir.exists():
+                profile_dirs.append(profiles_dir)
+    return profile_dirs
+
 
 def load_flame_graph_data(code_root: Path = CODE_ROOT) -> Dict[str, Any]:
     """Load flame graph data from the most recent Chrome trace."""
@@ -88,11 +98,7 @@ def load_flame_graph_data(code_root: Path = CODE_ROOT) -> Dict[str, Any]:
         "children": [],
     }
 
-    profile_dirs = [
-        code_root / "benchmark_profiles",
-        code_root / "artifacts" / "profiles",
-        code_root / "profiles",
-    ]
+    profile_dirs = _iter_profile_dirs(code_root)
 
     trace_files: List[Path] = []
     for profile_dir in profile_dirs:
@@ -155,10 +161,7 @@ def load_memory_timeline(code_root: Path = CODE_ROOT) -> Dict[str, Any]:
         },
     }
 
-    profile_dirs = [
-        code_root / "benchmark_profiles",
-        code_root / "artifacts" / "profiles",
-    ]
+    profile_dirs = _iter_profile_dirs(code_root)
 
     memory_files: List[Path] = []
     for profile_dir in profile_dirs:
@@ -197,10 +200,7 @@ def load_cpu_gpu_timeline(code_root: Path = CODE_ROOT) -> Dict[str, Any]:
         },
     }
 
-    profile_dirs = [
-        code_root / "benchmark_profiles",
-        code_root / "artifacts" / "profiles",
-    ]
+    profile_dirs = _iter_profile_dirs(code_root)
 
     trace_files: List[Path] = []
     for profile_dir in profile_dirs:

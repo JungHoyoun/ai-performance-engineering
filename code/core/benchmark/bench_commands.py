@@ -81,7 +81,12 @@ _expand_multi_value_option(["--targets", "-t"])
 
 from core.env import apply_env_defaults, dump_environment_and_capabilities
 from core.utils.logger import setup_logging, get_logger
-from core.benchmark.artifact_manager import ArtifactManager
+from core.benchmark.artifact_manager import (
+    ArtifactManager,
+    default_artifacts_root,
+    build_bench_run_label,
+    build_run_id,
+)
 from core.harness.progress import ProgressEvent, ProgressRecorder
 from core.profiling import profiler_config as profiler_config_mod
 from core.discovery import chapter_slug, discover_all_chapters, resolve_target_chapters, discover_benchmarks
@@ -350,8 +355,17 @@ def _execute_benchmarks(
     except ImportError:
         pass  # cuda_capabilities not available
 
-    artifact_base = Path(artifacts_dir) if artifacts_dir else active_bench_root / "artifacts"
-    artifact_manager = ArtifactManager(base_dir=artifact_base, run_id=run_id)
+    artifact_base = Path(artifacts_dir) if artifacts_dir else default_artifacts_root(active_bench_root)
+    run_label = None
+    if run_id is None:
+        run_label = build_bench_run_label(targets or [], profile_type)
+        run_id = build_run_id("bench", run_label, base_dir=artifact_base)
+    artifact_manager = ArtifactManager(
+        base_dir=artifact_base,
+        run_id=run_id,
+        run_kind="bench",
+        run_label=run_label,
+    )
     if log_file is None:
         log_file = artifact_manager.get_log_path()
 
@@ -426,6 +440,7 @@ def _execute_benchmarks(
             chapter_dir=chapter_dir,
             enable_profiling=enable_profiling,
             profile_type=profile_type if enable_profiling else "none",
+            profile_output_root=artifact_manager.profiles_dir,
             timeout_multiplier=timeout_multiplier,
             reproducible=reproducible,
             cold_start=cold_start,
@@ -537,10 +552,24 @@ if TYPER_AVAILABLE:
         iterations: Optional[int] = Option(None, "--iterations", help="Number of benchmark iterations (default: chapter-specific)"),
         warmup: Optional[int] = Option(None, "--warmup", help="Number of warmup iterations (default: chapter-specific)"),
         force_pipeline: bool = Option(False, "--force-pipeline", help="Force enable CUDA Pipeline API even on compute capability 12.0+ (may cause instability on Blackwell GPUs)"),
-        artifacts_dir: Optional[str] = Option(None, "--artifacts-dir", help="Directory for artifacts (default: ./artifacts)"),
-        run_id: Optional[str] = Option(None, "--run-id", help="Run ID for artifact directory (default: timestamp)"),
+        artifacts_dir: Optional[str] = Option(
+            None,
+            "--artifacts-dir",
+            help="Base directory for run artifacts (default: ./artifacts/runs).",
+        ),
+        run_id: Optional[str] = Option(
+            None,
+            "--run-id",
+            help=(
+                "Run ID for artifact directory (default: <timestamp>__bench__profile-<type>__targets-<...>)."
+            ),
+        ),
         log_level: str = Option("INFO", "--log-level", help="Log level: DEBUG, INFO, WARNING, ERROR"),
-        log_file: Optional[str] = Option(None, "--log-file", help="Path to log file (default: artifacts/<run_id>/logs/benchmark.log)"),
+        log_file: Optional[str] = Option(
+            None,
+            "--log-file",
+            help="Path to log file (default: artifacts/runs/<run_id>/logs/benchmark.log)",
+        ),
         single_gpu: bool = Option(False, "--single-gpu", help="Force single-GPU visibility (sets CUDA_VISIBLE_DEVICES=0 for this run)."),
         ncu_metric_set: str = Option("auto", "--ncu-metric-set", help="Nsight Compute metric preset: auto, minimal, deep_dive, or roofline. If auto, the profile type governs metric selection.", callback=_validate_ncu_metric_set),
         ncu_replay_mode: Optional[str] = Option(

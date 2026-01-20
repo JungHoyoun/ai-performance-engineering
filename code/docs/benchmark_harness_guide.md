@@ -477,7 +477,7 @@ python -m cli.aisp bench run
 **Output**:
 - `benchmark_test_results` (JSON, machine-readable)
 - `benchmark_test_results.md` (human-readable)
-- Profiling artifacts in `artifacts/<run_id>/`
+- Profiling artifacts in `artifacts/runs/<run_id>/profiles/`
 - Per-chapter summaries with speedup statistics
 
 ---

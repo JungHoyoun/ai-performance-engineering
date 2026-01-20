@@ -117,6 +117,27 @@ class PerformanceCoreBase:
         """Load the latest torch.profiler capture summary."""
         return profile_artifacts.load_torch_profiler(self.bench_root)
 
+    def summarize_nsys_report(self, report_path: str) -> dict:
+        """Summarize a Nsight Systems report (.nsys-rep or CSV)."""
+        if not report_path:
+            raise ValueError("report_path is required")
+        path = Path(report_path)
+        if not path.exists():
+            raise FileNotFoundError(f"nsys report not found: {path}")
+
+        from core.profiling.extract_nsys_summary import harvest
+
+        metrics = harvest(path)
+        if not metrics:
+            raise RuntimeError(f"No Nsight Systems metrics found in {path}")
+
+        return {
+            "success": True,
+            "report_path": str(path),
+            "count": len(metrics),
+            "metrics": metrics,
+        }
+
     def get_compile_analysis(self) -> dict:
         benchmarks = self.load_benchmark_data().get("benchmarks", [])
         return load_compile_analysis(self.bench_root, benchmarks)
@@ -252,8 +273,15 @@ class PerformanceCoreBase:
 
         info["has_expectations"] = any(directory.glob("expectations_*.json"))
         rel_path = Path(self._relative_to_bench_root(directory))
-        profile_dir = self.bench_root / "benchmark_profiles" / rel_path
-        info["has_profiles"] = profile_dir.exists() and any(profile_dir.iterdir()) if profile_dir.exists() else False
+        profile_key = str(rel_path).replace("/", "_").replace("\\", "_")
+        info["has_profiles"] = False
+        runs_root = self.bench_root / "artifacts" / "runs"
+        if runs_root.exists():
+            for run_dir in runs_root.iterdir():
+                profiles_dir = run_dir / "profiles" / "bench" / profile_key
+                if profiles_dir.exists() and any(profiles_dir.iterdir()):
+                    info["has_profiles"] = True
+                    break
         return info
 
     # ------------------------------------------------------------------
@@ -268,7 +296,7 @@ class PerformanceCoreBase:
                 paths.append(candidate)
 
         for root in self.bench_roots:
-            artifacts_dir = root / "artifacts"
+            artifacts_dir = root / "artifacts" / "runs"
             if artifacts_dir.exists():
                 paths.extend(sorted(artifacts_dir.rglob("benchmark_test_results.json")))
 
@@ -1818,68 +1846,42 @@ class PerformanceCoreBase:
     # ------------------------------------------------------------------
     def list_deep_profile_pairs(self) -> dict:
         """List all chapters/directories with baseline + optimized profile pairs."""
-        from core.discovery import discover_all_chapters
-        
         pairs = []
-        
-        # Check artifacts directory
-        artifacts_dir = self.bench_root / "artifacts"
-        if artifacts_dir.exists():
-            for subdir in artifacts_dir.iterdir():
-                if subdir.is_dir():
+        runs_root = self.bench_root / "artifacts" / "runs"
+        if runs_root.exists():
+            for run_dir in runs_root.iterdir():
+                profiles_root = run_dir / "profiles"
+                if not profiles_root.exists():
+                    continue
+                for subdir in profiles_root.rglob("*"):
+                    if not subdir.is_dir():
+                        continue
                     baseline_nsys = list(subdir.glob("*baseline*.nsys-rep"))
                     optimized_nsys = list(subdir.glob("*optimized*.nsys-rep"))
                     baseline_ncu = list(subdir.glob("*baseline*.ncu-rep"))
                     optimized_ncu = list(subdir.glob("*optimized*.ncu-rep"))
-                    
-                    if (baseline_nsys and optimized_nsys) or (baseline_ncu and optimized_ncu):
-                        pairs.append({
-                            "chapter": subdir.name,
-                            "name": subdir.name,
-                            "path": str(subdir),
-                            "type": "artifact",
-                            "has_nsys": bool(baseline_nsys and optimized_nsys),
-                            "has_ncu": bool(baseline_ncu and optimized_ncu),
-                            "baseline_nsys": [f.name for f in baseline_nsys],
-                            "optimized_nsys": [f.name for f in optimized_nsys],
-                            "baseline_ncu": [f.name for f in baseline_ncu],
-                            "optimized_ncu": [f.name for f in optimized_ncu],
-                        })
-        
-        # Check benchmark_profiles directory
-        profiles_dir = self.bench_root / "benchmark_profiles"
-        if profiles_dir.exists():
-            for subdir in profiles_dir.iterdir():
-                if subdir.is_dir():
-                    baseline_nsys = list(subdir.glob("*baseline*.nsys-rep"))
-                    optimized_nsys = list(subdir.glob("*optimized*.nsys-rep"))
-                    
-                    if baseline_nsys and optimized_nsys:
-                        pairs.append({
-                            "chapter": subdir.name,
-                            "name": subdir.name,
-                            "path": str(subdir),
-                            "type": "profile",
-                            "has_nsys": True,
-                            "has_ncu": False,
-                        })
-        
-        # Check chapter directories
-        for dir_path in discover_all_chapters(self.bench_root, bench_roots=self.bench_roots):
-            baseline_nsys = list(dir_path.glob("*baseline*.nsys-rep"))
-            optimized_nsys = list(dir_path.glob("*optimized*.nsys-rep"))
-            
-            if baseline_nsys and optimized_nsys:
-                rel = self._relative_to_bench_root(dir_path)
-                pairs.append({
-                    "chapter": dir_path.name,
-                    "name": rel,
-                    "path": str(dir_path),
-                    "type": "chapter",
-                    "has_nsys": True,
-                    "has_ncu": bool(list(dir_path.glob("*baseline*.ncu-rep")) and list(dir_path.glob("*optimized*.ncu-rep"))),
-                })
-        
+                    if not ((baseline_nsys and optimized_nsys) or (baseline_ncu and optimized_ncu)):
+                        continue
+
+                    rel = subdir.relative_to(profiles_root)
+                    rel_parts = rel.parts
+                    chapter_name = None
+                    if rel_parts and rel_parts[0] == "bench" and len(rel_parts) >= 2:
+                        chapter_name = rel_parts[1]
+                    pairs.append({
+                        "chapter": chapter_name or subdir.name,
+                        "name": f"{run_dir.name}/{rel.as_posix()}",
+                        "path": str(subdir),
+                        "run_id": run_dir.name,
+                        "type": "run_profiles",
+                        "has_nsys": bool(baseline_nsys and optimized_nsys),
+                        "has_ncu": bool(baseline_ncu and optimized_ncu),
+                        "baseline_nsys": [f.name for f in baseline_nsys],
+                        "optimized_nsys": [f.name for f in optimized_nsys],
+                        "baseline_ncu": [f.name for f in baseline_ncu],
+                        "optimized_ncu": [f.name for f in optimized_ncu],
+                    })
+
         return {"pairs": pairs, "count": len(pairs)}
 
     def compare_profiles(
@@ -2097,28 +2099,37 @@ class PerformanceCoreBase:
 
     def _find_profile_directory(self, chapter: str) -> Optional[Path]:
         """Find the directory containing profiles for a chapter."""
-        from core.discovery import discover_all_chapters
-
         if chapter:
             explicit = Path(chapter)
             if explicit.is_absolute() or ("/" in chapter or "\\" in chapter):
                 if explicit.exists() and explicit.is_dir():
                     return explicit
-        
-        # Try artifacts directory first
-        artifacts_dir = self.bench_root / "artifacts" / chapter
-        if artifacts_dir.exists():
-            return artifacts_dir
-        
-        # Try benchmark_profiles directory
-        profiles_dir = self.bench_root / "benchmark_profiles" / chapter
-        if profiles_dir.exists():
-            return profiles_dir
-        
-        # Search chapter directories
-        for dir_path in discover_all_chapters(self.bench_root, bench_roots=self.bench_roots):
-            rel = self._relative_to_bench_root(dir_path)
-            if chapter in rel or rel.endswith(chapter) or dir_path.name == chapter:
-                return dir_path
-        
+
+        safe_chapter = chapter.replace("/", "_").replace("\\", "_")
+        runs_root = self.bench_root / "artifacts" / "runs"
+        candidates: List[Path] = []
+        if runs_root.exists():
+            for run_dir in runs_root.iterdir():
+                profiles_root = run_dir / "profiles"
+                if not profiles_root.exists():
+                    continue
+                candidate = profiles_root / "bench" / safe_chapter
+                if candidate.exists():
+                    candidates.append(candidate)
+            if candidates:
+                return max(candidates, key=lambda p: p.stat().st_mtime)
+
+            # Fallback: scan for any profiles directory containing the chapter token
+            for run_dir in runs_root.iterdir():
+                profiles_root = run_dir / "profiles"
+                if not profiles_root.exists():
+                    continue
+                for subdir in profiles_root.rglob("*"):
+                    if not subdir.is_dir():
+                        continue
+                    if safe_chapter in subdir.name:
+                        candidates.append(subdir)
+            if candidates:
+                return max(candidates, key=lambda p: p.stat().st_mtime)
+
         return None

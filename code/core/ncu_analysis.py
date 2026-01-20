@@ -11,10 +11,7 @@ from typing import Any, Dict, List
 
 def load_ncu_deepdive(code_root: Path) -> Dict[str, Any]:
     """Load NCU metrics and synthesize basic analysis."""
-    profile_dirs = [
-        code_root / "benchmark_profiles",
-        code_root / "artifacts" / "profiles",
-    ]
+    profile_dirs = [code_root / "artifacts" / "runs"]
 
     ncu_data: Dict[str, Any] = {
         "available": False,
