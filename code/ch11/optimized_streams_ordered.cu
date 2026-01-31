@@ -25,6 +25,7 @@
 #include <cstdio>
 #include <vector>
 #include <chrono>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
@@ -51,12 +52,17 @@ __global__ void compute_kernel(const float* __restrict__ in,
 }
 
 int main() {
+    NVTX_RANGE("main");
   float *h_src = nullptr;
   CUDA_CHECK(cudaMallocHost(&h_src, N * sizeof(float)));
-  for (int i = 0; i < N; ++i) h_src[i] = static_cast<float>(i);
+  for (int i = 0; i < N; ++i) {
+      NVTX_RANGE("setup");
+      h_src[i] = static_cast<float>(i);
+  }
 
   std::vector<cudaStream_t> h2d_streams(kNumStreams), compute_streams(kNumStreams), d2h_streams(kNumStreams);
   for (int i = 0; i < kNumStreams; ++i) {
+      NVTX_RANGE("setup");
     CUDA_CHECK(cudaStreamCreateWithFlags(&h2d_streams[i], cudaStreamNonBlocking));
     CUDA_CHECK(cudaStreamCreateWithFlags(&compute_streams[i], cudaStreamNonBlocking));
     CUDA_CHECK(cudaStreamCreateWithFlags(&d2h_streams[i], cudaStreamNonBlocking));
@@ -67,6 +73,7 @@ int main() {
   const int chunk_elems = (N + kPipelines - 1) / kPipelines;
 
   for (int i = 0; i < kNumStreams; ++i) {
+      NVTX_RANGE("transfer_async:h2d");
     const int elems = std::min(chunk_elems, N - i * chunk_elems);
     const size_t bytes = static_cast<size_t>(elems) * sizeof(float);
     CUDA_CHECK(cudaMallocAsync(&d_in[i], bytes, compute_streams[i]));
@@ -77,6 +84,7 @@ int main() {
 
   dim3 block(256);
   for (int i = 0; i < kNumStreams; ++i) {
+      NVTX_RANGE("compute_kernel:compute_kernel");
     const int elems = std::min(chunk_elems, N - i * chunk_elems);
     dim3 local_grid((elems + block.x - 1) / block.x);
     compute_kernel<<<local_grid, block, 0, compute_streams[i]>>>(d_in[i], d_out[i], elems);
@@ -87,6 +95,7 @@ int main() {
   CUDA_CHECK(cudaGetLastError());
 
   for (int i = 0; i < kNumStreams; ++i) {
+      NVTX_RANGE("transfer_async:d2h");
     const int elems = std::min(chunk_elems, N - i * chunk_elems);
     const size_t bytes = static_cast<size_t>(elems) * sizeof(float);
     CUDA_CHECK(cudaMemcpyAsync(h_src + i * chunk_elems, d_in[i], bytes,
@@ -94,6 +103,7 @@ int main() {
   }
 
   for (int i = 0; i < kNumStreams; ++i) {
+      NVTX_RANGE("iteration");
     CUDA_CHECK(cudaStreamSynchronize(h2d_streams[i]));
     CUDA_CHECK(cudaStreamSynchronize(compute_streams[i]));
     CUDA_CHECK(cudaStreamSynchronize(d2h_streams[i]));
@@ -107,6 +117,7 @@ int main() {
   // Timed iteration
   CUDA_CHECK(cudaEventRecord(start));
   for (int i = 0; i < kNumStreams; ++i) {
+      NVTX_RANGE("compute_kernel:compute_kernel");
     const int elems = std::min(chunk_elems, N - i * chunk_elems);
     dim3 local_grid((elems + block.x - 1) / block.x);
     compute_kernel<<<local_grid, block, 0, compute_streams[i]>>>(d_in[i], d_out[i], elems);
@@ -125,6 +136,7 @@ int main() {
   std::printf("stream0 result[0]=%.1f\n", h_src[0]);
 
   for (int i = 0; i < kNumStreams; ++i) {
+      NVTX_RANGE("cleanup");
     CUDA_CHECK(cudaFreeAsync(d_in[i], compute_streams[i]));
     CUDA_CHECK(cudaFreeAsync(d_out[i], compute_streams[i]));
     CUDA_CHECK(cudaStreamDestroy(h2d_streams[i]));
@@ -244,9 +256,11 @@ void benchmark_allocation_methods(int num_allocations, size_t alloc_size) {
         
         std::vector<float*> ptrs(num_allocations);
         for (int i = 0; i < num_allocations; i++) {
+            NVTX_RANGE("setup");
             CUDA_CHECK(cudaMalloc(&ptrs[i], alloc_size));
         }
         for (int i = 0; i < num_allocations; i++) {
+            NVTX_RANGE("cleanup");
             CUDA_CHECK(cudaFree(ptrs[i]));
         }
         
@@ -264,9 +278,11 @@ void benchmark_allocation_methods(int num_allocations, size_t alloc_size) {
         
         std::vector<float*> ptrs(num_allocations);
         for (int i = 0; i < num_allocations; i++) {
+            NVTX_RANGE("setup");
             CUDA_CHECK(cudaMallocAsync(&ptrs[i], alloc_size, stream));
         }
         for (int i = 0; i < num_allocations; i++) {
+            NVTX_RANGE("setup");
             CUDA_CHECK(cudaFreeAsync(ptrs[i], stream));
         }
         CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -297,6 +313,7 @@ void demonstrate_multi_stream_pattern() {
     
     // Create streams
     for (int i = 0; i < num_streams; i++) {
+        NVTX_RANGE("iteration");
         CUDA_CHECK(cudaStreamCreate(&streams[i]));
     }
     
@@ -304,6 +321,7 @@ void demonstrate_multi_stream_pattern() {
     auto start = std::chrono::high_resolution_clock::now();
     
     for (int i = 0; i < num_streams; i++) {
+        NVTX_RANGE("compute_kernel:compute_kernel");
         CUDA_CHECK(cudaMallocAsync(&d_buffers[i], buffer_size, streams[i]));
         
         // Do work in stream
@@ -316,11 +334,13 @@ void demonstrate_multi_stream_pattern() {
     
     // Free in each stream (concurrent)
     for (int i = 0; i < num_streams; i++) {
+        NVTX_RANGE("barrier");
         CUDA_CHECK(cudaFreeAsync(d_buffers[i], streams[i]));
     }
     
     // Synchronize all
     for (int i = 0; i < num_streams; i++) {
+        NVTX_RANGE("iteration");
         CUDA_CHECK(cudaStreamSynchronize(streams[i]));
     }
     
@@ -333,6 +353,7 @@ void demonstrate_multi_stream_pattern() {
     
     // Cleanup
     for (int i = 0; i < num_streams; i++) {
+        NVTX_RANGE("cleanup");
         CUDA_CHECK(cudaStreamDestroy(streams[i]));
     }
 }

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 import shlex
+import sys
 from pathlib import Path
 from typing import Optional, Any, Dict, List
-from datetime import datetime
 import typer
 
 from core.profile_insights import generate_flamegraph_comparison
@@ -538,11 +538,81 @@ def hta_capture(args) -> int:
 
 
 def ncu(args) -> None:
-    """NCU deep dive analysis."""
+    """Run Nsight Compute profiling on a command or Python script."""
     from rich.console import Console
-    script = getattr(args, 'script', None)
+    from rich.panel import Panel
+    from core.profiling.nsight_automation import NsightAutomation
+
     console = Console()
-    console.print(f"[yellow]NCU analysis for {script or 'default script'}[/yellow]")
+
+    command_str = getattr(args, "command", "")
+    command_list = getattr(args, "command_list", None) or (shlex.split(command_str) if command_str else [])
+    script_path = Path(getattr(args, "script", "")) if getattr(args, "script", None) else None
+    script_args: List[str] = getattr(args, "script_args", None) or []
+    kernel_filter = getattr(args, "kernel_filter", None) or getattr(args, "kernel", None)
+
+    if not command_list:
+        if not script_path:
+            console.print("[red]Provide --command or a script path.[/red]")
+            return 1
+        if not script_path.exists():
+            console.print(f"[red]Script not found:[/red] {script_path}")
+            return 1
+        command_list = [sys.executable, str(script_path), *script_args]
+
+    output_dir_opt = getattr(args, "output_dir", None)
+    output_name = getattr(args, "output_name", None) or (script_path.stem if script_path else "profile_ncu")
+    _, output_root = _prepare_profile_run(output_dir_opt, "ncu", output_name)
+
+    workload_type = getattr(args, "workload_type", "memory_bound")
+    metric_set = getattr(args, "metric_set", "full")
+    replay_mode = getattr(args, "replay_mode", "application")
+    launch_skip = getattr(args, "launch_skip", None)
+    launch_count = getattr(args, "launch_count", None)
+    sampling_interval = getattr(args, "pm_sampling_interval", None)
+    force_lineinfo = bool(getattr(args, "force_lineinfo", True))
+    timeout_seconds = getattr(args, "timeout_seconds", None)
+
+    automation = NsightAutomation(output_root)
+    console.print(f"[cyan]Running Nsight Compute ({metric_set}, {workload_type})[/cyan]")
+    try:
+        output = automation.profile_ncu(
+            command=command_list,
+            output_name=output_name,
+            workload_type=workload_type,
+            kernel_filter=kernel_filter,
+            force_lineinfo=force_lineinfo,
+            timeout_seconds=timeout_seconds,
+            sampling_interval=sampling_interval,
+            metric_set=metric_set,
+            launch_skip=launch_skip,
+            launch_count=launch_count,
+            replay_mode=replay_mode,
+        )
+    except ValueError as exc:
+        console.print(f"[red]NCU configuration error:[/red] {exc}")
+        return 1
+
+    if not output:
+        console.print(f"[red]NCU profiling failed:[/red] {automation.last_error or 'unknown error'}")
+        return 1
+
+    last_run = automation.last_run or {}
+    launch_skip_used = last_run.get("launch_skip", launch_skip)
+    launch_count_used = last_run.get("launch_count", launch_count)
+    replay_mode_used = last_run.get("replay_mode", replay_mode)
+    lines = [
+        f"[green]✓[/green] NCU report: {output}",
+        f"Workload type: {workload_type}",
+        f"Metric set: {metric_set}",
+        f"Replay mode: {replay_mode_used}",
+        f"Kernel filter: {kernel_filter or 'none'}",
+        f"Launch skip: {launch_skip_used if launch_skip_used is not None else 'none'}",
+        f"Launch count: {launch_count_used if launch_count_used is not None else 'none'}",
+        f"Force lineinfo: {force_lineinfo}",
+    ]
+    console.print(Panel.fit("\n".join(lines), title="Nsight Compute capture", border_style="green"))
+    return 0
 
 
 def warp_divergence(args) -> None:

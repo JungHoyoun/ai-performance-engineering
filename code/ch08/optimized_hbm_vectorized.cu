@@ -6,10 +6,12 @@
 #include <vector>
 
 #include "hbm_common.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 using namespace ch08;
 
 int main() {
+    NVTX_RANGE("main");
     const int rows = 4096;
     const int cols = 2048;
     const size_t bytes = static_cast<size_t>(rows) * cols * sizeof(float);
@@ -18,6 +20,7 @@ int main() {
     std::mt19937 gen(42);
     std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
     for (auto& value : host_matrix) {
+        NVTX_RANGE("setup");
         value = dist(gen);
     }
 
@@ -32,6 +35,7 @@ int main() {
     cudaEventCreate(&stop);
 
     for (int i = 0; i < 5; ++i) {
+        NVTX_RANGE("iteration");
         launch_hbm_vectorized(d_row, d_output, rows, cols, 0);
     }
     cudaDeviceSynchronize();
@@ -39,6 +43,7 @@ int main() {
     const int iterations = 30;
     cudaEventRecord(start);
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("iteration");
         launch_hbm_vectorized(d_row, d_output, rows, cols, 0);
     }
     cudaEventRecord(stop);

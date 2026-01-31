@@ -6,6 +6,7 @@
 #include <math.h>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define TILE_SIZE 16
 
@@ -52,6 +53,7 @@ __global__ void matmul_tiled(const float* A, const float* B, float* C, int N) {
 }
 
 int main() {
+    NVTX_RANGE("main");
     const int N = 2048;
     const size_t bytes = N * N * sizeof(float);
     
@@ -61,6 +63,7 @@ int main() {
     
     // Initialize
     for (int i = 0; i < N * N; ++i) {
+        NVTX_RANGE("setup");
         h_A[i] = static_cast<float>(i % 100) / 100.0f;
         h_B[i] = static_cast<float>((i + 50) % 100) / 100.0f;
     }
@@ -84,6 +87,7 @@ int main() {
     const int iterations = 10;
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; i++) {
+        NVTX_RANGE("compute_kernel:matmul_tiled");
         matmul_tiled<<<grid_tiled, block_tiled>>>(d_A, d_B, d_C, N);
     }
     CUDA_CHECK(cudaEventRecord(stop));
@@ -99,6 +103,7 @@ int main() {
     CUDA_CHECK(cudaMemcpy(h_C, d_C, bytes, cudaMemcpyDeviceToHost));
     double checksum = 0.0;
     for (int i = 0; i < N * N; ++i) {
+        NVTX_RANGE("verify");
         checksum += static_cast<double>(h_C[i]);
     }
     VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));

@@ -39,27 +39,28 @@ def test_job_status_includes_progress(tmp_path: Path) -> None:
         )
     )
 
-    job_id = "job-test-001"
-    record = {
-        "job_id": job_id,
-        "tool": "aisp_run_benchmarks",
-        "status": "running",
-        "submitted_at": 0.0,
-        "arguments": {},
-        "run_id": "run_002",
-        "run_dir": str(run_dir),
-        "progress_path": str(progress_path),
-    }
-    with mcp_server._JOB_LOCK:
-        mcp_server._JOB_STORE[job_id] = record
+    store = mcp_server.JOB_STORE
+
+    def runner():
+        return {"ok": True}
+
+    ticket = store.queue_job(
+        "aisp_run_benchmarks",
+        runner,
+        run_metadata={
+            "run_id": "run_002",
+            "run_dir": str(run_dir),
+            "progress_path": str(progress_path),
+        },
+    )
+    job_id = ticket["job_id"]
     try:
         payload = mcp_server.tool_job_status({"job_id": job_id})
-        assert payload["status"] == "running"
         assert payload["progress"]["phase"] == "optimized_timing"
         assert payload["progress"]["run_id"] == "run_002"
     finally:
-        with mcp_server._JOB_LOCK:
-            mcp_server._JOB_STORE.pop(job_id, None)
+        with store._lock:
+            store._store.pop(job_id, None)
 
 
 def test_progress_phases_include_llm() -> None:

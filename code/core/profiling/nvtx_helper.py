@@ -4,6 +4,7 @@ This module provides utilities to conditionally add NVTX ranges only when
 profiling is enabled, reducing overhead for pure performance benchmarks.
 """
 
+import re
 import sys
 from contextlib import contextmanager, redirect_stderr
 from typing import Any, Generator, Optional, TextIO, cast
@@ -12,43 +13,128 @@ import io
 
 import torch
 
-_QUALIFIER_SUFFIXES = {
-    "sequential",
-    "overlapped",
-    "coalesced",
-    "uncoalesced",
-    "pinned",
+_STANDARD_NVTX_PREFIXES = {
+    "setup",
+    "warmup",
+    "compute_kernel",
+    "compute_math",
+    "compute_graph",
+    "transfer_async",
+    "transfer_sync",
+    "prefetch",
+    "barrier",
+    "reduce",
+    "verify",
+    "cleanup",
     "batch",
-    "bf16",
-    "fp16",
-    "fp32",
-    "fp8",
-    "mixed",
-    "naive",
-    "default",
-    "baseline",
-    "optimized",
-    "dense",
-    "sparse",
-    "graph",
-    "pytorch",
-    "cuda",
-    "triton",
-    "variant",
-    "standard",
-    "eager",
+    "tile",
+    "iteration",
+    "step",
 }
+
+_TRANSFER_KEYWORDS = (
+    "copy",
+    "transfer",
+    "memcpy",
+    "h2d",
+    "d2h",
+    "host_to_device",
+    "device_to_host",
+    "zero_copy",
+)
+
+_COMPUTE_MATH_KEYWORDS = (
+    "matmul",
+    "gemm",
+    "attention",
+    "mlp",
+    "moe",
+    "softmax",
+    "layernorm",
+    "norm",
+    "ffn",
+    "conv",
+    "transformer",
+    "inference",
+    "training",
+    "prefill",
+    "decode",
+    "routing",
+)
+
+
+def _normalize_detail(label: str) -> str:
+    sanitized = label.strip().lower()
+    sanitized = sanitized.replace(" ", "_").replace("-", "_").replace("/", "_")
+    sanitized = re.sub(r"[^a-z0-9:_]+", "_", sanitized)
+    sanitized = re.sub(r"_+", "_", sanitized).strip("_")
+    return sanitized
+
+
+def _strip_variants(label: str) -> str:
+    for prefix in ("baseline_", "optimized_"):
+        if label.startswith(prefix):
+            label = label[len(prefix):]
+    for suffix in ("_baseline", "_optimized"):
+        if label.endswith(suffix):
+            label = label[: -len(suffix)]
+    return label.strip("_")
+
+
+def _contains_any(label: str, keywords: tuple[str, ...]) -> bool:
+    return any(keyword in label for keyword in keywords)
+
+
+def _infer_prefix(detail: str) -> str:
+    if not detail:
+        return "compute_kernel"
+    if "warmup" in detail:
+        return "warmup"
+    if "setup" in detail or "init" in detail:
+        return "setup"
+    if "verify" in detail or "validation" in detail or "check" in detail:
+        return "verify"
+    if "cleanup" in detail or "teardown" in detail:
+        return "cleanup"
+    if "prefetch" in detail:
+        return "prefetch"
+    if _contains_any(detail, _TRANSFER_KEYWORDS):
+        if "async" in detail or "overlap" in detail or "pipelined" in detail or "stream" in detail:
+            return "transfer_async"
+        return "transfer_sync"
+    if "reduce" in detail or "reduction" in detail:
+        return "reduce"
+    if "barrier" in detail or "sync" in detail:
+        return "barrier"
+    if "batch" in detail:
+        return "batch"
+    if "iteration" in detail or "iter" in detail:
+        return "iteration"
+    if "step" in detail:
+        return "step"
+    if "graph" in detail:
+        return "compute_graph"
+    if _contains_any(detail, _COMPUTE_MATH_KEYWORDS):
+        return "compute_math"
+    return "compute_kernel"
+
+
+def standardize_nvtx_label(name: str) -> str:
+    normalized = _normalize_detail(name)
+    if not normalized:
+        return "compute_kernel:unnamed"
+    if ":" in normalized:
+        prefix, detail = normalized.split(":", 1)
+        if prefix in _STANDARD_NVTX_PREFIXES:
+            detail = _strip_variants(_normalize_detail(detail)) or "unnamed"
+            return f"{prefix}:{detail}"
+    detail = _strip_variants(normalized) or "unnamed"
+    prefix = _infer_prefix(detail)
+    return f"{prefix}:{detail}"
 
 
 def canonicalize_nvtx_name(name: str) -> str:
-    tokens = [tok for tok in name.lower().split("_") if tok]
-    while tokens and tokens[0] in ("baseline", "optimized"):
-        tokens.pop(0)
-    while tokens and tokens[-1] in _QUALIFIER_SUFFIXES:
-        tokens.pop()
-    if not tokens:
-        return name.lower()
-    return "_".join(tokens)
+    return standardize_nvtx_label(name)
 
 
 class FilteredStderr(io.TextIOBase):

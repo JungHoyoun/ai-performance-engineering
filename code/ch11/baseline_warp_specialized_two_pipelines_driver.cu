@@ -4,6 +4,7 @@
 #include <cstddef>
 
 #include "baseline_warp_specialized_two_pipelines_common.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 namespace {
 
@@ -22,8 +23,10 @@ void check(cudaError_t err) {
 }  // namespace
 
 int main() {
+    NVTX_RANGE("main");
   cudaStream_t streams[kNumStreams];
   for (int i = 0; i < kNumStreams; ++i) {
+      NVTX_RANGE("setup");
     check(cudaStreamCreateWithFlags(&streams[i], cudaStreamNonBlocking));
   }
 
@@ -33,13 +36,16 @@ int main() {
   check(cudaMallocHost(&hC, kBatches * kBytesPerTile));
 
   for (int b = 0; b < kBatches; ++b) {
+      NVTX_RANGE("setup");
     for (int i = 0; i < ch11::kBaselineTileElems; ++i) {
+        NVTX_RANGE("setup");
       hA[static_cast<size_t>(b) * ch11::kBaselineTileElems + i] = static_cast<float>(i);
       hB[static_cast<size_t>(b) * ch11::kBaselineTileElems + i] = 1.0f;
     }
   }
 
   for (int b = 0; b < kBatches; ++b) {
+      NVTX_RANGE("iteration");
     cudaStream_t st = streams[b % kNumStreams];
     float *dA = nullptr, *dB = nullptr, *dC = nullptr;
     check(cudaMallocAsync(&dA, kBytesPerTile, st));
@@ -63,6 +69,7 @@ int main() {
   }
 
   for (int i = 0; i < kNumStreams; ++i) {
+      NVTX_RANGE("cleanup");
     check(cudaStreamSynchronize(streams[i]));
     check(cudaStreamDestroy(streams[i]));
   }

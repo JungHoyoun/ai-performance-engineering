@@ -3,7 +3,7 @@
 
 include ../core/common/cuda_arch.mk
 
-NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) --use_fast_math -lineinfo
+NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) --use_fast_math -lineinfo $(CUDA_NVTX_CFLAGS)
 NVCC_LIBS = -lcublas -lcublasLt
 SUFFIX = $(TARGET_SUFFIX)
 
@@ -20,8 +20,8 @@ all: $(TARGETS)
 	@echo "✓ Built $(words $(BASE_TARGETS)) CUDA examples"
 
 # Default pattern rule
-%$(SUFFIX): %.cu
-	$(NVCC) $(NVCC_FLAGS) $(NVCC_LIBS) -o $@ $<
+%$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) $(NVCC_LIBS) -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
 test: all
 	@echo "Testing GEMM optimizations..."

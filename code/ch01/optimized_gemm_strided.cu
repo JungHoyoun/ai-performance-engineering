@@ -5,6 +5,7 @@
 #include <cublas_v2.h>
 #include <cstdio>
 #include <cstdlib>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
@@ -65,6 +66,7 @@ void fill_matrix(float* data, int elements, float value) {
 }
 
 int main() {
+    NVTX_RANGE("main");
     cublasHandle_t handle;
     CUBLAS_CHECK(cublasCreate(&handle));
     CUBLAS_CHECK(cublasSetMathMode(handle, CUBLAS_TF32_TENSOR_OP_MATH));
@@ -113,6 +115,7 @@ int main() {
     
     CUDA_CHECK(cudaEventRecord(start));
     for (int iter = 0; iter < 100; ++iter) {
+        NVTX_RANGE("compute_math:gemmstridedbatched");
         CUBLAS_CHECK(cublasGemmStridedBatchedEx(
             handle,
             CUBLAS_OP_N, CUBLAS_OP_N,

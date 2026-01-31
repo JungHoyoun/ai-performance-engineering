@@ -6,6 +6,7 @@
 #include "threshold_async_kernel.cuh"
 #include "threshold_tma_kernel.cuh"
 #include "blackwell_guard.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 namespace ch08 {
 
@@ -122,6 +123,7 @@ void threshold_tma_baseline(torch::Tensor inputs, torch::Tensor output, double t
     at::cuda::CUDAGuard guard(inputs.device());
     const auto stream = at::cuda::getCurrentCUDAStream();
     for (int pass = 0; pass < 3; ++pass) {
+        NVTX_RANGE("iteration");
         launch_threshold_naive(
             inputs.data_ptr<float>(),
             output.data_ptr<float>(),

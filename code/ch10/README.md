@@ -14,6 +14,9 @@ Applies tensor-core friendly scheduling on Blackwell: warp specialization, TMA-p
 | --- | --- |
 | `baseline_attention.py`, `optimized_attention.py`, `baseline_flash_attention.py`, `optimized_flash_attention.py`, `analyze_scaling.py` | Attention workloads that span eager, fused, and `torch.compile` paths for modern decoder models. |
 | `baseline_batch.py`, `optimized_batch.py`, `baseline_matmul.py`, `optimized_matmul.py`, `baseline_matmul_tcgen05.py`, `optimized_matmul_tcgen05.py` | Tensor-core matmul variants demonstrating tcgen05 lowering, register tiling, and PyTorch integration. |
+| `baseline_tcgen05_warp_specialization.py`, `optimized_tcgen05_warp_specialization.py`, `tcgen05_warp_specialized.cu` | Warp-specialized tcgen05 GEMM with dedicated producer/consumer warps. |
+| `baseline_tcgen05_warp_specialization_cutlass.py`, `optimized_tcgen05_warp_specialization_cutlass.py`, `tcgen05_warp_specialized_cutlass.cu` | CUTLASS-style warp-specialized mainloop (producer + 1 consumer warp) for direct comparison. |
+| `baseline_tcgen05_warpgroup_specialization.py`, `optimized_tcgen05_warpgroup_specialization.py`, `tcgen05_warpgroup_specialized.cu` | Advanced CUTLASS-style warp-specialized array mainloop using a 2-SM tile (sm100_mma_array_warpspecialized schedule). |
 | `baseline_double_buffered_pipeline.{py,cu}`, `optimized_double_buffered_pipeline.{py,cu}`, `baseline_tma_2d_pipeline.py`, `optimized_tma_2d_pipeline.py` | Async pipeline samples mixing cp.async, TMA, and manual double buffering. |
 | `baseline_cluster_group*.{py,cu}`, `optimized_cluster_group*.{py,cu}`, `cluster_group_common.cuh`, `cluster_group_utils.py` | Clustered kernel suite covering DSMEM-enabled and DSMEM-free thread-block clusters. |
 | `baseline_cluster_multicast.py`, `optimized_cluster_multicast.py`, `tma_multicast_baseline.cu`, `tma_multicast_cluster.cu` | Cluster multicast GEMM example (baseline vs cluster multicast) wrapped as CUDA-binary harness benchmarks. |
@@ -39,3 +42,4 @@ python -m cli.aisp bench run --targets ch10 --profile minimal
 ## Notes
 - `cufile_gds_example.py` demonstrates integrating GPUDirect Storage into tensor-core pipelines for IO-heavy training loops.
 - `requirements_cufile.txt` holds the optional `cufile` wheel; install it only on hosts with GPUDirect Storage enabled.
+- The CUTLASS-style warp-specialization pair provides a reference implementation aligned with `sm100_mma_array_warpspecialized` for performance comparison.

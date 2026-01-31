@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
@@ -66,6 +67,7 @@ void fill_matrix(float* data, int elements, float value) {
 }
 
 int main() {
+    NVTX_RANGE("main");
     cublasHandle_t handle;
     CUBLAS_CHECK(cublasCreate(&handle));
     CUBLAS_CHECK(cublasSetMathMode(handle, CUBLAS_TF32_TENSOR_OP_MATH));
@@ -79,6 +81,7 @@ int main() {
     std::vector<float*> h_A(batch_count), h_B(batch_count), h_C(batch_count);
     
     for (int i = 0; i < batch_count; ++i) {
+        NVTX_RANGE("setup");
         CUDA_CHECK(cudaMalloc(&h_A[i], m * k * sizeof(float)));
         CUDA_CHECK(cudaMalloc(&h_B[i], k * n * sizeof(float)));
         CUDA_CHECK(cudaMalloc(&h_C[i], m * n * sizeof(float)));
@@ -114,6 +117,7 @@ int main() {
     
     CUDA_CHECK(cudaEventRecord(start));
     for (int iter = 0; iter < 100; ++iter) {
+        NVTX_RANGE("compute_math");
         CUBLAS_CHECK(cublasSgemmBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N,
                                         n, m, k, &alpha,
                                         (const float**)d_B_array, n,
@@ -137,6 +141,7 @@ int main() {
     
     // Cleanup
     for (int i = 0; i < batch_count; ++i) {
+        NVTX_RANGE("cleanup");
         CUDA_CHECK(cudaFree(h_A[i]));
         CUDA_CHECK(cudaFree(h_B[i]));
         CUDA_CHECK(cudaFree(h_C[i]));

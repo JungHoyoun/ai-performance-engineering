@@ -147,6 +147,8 @@ Profiling with Nsight Systems, Nsight Compute, and torch.profiler.
 | `compare(chapter)` | Compare baseline vs optimized | `aisp profile compare` | `aisp_profile_compare` |
 | `list_profiles()` | List available profile pairs | - | - |
 
+**MCP profiling captures include metrics JSON:** `aisp_profile_nsys` returns `nsys_metrics`, `aisp_profile_ncu` returns `ncu_metrics`, `aisp_profile_torch` returns `torch_metrics` (and `report` alias), and `aisp_profile_hta` includes `nsys_metrics`. Use these payloads to analyze regressions and bottleneck shifts.
+
 **Python API:**
 ```python
 engine.profile.flame_graph()      # Flame graph data
@@ -414,7 +416,6 @@ explanation = engine.ai.ask(f"Explain these bottlenecks: {bottlenecks}")
 # Python:    engine.optimize.recommend(model_size=70, gpus=8)
 # MCP:       aisp_recommend with {"model_size": 70, "gpus": 8}
 ```
-
 
 
 

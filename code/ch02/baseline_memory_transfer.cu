@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <vector>
 #include <chrono>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call) \
   do { \
@@ -40,6 +41,7 @@ __global__ void traditional_process_kernel(
 }
 
 int main() {
+    NVTX_RANGE("main");
     const int N = 100 * 1024 * 1024;  // 100M elements
     const int iterations = 100;
     
@@ -53,6 +55,7 @@ int main() {
     
     // Initialize input
     for (int i = 0; i < N; i++) {
+        NVTX_RANGE("warmup");
         h_input[i] = float(i % 1000) / 1000.0f;
     }
     
@@ -72,6 +75,7 @@ int main() {
     auto start = std::chrono::high_resolution_clock::now();
     
     for (int iter = 0; iter < iterations; iter++) {
+        NVTX_RANGE("transfer_sync:h2d");
         // Explicit H2D copy (PCIe bottleneck)
         CUDA_CHECK(cudaMemcpy(d_input, h_input.data(), N * sizeof(float), cudaMemcpyHostToDevice));
         

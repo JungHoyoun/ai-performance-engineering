@@ -6,6 +6,7 @@
 #include <cooperative_groups.h>
 #include <cstdlib>
 #include <vector>
+#include "../core/common/nvtx_utils.cuh"
 
 namespace cg = cooperative_groups;
 
@@ -56,6 +57,7 @@ static void check(cudaError_t err) {
 }
 
 int main() {
+    NVTX_RANGE("main");
     cudaDeviceProp prop{};
     check(cudaGetDeviceProperties(&prop, 0));
 

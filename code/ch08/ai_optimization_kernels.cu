@@ -3,6 +3,7 @@
 #include <torch/extension.h>
 
 #include "ai_optimization_common.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 namespace ch08 {
 

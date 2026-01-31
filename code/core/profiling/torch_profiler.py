@@ -23,7 +23,7 @@ logger = get_logger(__name__)
 class TorchProfilerAutomation:
     """Run torch.profiler captures for an arbitrary Python script."""
 
-    def __init__(self, output_root: Path = Path("artifacts/torch-profiles")):
+    def __init__(self, output_root: Path = Path("artifacts/runs")):
         self.output_root = output_root
         self.output_root.mkdir(parents=True, exist_ok=True)
         self.last_error: Optional[str] = None

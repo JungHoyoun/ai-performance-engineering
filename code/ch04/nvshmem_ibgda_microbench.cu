@@ -28,6 +28,7 @@
 #include <chrono>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CHECK_CUDA(cmd)                                                         \
     do {                                                                        \
@@ -81,6 +82,7 @@ Options parse_args(int argc, char** argv) {
     constexpr const char kProxyPenaltyPrefix[] = "--proxy-penalty-ms=";
     constexpr size_t kProxyPenaltyPrefixLen = sizeof(kProxyPenaltyPrefix) - 1;
     for (int i = 1; i < argc; ++i) {
+        NVTX_RANGE("iteration");
         if (std::strncmp(argv[i], "--bytes=", 8) == 0) {
             opts.bytes = std::strtoull(argv[i] + 8, nullptr, 10);
         } else if (std::strncmp(argv[i], "--iters=", 8) == 0) {
@@ -110,6 +112,7 @@ Options parse_args(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
+    NVTX_RANGE("main");
     Options opts = parse_args(argc, argv);
 
     int dev_count = 0;

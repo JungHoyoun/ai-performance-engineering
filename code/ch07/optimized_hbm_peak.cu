@@ -6,6 +6,7 @@
 #include <stdlib.h>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call) \
     do { \
@@ -42,6 +43,7 @@ __global__ void hbm_peak_copy(const Float8* __restrict__ src,
 }
 
 int main() {
+    NVTX_RANGE("main");
     const size_t target_bytes = 1024ULL * 1024 * 1024;  // 1 GB
     const size_t n_floats = target_bytes / sizeof(float);
     const size_t n_vec8 = n_floats / 8;
@@ -58,6 +60,7 @@ int main() {
     const int iterations = 10;
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; i++) {
+        NVTX_RANGE("compute_kernel:hbm_peak_copy");
         hbm_peak_copy<<<2048, 512>>>(d_src, d_dst, n_vec8);
     }
     CUDA_CHECK(cudaEventRecord(stop));

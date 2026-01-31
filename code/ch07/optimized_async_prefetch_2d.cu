@@ -11,6 +11,7 @@
 
 #if CUDART_VERSION >= 13000
 #include <cuda.h>
+#include "../core/common/nvtx_utils.cuh"
 #define TMA_CUDA13_AVAILABLE 1
 #else
 #define TMA_CUDA13_AVAILABLE 0
@@ -91,6 +92,7 @@ __global__ void tma_copy_2d_kernel(const __grid_constant__ CUtensorMap in_desc,
 #endif
 
 int main() {
+    NVTX_RANGE("main");
 #if !TMA_CUDA13_AVAILABLE
     std::printf("SKIPPED: Requires CUDA 13.0+.\n");
     return 3;
@@ -151,6 +153,7 @@ int main() {
     constexpr int kIters = 10;
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < kIters; ++i) {
+        NVTX_RANGE("compute_kernel");
         tma_copy_2d_kernel<TILE_M, TILE_N><<<grid, block>>>(in_desc, out_desc, M, N);
     }
     CUDA_CHECK(cudaEventRecord(stop));
@@ -164,6 +167,7 @@ int main() {
 
     bool ok = true;
     for (std::size_t idx = 0; idx < h_out.size(); ++idx) {
+        NVTX_RANGE("iteration");
         if (h_out[idx] != 1.0f) {
             std::printf("Mismatch at %zu: got %f expected %f\n", idx, h_out[idx], 1.0f);
             ok = false;

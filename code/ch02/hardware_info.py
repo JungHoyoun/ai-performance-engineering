@@ -30,6 +30,7 @@ import GPUtil
 import psutil
 import torch
 import torch.cuda.nvtx as nvtx
+from core.profiling.nvtx_helper import standardize_nvtx_label
 
 from core.harness.hardware_capabilities import (
     detect_capabilities,
@@ -223,7 +224,7 @@ def benchmark_memory_bandwidth() -> None:
             torch.cuda.synchronize()
             start_time = time.time()
 
-            with nvtx.range(f"gemm_{size}"):
+            with nvtx.range(standardize_nvtx_label(f"compute_math:gemm_{size}")):
                 active_iters = 5
                 for _ in range(active_iters):
                     _ = torch.mm(a, b)
@@ -273,7 +274,7 @@ def benchmark_tensor_operations() -> None:
             torch.cuda.synchronize()
             start_time = time.time()
 
-            with nvtx.range(f"tensor_op_{op_name.lower().replace(' ', '_')}"):
+            with nvtx.range(standardize_nvtx_label(f"compute_math:tensor_op_{op_name.lower().replace(' ', '_')}")):
                 active_iters = 5
                 for _ in range(active_iters):
                     op_func(a, b)

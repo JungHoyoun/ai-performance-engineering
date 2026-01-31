@@ -7,6 +7,7 @@
 
 #include "blackwell_guard.cuh"
 #include "threshold_common.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 using namespace ch08;
 
@@ -33,6 +34,7 @@ bool ensure_blackwell(int& exit_code) {
 }  // namespace
 
 int main() {
+    NVTX_RANGE("main");
     int skip_code = 0;
     if (!ensure_blackwell(skip_code)) {
         return skip_code;
@@ -46,6 +48,7 @@ int main() {
     std::mt19937 gen(42);
     std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
     for (int i = 0; i < count; ++i) {
+        NVTX_RANGE("setup");
         h_input[i] = dist(gen);
     }
 
@@ -61,6 +64,7 @@ int main() {
     cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
 
     for (int i = 0; i < 5; ++i) {
+        NVTX_RANGE("transfer_async:h2d");
         cudaMemcpyAsync(d_input, h_input.data(), bytes, cudaMemcpyHostToDevice, stream);
         cudaStreamSynchronize(stream);
         launch_threshold_naive(d_input, d_output, threshold, count, stream);
@@ -72,6 +76,7 @@ int main() {
     const int iterations = 50;
     cudaEventRecord(start);
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("transfer_async:h2d");
         cudaMemcpyAsync(d_input, h_input.data(), bytes, cudaMemcpyHostToDevice, stream);
         cudaStreamSynchronize(stream);
         launch_threshold_naive(d_input, d_output, threshold, count, stream);

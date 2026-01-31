@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 
 #define CUDA_CHECK(call)                                                       \
@@ -161,6 +162,7 @@ void tma_nomulticast_gemm_kernel(
 }
 
 int main(int argc, char** argv) {
+    NVTX_RANGE("main");
     cudaDeviceProp prop{};
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
 
@@ -200,8 +202,14 @@ int main(int argc, char** argv) {
 
     std::vector<float> h_A(static_cast<size_t>(M) * K);
     std::vector<float> h_B(static_cast<size_t>(K) * N);
-    for (size_t i = 0; i < h_A.size(); ++i) h_A[i] = (float)(rand() % 100) / 100.0f;
-    for (size_t i = 0; i < h_B.size(); ++i) h_B[i] = (float)(rand() % 100) / 100.0f;
+    for (size_t i = 0; i < h_A.size() {
+        NVTX_RANGE("setup");
+        ; ++i) h_A[i] = (float)(rand() % 100) / 100.0f;
+    }
+    for (size_t i = 0; i < h_B.size() {
+        NVTX_RANGE("setup");
+        ; ++i) h_B[i] = (float)(rand() % 100) / 100.0f;
+    }
 
     CUDA_CHECK(cudaMemcpy(d_A, h_A.data(), bytes_A, cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_B, h_B.data(), bytes_B, cudaMemcpyHostToDevice));
@@ -211,6 +219,7 @@ int main(int argc, char** argv) {
               (N + TILE_N - 1) / TILE_N);
 
     cudaLaunchAttribute attrs[1]{};
+        NVTX_RANGE("tile");
     attrs[0].id = cudaLaunchAttributeClusterDimension;
     attrs[0].val.clusterDim.x = CLUSTER_M;
     attrs[0].val.clusterDim.y = CLUSTER_N;
@@ -240,6 +249,7 @@ int main(int argc, char** argv) {
     const int iterations = 20;
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("iteration");
         CUDA_CHECK(cudaLaunchKernelEx(&config, tma_nomulticast_gemm_kernel, d_A, d_B, d_C, M, N, K));
     }
     CUDA_CHECK(cudaEventRecord(stop));
@@ -261,6 +271,7 @@ int main(int argc, char** argv) {
     CUDA_CHECK(cudaMemcpy(h_C.data(), d_C, bytes_C, cudaMemcpyDeviceToHost));
     double checksum = 0.0;
     for (float v : h_C) {
+        NVTX_RANGE("verify");
         checksum += static_cast<double>(v);
     }
     VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));

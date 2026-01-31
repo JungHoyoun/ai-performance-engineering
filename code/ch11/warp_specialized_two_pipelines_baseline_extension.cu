@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "baseline_warp_specialized_two_pipelines_common.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                             \
     do {                                                                             \
@@ -37,12 +38,14 @@ torch::Tensor baseline_warp_specialized_multistream_forward(
     num_streams = std::max(1, num_streams);
     std::vector<cudaStream_t> streams(num_streams);
     for (int i = 0; i < num_streams; ++i) {
+        NVTX_RANGE("tile");
         CUDA_CHECK(cudaStreamCreateWithFlags(&streams[i], cudaStreamNonBlocking));
     }
 
     const int tiles_per_stream = (tiles_total + num_streams - 1) / num_streams;
 
     for (int stream_idx = 0; stream_idx < num_streams; ++stream_idx) {
+        NVTX_RANGE("tile");
         const int tile_start = stream_idx * tiles_per_stream;
         if (tile_start >= tiles_total) {
             break;
@@ -62,6 +65,7 @@ torch::Tensor baseline_warp_specialized_multistream_forward(
     }
 
     for (auto stream : streams) {
+        NVTX_RANGE("tile");
         CUDA_CHECK(cudaStreamSynchronize(stream));
         CUDA_CHECK(cudaStreamDestroy(stream));
     }

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
@@ -76,6 +77,7 @@ __global__ void baseline_bulk_copy_kernel(const float* __restrict__ src,
 }  // namespace
 
 int main() {
+    NVTX_RANGE("main");
     const int width = 2048;
     const int height = 2048;
     const int ld = width;
@@ -83,6 +85,7 @@ int main() {
 
     std::vector<float> h_src(width * height);
     for (int i = 0; i < width * height; ++i) {
+        NVTX_RANGE("setup");
         h_src[i] = static_cast<float>((i % 127) - 63) * 0.01f;
     }
 
@@ -107,6 +110,7 @@ int main() {
 
     CUDA_CHECK(cudaEventRecord(start));
     for (int iter = 0; iter < ITERATIONS; ++iter) {
+        NVTX_RANGE("compute_kernel:baseline_bulk_copy_kernel");
         baseline_bulk_copy_kernel<<<grid, block>>>(d_src, d_dst, width, height, ld);
         CUDA_CHECK(cudaGetLastError());
     }

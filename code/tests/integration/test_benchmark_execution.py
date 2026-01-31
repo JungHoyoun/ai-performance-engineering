@@ -257,6 +257,7 @@ class TestBenchmarkExecutionPipeline:
                 enable_profiling=False,
                 enforce_environment_validation=False,
                 single_gpu=False,
+                required_world_size=1,
             )
             harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
             with pytest.raises(RuntimeError, match="World size mismatch"):

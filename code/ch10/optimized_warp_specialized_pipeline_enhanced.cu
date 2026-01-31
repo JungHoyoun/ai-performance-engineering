@@ -13,6 +13,7 @@
 
 #include "../core/common/headers/arch_detection.cuh"
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 namespace cg = cooperative_groups;
 
@@ -179,6 +180,7 @@ void run_warp_specialized(int tiles,
   constexpr int iterations = 10;
   CUDA_CHECK(cudaEventRecord(start));
   for (int i = 0; i < iterations; ++i) {
+      NVTX_RANGE("compute_kernel:smem");
     warp_specialized_kernel<TILE><<<grid, block, shared_bytes>>>(d_A, d_B, d_C, tiles);
   }
   CUDA_CHECK(cudaEventRecord(stop));
@@ -199,6 +201,7 @@ void run_warp_specialized(int tiles,
 }
 
 int main() {
+    NVTX_RANGE("main");
   const auto& limits = cuda_arch::get_architecture_limits();
   if (!limits.supports_clusters) {
     std::printf("⚠️  Skipping warp-specialized pipeline: device lacks cluster/pipeline support.\n");
@@ -232,17 +235,20 @@ int main() {
 #ifdef VERIFY
   double checksum = 0.0;
   for (float v : h_C) {
+      NVTX_RANGE("verify");
     checksum += static_cast<double>(v);
   }
   VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
 #endif
 
   for (size_t i = 0; i < elems; ++i) {
+      NVTX_RANGE("verify");
     h_ref[i] = std::sqrt(h_A[i] * h_A[i] + h_B[i] * h_B[i]);
   }
 
   double max_err = 0.0;
   for (size_t i = 0; i < elems; ++i) {
+      NVTX_RANGE("verify");
     max_err = std::max(max_err, static_cast<double>(std::abs(h_C[i] - h_ref[i])));
   }
   std::printf("Selected tile size: %d (shared-memory budget %.1f KB)\n",

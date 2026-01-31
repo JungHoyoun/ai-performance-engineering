@@ -5,6 +5,7 @@
 
 #include "../core/common/headers/cuda_helpers.cuh"
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 constexpr int N = 1 << 20;
 
@@ -30,6 +31,7 @@ __global__ void lookupNaive(const float* table, const int* indices, float* out, 
 }
 
 int main() {
+    NVTX_RANGE("main");
   float *h_table, *h_out;
   int *h_indices;
   CUDA_CHECK(cudaMallocHost(&h_table, N * sizeof(float)));
@@ -37,6 +39,7 @@ int main() {
   CUDA_CHECK(cudaMallocHost(&h_indices, N * sizeof(int)));
 
   for (int i = 0; i < N; ++i) {
+      NVTX_RANGE("setup");
     h_table[i] = static_cast<float>(i);
     h_indices[i] = (i * 3) % N;
   }
@@ -58,6 +61,7 @@ int main() {
 
   CUDA_CHECK(cudaEventRecord(start));
   for (int iter = 0; iter < ITERATIONS; ++iter) {
+      NVTX_RANGE("compute_kernel:lookupNaive");
     lookupNaive<<<grid, block>>>(d_table, d_indices, d_out, N);
   }
   CUDA_CHECK(cudaEventRecord(stop));

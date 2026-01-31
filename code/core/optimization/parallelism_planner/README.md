@@ -124,7 +124,7 @@ python -m cli.aisp ops distributed validate --model-params 70 --tp 4 --dp 1
 python -m cli.aisp ops distributed profile --model-params 70 --workload pretraining
 
 # Launch dashboard (frontend/backend)
-python -m dashboard.api.server --port 6970
+python -m dashboard.api.server serve --port 6970
 ```
 
 ### Python API
@@ -265,7 +265,7 @@ The parallelism advisor is integrated with the dashboard:
 
 ```bash
 # Start dashboard
-python -m dashboard.api.server
+python -m dashboard.api.server serve
 
 # Core API endpoints:
 # GET /api/parallelism/topology - Get hardware topology

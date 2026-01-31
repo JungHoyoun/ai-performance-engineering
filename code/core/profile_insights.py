@@ -15,7 +15,7 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def _extract_ncu_sources(ncu_path: Path, limit: int = 12) -> List[Dict[str, str]]:
@@ -453,6 +453,10 @@ def compare_nsys_files(
     optimized_nsys = list(profiles_dir.glob("*optimized*.nsys-rep"))
 
     if not baseline_nsys or not optimized_nsys:
+        baseline_nsys = list(profiles_dir.rglob("*baseline*.nsys-rep"))
+        optimized_nsys = list(profiles_dir.rglob("*optimized*.nsys-rep"))
+
+    if not baseline_nsys or not optimized_nsys:
         pair_dir, error = _select_pair_dir(profiles_dir, pair_key, label="nsys")
         if error:
             return error
@@ -533,6 +537,14 @@ def compare_ncu_files(
 
     baseline_csv = list(profiles_dir.glob("*baseline*ncu*.csv"))
     optimized_csv = list(profiles_dir.glob("*optimized*ncu*.csv"))
+
+    if not baseline_ncu or not optimized_ncu:
+        baseline_ncu = list(profiles_dir.rglob("*baseline*.ncu-rep"))
+        optimized_ncu = list(profiles_dir.rglob("*optimized*.ncu-rep"))
+
+    if not baseline_csv or not optimized_csv:
+        baseline_csv = list(profiles_dir.rglob("*baseline*ncu*.csv"))
+        optimized_csv = list(profiles_dir.rglob("*optimized*ncu*.csv"))
 
     if (not baseline_ncu or not optimized_ncu) and (not baseline_csv or not optimized_csv):
         pair_dir, error = _select_pair_dir(profiles_dir, pair_key, label="ncu")
@@ -805,9 +817,11 @@ def _extract_nsys_kernel_stats(nsys_path: Path) -> Dict[str, Any]:
                     name = row.get('Name', '')
                     if name:
                         try:
-                            # Shorten kernel names for display
+                            # Shorten kernel names for display while retaining full name.
                             short_name = name.split('<')[0].split('(')[0][-40:]
                             kernel_stats[short_name] = {
+                                'full_name': name,
+                                'short_name': short_name,
                                 'time_pct': float(row.get('Time (%)', 0) or 0),
                                 'total_time_ns': int(float(row.get('Total Time (ns)', 0) or 0)),
                                 'instances': int(row.get('Instances', 0) or 0),
@@ -818,6 +832,341 @@ def _extract_nsys_kernel_stats(nsys_path: Path) -> Dict[str, Any]:
             return kernel_stats
     except Exception:
         return {}
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(str(value).replace(",", ""))
+    except (ValueError, TypeError):
+        return None
+
+
+def _select_profile_pair_paths(
+    profiles_dir: Path,
+    pair_key: Optional[str],
+    suffix: str,
+    label: str,
+) -> tuple[Optional[Path], Optional[Path], Optional[str], Optional[Dict[str, Any]]]:
+    baseline_files = list(profiles_dir.glob(f"*baseline*{suffix}"))
+    optimized_files = list(profiles_dir.glob(f"*optimized*{suffix}"))
+
+    if not baseline_files or not optimized_files:
+        baseline_files = list(profiles_dir.rglob(f"*baseline*{suffix}"))
+        optimized_files = list(profiles_dir.rglob(f"*optimized*{suffix}"))
+
+    if not baseline_files or not optimized_files:
+        pair_dir, error = _select_pair_dir(profiles_dir, pair_key, label=label)
+        if error:
+            return None, None, None, error
+        if pair_dir:
+            baseline_files = list(pair_dir.glob(f"*baseline*{suffix}"))
+            optimized_files = list(pair_dir.glob(f"*optimized*{suffix}"))
+
+    if not baseline_files or not optimized_files:
+        return None, None, None, None
+
+    pair, selected_key, error = _select_profile_pair(
+        baseline_files,
+        optimized_files,
+        pair_key=pair_key,
+        label=label,
+    )
+    if error:
+        return None, None, None, error
+    if not pair:
+        return None, None, None, None
+
+    baseline_path, optimized_path = pair
+    return baseline_path, optimized_path, selected_key or pair_key, None
+
+
+def _top_kernel_summary(kernel_stats: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not kernel_stats:
+        return None
+    best_key = max(
+        kernel_stats.keys(),
+        key=lambda k: kernel_stats.get(k, {}).get("total_time_ns", 0),
+    )
+    payload = kernel_stats.get(best_key, {})
+    return {
+        "name": payload.get("full_name") or best_key,
+        "total_time_ns": payload.get("total_time_ns", 0),
+        "avg_ns": payload.get("avg_ns", 0),
+        "instances": payload.get("instances", 0),
+    }
+
+
+def _summarize_ncu_side_by_side(ncu_comparison: Dict[str, Any]) -> Dict[str, Any]:
+    if "metrics" in ncu_comparison:
+        metrics: List[Dict[str, Any]] = []
+        for row in ncu_comparison.get("metrics", []):
+            name = row.get("name")
+            if not name:
+                continue
+            baseline_val = _safe_float(row.get("baseline"))
+            optimized_val = _safe_float(row.get("optimized"))
+            delta = None
+            ratio = None
+            if baseline_val is not None and optimized_val is not None:
+                delta = optimized_val - baseline_val
+                ratio = (optimized_val / baseline_val) if baseline_val != 0 else None
+            metrics.append(
+                {
+                    "name": name,
+                    "baseline": baseline_val,
+                    "optimized": optimized_val,
+                    "delta": delta,
+                    "ratio": ratio,
+                }
+            )
+        return {"kernel": None, "metrics": metrics}
+
+    kernel_rows = ncu_comparison.get("kernel_comparison") or []
+    if not kernel_rows:
+        return {"kernel": None, "metrics": []}
+
+    top_kernel = kernel_rows[0]
+    metrics_payload: Dict[str, Any] = top_kernel.get("metrics") or {}
+    metrics = []
+    for name, payload in metrics_payload.items():
+        metrics.append(
+            {
+                "name": name,
+                "baseline": payload.get("baseline"),
+                "optimized": payload.get("optimized"),
+                "delta": payload.get("delta"),
+                "ratio": payload.get("ratio"),
+            }
+        )
+    return {"kernel": top_kernel.get("kernel"), "metrics": metrics}
+
+
+def generate_side_by_side_report(
+    profiles_dir: Path,
+    pair_key: Optional[str] = None,
+    report_dir: Optional[Path] = None,
+    ncu_comparison: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Generate side-by-side Nsight Systems + Nsight Compute JSON report with narrative."""
+    if not profiles_dir.exists():
+        return {"success": False, "error": f"profiles_dir not found: {profiles_dir}"}
+
+    pair_dir, error = _select_pair_dir(profiles_dir, pair_key, label="side-by-side")
+    if error:
+        return {"success": False, **error}
+    search_dir = pair_dir or profiles_dir
+
+    baseline_nsys, optimized_nsys, selected_key, nsys_error = _select_profile_pair_paths(
+        search_dir, pair_key, ".nsys-rep", "nsys"
+    )
+    if nsys_error:
+        return {"success": False, **nsys_error}
+    if not baseline_nsys or not optimized_nsys:
+        return {"success": False, "error": "No baseline/optimized nsys profiles found"}
+
+    baseline_ncu, optimized_ncu, _, ncu_error = _select_profile_pair_paths(
+        search_dir, pair_key, ".ncu-rep", "ncu"
+    )
+    if ncu_error:
+        return {"success": False, **ncu_error}
+    if not baseline_ncu or not optimized_ncu:
+        return {"success": False, "error": "No baseline/optimized ncu profiles found"}
+
+    baseline_api = _extract_nsys_cuda_api_stats(baseline_nsys)
+    optimized_api = _extract_nsys_cuda_api_stats(optimized_nsys)
+    if not baseline_api or not optimized_api:
+        return {"success": False, "error": "Failed to extract nsys cuda_api_sum stats"}
+
+    baseline_kernel_stats = _extract_nsys_kernel_stats(baseline_nsys)
+    optimized_kernel_stats = _extract_nsys_kernel_stats(optimized_nsys)
+    if not baseline_kernel_stats or not optimized_kernel_stats:
+        return {"success": False, "error": "Failed to extract nsys cuda_gpu_kern_sum stats"}
+
+    if ncu_comparison is None:
+        ncu_comparison = compare_ncu_files(search_dir, pair_key=pair_key)
+    if not ncu_comparison:
+        return {"success": False, "error": "No comparable ncu metrics found"}
+    if ncu_comparison.get("error"):
+        return {"success": False, **ncu_comparison}
+
+    ncu_summary = _summarize_ncu_side_by_side(ncu_comparison)
+
+    api_total_baseline_ns = sum(v.get("total_time_ns", 0) for v in baseline_api.values())
+    api_total_optimized_ns = sum(v.get("total_time_ns", 0) for v in optimized_api.values())
+
+    api_priority = [
+        "cudaMemcpy",
+        "cudaMemcpyAsync",
+        "cudaMalloc",
+        "cudaFree",
+        "cudaHostAlloc",
+        "cudaFreeHost",
+        "cudaDeviceSynchronize",
+        "cudaLaunchKernel",
+    ]
+    api_rows: List[Dict[str, Any]] = []
+    for name in api_priority:
+        b = baseline_api.get(name)
+        o = optimized_api.get(name)
+        if not b and not o:
+            api_rows.append(
+                {
+                    "name": name,
+                    "baseline_total_ns": None,
+                    "baseline_total_s": None,
+                    "baseline_calls": None,
+                    "baseline_avg_ns": None,
+                    "baseline_avg_ms": None,
+                    "optimized_total_ns": None,
+                    "optimized_total_s": None,
+                    "optimized_calls": None,
+                    "optimized_avg_ns": None,
+                    "optimized_avg_ms": None,
+                    "delta_ns": None,
+                    "delta_s": None,
+                    "delta_pct": None,
+                }
+            )
+            continue
+        b_total_ns = (b or {}).get("total_time_ns") if b else None
+        o_total_ns = (o or {}).get("total_time_ns") if o else None
+        b_avg_ns = (b or {}).get("avg_ns") if b else None
+        o_avg_ns = (o or {}).get("avg_ns") if o else None
+        delta_ns = None
+        delta_pct = None
+        if isinstance(b_total_ns, (int, float)) and isinstance(o_total_ns, (int, float)):
+            delta_ns = o_total_ns - b_total_ns
+            delta_pct = ((o_total_ns - b_total_ns) / b_total_ns * 100) if b_total_ns else None
+        api_rows.append(
+            {
+                "name": name,
+                "baseline_total_ns": b_total_ns,
+                "baseline_total_s": (b_total_ns / 1e9) if isinstance(b_total_ns, (int, float)) else None,
+                "baseline_calls": (b or {}).get("num_calls") if b else None,
+                "baseline_avg_ns": b_avg_ns,
+                "baseline_avg_ms": (b_avg_ns / 1e6) if isinstance(b_avg_ns, (int, float)) else None,
+                "optimized_total_ns": o_total_ns,
+                "optimized_total_s": (o_total_ns / 1e9) if isinstance(o_total_ns, (int, float)) else None,
+                "optimized_calls": (o or {}).get("num_calls") if o else None,
+                "optimized_avg_ns": o_avg_ns,
+                "optimized_avg_ms": (o_avg_ns / 1e6) if isinstance(o_avg_ns, (int, float)) else None,
+                "delta_ns": delta_ns,
+                "delta_s": (delta_ns / 1e9) if isinstance(delta_ns, (int, float)) else None,
+                "delta_pct": delta_pct,
+            }
+        )
+
+    base_kernel = _top_kernel_summary(baseline_kernel_stats)
+    opt_kernel = _top_kernel_summary(optimized_kernel_stats)
+    kernel_summary = None
+    if base_kernel or opt_kernel:
+        kernel_summary = {
+            "name": (base_kernel or opt_kernel or {}).get("name", ""),
+            "baseline_total_ns": (base_kernel or {}).get("total_time_ns", 0),
+            "baseline_avg_ns": (base_kernel or {}).get("avg_ns", 0),
+            "optimized_total_ns": (opt_kernel or {}).get("total_time_ns", 0),
+            "optimized_avg_ns": (opt_kernel or {}).get("avg_ns", 0),
+            "instances": (base_kernel or opt_kernel or {}).get("instances", 0),
+        }
+
+    narrative_parts: List[str] = []
+    api_delta_candidates = [
+        (row["name"], row.get("delta_s"))
+        for row in api_rows
+        if isinstance(row.get("delta_s"), (int, float))
+    ]
+    if api_delta_candidates:
+        top_api = sorted(
+            api_delta_candidates, key=lambda item: abs(item[1] or 0), reverse=True
+        )[:3]
+        api_desc = ", ".join(
+            f"{name} {delta_s:+.3f}s" for name, delta_s in top_api if delta_s is not None
+        )
+        if api_desc:
+            narrative_parts.append(f"Top CUDA API time deltas: {api_desc}.")
+
+    if kernel_summary:
+        b_total = kernel_summary.get("baseline_total_ns", 0)
+        o_total = kernel_summary.get("optimized_total_ns", 0)
+        if isinstance(b_total, (int, float)) and isinstance(o_total, (int, float)) and b_total:
+            ratio = o_total / b_total
+            narrative_parts.append(
+                "Kernel time ratio: {ratio:.3f}x ({b_ms:.3f}ms -> {o_ms:.3f}ms).".format(
+                    ratio=ratio,
+                    b_ms=b_total / 1e6,
+                    o_ms=o_total / 1e6,
+                )
+            )
+
+    ncu_metrics = ncu_summary.get("metrics", [])
+    metric_deltas: List[Tuple[str, float, Optional[float]]] = []
+    for metric in ncu_metrics:
+        name = metric.get("name")
+        ratio = metric.get("ratio")
+        delta = metric.get("delta")
+        score = None
+        if isinstance(ratio, (int, float)):
+            score = abs(ratio - 1.0)
+        elif isinstance(delta, (int, float)):
+            score = abs(delta)
+        if name and score is not None:
+            metric_deltas.append((name, score, ratio))
+    if metric_deltas:
+        top_metrics = sorted(metric_deltas, key=lambda item: item[1], reverse=True)[:3]
+        metric_desc = []
+        for name, _, ratio in top_metrics:
+            metric = next((m for m in ncu_metrics if m.get("name") == name), {})
+            delta = metric.get("delta")
+            if isinstance(ratio, (int, float)):
+                metric_desc.append(f"{name} {ratio:.3f}x")
+            elif isinstance(delta, (int, float)):
+                metric_desc.append(f"{name} {delta:+.3f}")
+        if metric_desc:
+            narrative_parts.append("Top NCU metric deltas: " + ", ".join(metric_desc) + ".")
+
+    narrative = " ".join(narrative_parts) if narrative_parts else "Profile comparison available."
+
+    report_base = report_dir or (search_dir / "reports")
+    report_base.mkdir(parents=True, exist_ok=True)
+    slug_source = selected_key or _normalize_profile_name(baseline_nsys.name) or "profile"
+    slug = re.sub(r"[^a-z0-9_]+", "_", slug_source.lower()).strip("_") or "profile"
+    report_path = report_base / f"{slug}_side_by_side.json"
+
+    side_by_side = {
+        "sources": {
+            "baseline_nsys": str(baseline_nsys),
+            "optimized_nsys": str(optimized_nsys),
+            "baseline_ncu": str(baseline_ncu),
+            "optimized_ncu": str(optimized_ncu),
+        },
+        "nsys": {
+            "api_total_baseline_ns": api_total_baseline_ns,
+            "api_total_optimized_ns": api_total_optimized_ns,
+            "api_rows": api_rows,
+            "kernel_summary": kernel_summary,
+        },
+        "ncu": {
+            "kernel": ncu_summary.get("kernel"),
+            "metrics": ncu_summary.get("metrics", []),
+        },
+    }
+
+    report_payload = {
+        "narrative": narrative,
+        "side_by_side": side_by_side,
+    }
+    report_path.write_text(json.dumps(report_payload, indent=2, default=str))
+
+    return {
+        "success": True,
+        "report_json_path": str(report_path),
+        "narrative": narrative,
+        "side_by_side": side_by_side,
+        "nsys_summary": side_by_side["nsys"],
+        "ncu_summary": side_by_side["ncu"],
+    }
 
 
 def _strip_profile_suffix(name: str) -> str:

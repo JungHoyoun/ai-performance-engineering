@@ -8,6 +8,7 @@
 #include "blackwell_guard.cuh"
 #include "threshold_common.cuh"
 #include "threshold_tma_kernel.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 using namespace ch08;
 
@@ -41,6 +42,7 @@ void check(cudaError_t err, const char* label) {
 }  // namespace
 
 int main() {
+    NVTX_RANGE("main");
     int skip_code = 0;
     if (!ensure_blackwell(skip_code)) {
         return skip_code;
@@ -54,6 +56,7 @@ int main() {
     std::mt19937 gen(42);
     std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
     for (int i = 0; i < count; ++i) {
+        NVTX_RANGE("setup");
         h_input[i] = dist(gen);
     }
 
@@ -68,6 +71,7 @@ int main() {
     cudaEventCreate(&stop);
 
     for (int i = 0; i < 5; ++i) {
+        NVTX_RANGE("warmup");
         check(
             launch_threshold_tma_pipeline(d_input, d_output, threshold, count, 0),
             "Warmup launch");
@@ -77,6 +81,7 @@ int main() {
     const int iterations = 50;
     cudaEventRecord(start);
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("iteration");
         check(
             launch_threshold_tma_pipeline(d_input, d_output, threshold, count, 0),
             "Benchmark launch");

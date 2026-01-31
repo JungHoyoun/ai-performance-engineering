@@ -23,6 +23,7 @@
 #include <numeric>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                       \
     do {                                                                       \
@@ -148,6 +149,7 @@ __global__ void baseline_final_reduction_kernel(
 //============================================================================
 
 int main() {
+    NVTX_RANGE("main");
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     
@@ -176,6 +178,7 @@ int main() {
     // Initialize with known pattern
     std::vector<float> h_input(N);
     for (int i = 0; i < N; ++i) {
+        NVTX_RANGE("warmup");
         h_input[i] = 1.0f;  // Sum should equal N
     }
     CUDA_CHECK(cudaMemcpy(d_input, h_input.data(), N * sizeof(float), cudaMemcpyHostToDevice));
@@ -194,6 +197,7 @@ int main() {
     
     // Warmup
     for (int i = 0; i < warmup; ++i) {
+        NVTX_RANGE("warmup");
         baseline_block_reduction_kernel<<<num_blocks, BLOCK_SIZE>>>(d_input, d_partial, N);
         baseline_final_reduction_kernel<<<num_clusters, BLOCK_SIZE>>>(d_partial, d_output, num_blocks, CLUSTER_SIZE);
     }
@@ -202,6 +206,7 @@ int main() {
     // Benchmark
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("compute_kernel:baseline_block_reduction_kernel");
         baseline_block_reduction_kernel<<<num_blocks, BLOCK_SIZE>>>(d_input, d_partial, N);
         baseline_final_reduction_kernel<<<num_clusters, BLOCK_SIZE>>>(d_partial, d_output, num_blocks, CLUSTER_SIZE);
     }

@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <vector>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
@@ -56,6 +57,7 @@ struct Options {
 Options ParseOptions(int argc, char** argv) {
   Options opts;
   for (int i = 1; i < argc; ++i) {
+      NVTX_RANGE("verify");
     const char* arg = argv[i];
     if (std::strcmp(arg, "--streams") == 0 && i + 1 < argc) {
       opts.streams = std::max(1, std::atoi(argv[++i]));
@@ -93,6 +95,7 @@ Options ParseOptions(int argc, char** argv) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    NVTX_RANGE("main");
   Options opts = ParseOptions(argc, argv);
 
   const size_t batch_bytes = static_cast<size_t>(opts.batch_elems) * sizeof(float);
@@ -105,6 +108,7 @@ int main(int argc, char** argv) {
   CUDA_CHECK(cudaMallocHost(&h_out, total_bytes));
 
   for (size_t i = 0; i < total_elems; ++i) {
+      NVTX_RANGE("setup");
     h_a[i] = static_cast<float>(i % 1024) * 0.25f;
     h_b[i] = static_cast<float>(i % 2048) * 0.5f;
     h_out[i] = -1.0f;
@@ -112,6 +116,7 @@ int main(int argc, char** argv) {
 
   std::vector<cudaStream_t> streams(opts.streams);
   for (auto& stream : streams) {
+      NVTX_RANGE("iteration");
     CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
   }
 
@@ -132,6 +137,7 @@ int main(int argc, char** argv) {
 
   std::vector<DeviceBuffers> device_buffers(opts.streams);
   for (int s = 0; s < opts.streams; ++s) {
+      NVTX_RANGE("iteration");
     CUDA_CHECK(cudaMallocAsync(reinterpret_cast<void**>(&device_buffers[s].a),
                                batch_bytes, streams[s]));
     CUDA_CHECK(cudaMallocAsync(reinterpret_cast<void**>(&device_buffers[s].b),
@@ -144,6 +150,7 @@ int main(int argc, char** argv) {
   dim3 grid((opts.batch_elems + block.x - 1) / block.x);
 
   for (int batch = 0; batch < opts.batches; ++batch) {
+      NVTX_RANGE("batch");
     const int stream_idx = batch % opts.streams;
     cudaStream_t stream = streams[stream_idx];
     DeviceBuffers& buffers = device_buffers[stream_idx];
@@ -167,6 +174,7 @@ int main(int argc, char** argv) {
   }
 
   for (auto& stream : streams) {
+      NVTX_RANGE("iteration");
     CUDA_CHECK(cudaStreamSynchronize(stream));
   }
 
@@ -177,6 +185,7 @@ int main(int argc, char** argv) {
   
   CUDA_CHECK(cudaEventRecord(start));
   for (int batch = 0; batch < opts.batches; ++batch) {
+      NVTX_RANGE("compute_kernel:fused_bias_kernel");
     const int stream_idx = batch % opts.streams;
     cudaStream_t stream = streams[stream_idx];
     DeviceBuffers& buffers = device_buffers[stream_idx];
@@ -195,6 +204,7 @@ int main(int argc, char** argv) {
   double max_error = 0.0;
   if (opts.verify) {
     for (size_t i = 0; i < total_elems; ++i) {
+        NVTX_RANGE("verify");
       double expected = (h_a[i] * 2.0 + h_b[i]) * 0.5;
       max_error = std::max(max_error, std::abs(expected - h_out[i]));
     }
@@ -209,11 +219,13 @@ int main(int argc, char** argv) {
               max_error);
 
   for (int s = 0; s < opts.streams; ++s) {
+      NVTX_RANGE("cleanup");
     CUDA_CHECK(cudaFreeAsync(device_buffers[s].a, streams[s]));
     CUDA_CHECK(cudaFreeAsync(device_buffers[s].b, streams[s]));
     CUDA_CHECK(cudaFreeAsync(device_buffers[s].out, streams[s]));
   }
   for (auto& stream : streams) {
+      NVTX_RANGE("cleanup");
     CUDA_CHECK(cudaStreamDestroy(stream));
   }
 

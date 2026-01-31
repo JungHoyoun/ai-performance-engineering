@@ -88,8 +88,8 @@ echo "   ℹ️  Skipped (core/scripts/ is treated as leaf-only; registry check 
 progress 6 "$TOTAL_STEPS" "Analyzing recent profile failures"
 echo ""
 echo "🚨 Recent Profile Session Analysis:"
-LATEST_SESSION=$(ls -t "$CODE_ROOT/output/" 2>/dev/null | head -1)
-if [[ -n "$LATEST_SESSION" && -f "$CODE_ROOT/output/$LATEST_SESSION/summary.json" ]]; then
+LATEST_SESSION=$(ls -t "$CODE_ROOT/artifacts/runs/profile_harness" 2>/dev/null | head -1)
+if [[ -n "$LATEST_SESSION" && -f "$CODE_ROOT/artifacts/runs/profile_harness/$LATEST_SESSION/summary.json" ]]; then
     echo "   Latest session: $LATEST_SESSION"
     # Count failures by type
     echo "   Results Summary:"
@@ -98,7 +98,7 @@ import json
 import sys
 from collections import defaultdict
 try:
-    with open('$CODE_ROOT/output/$LATEST_SESSION/summary.json', 'r') as f:
+    with open('$CODE_ROOT/artifacts/runs/profile_harness/$LATEST_SESSION/summary.json', 'r') as f:
         results = json.load(f)
     # Count by profiler and exit code
     counts = defaultdict(lambda: defaultdict(int))
@@ -146,10 +146,10 @@ echo "   ./setup.sh              # Install everything"
 echo "   make verify-cutlass     # Verify CUTLASS setup"
 echo "   make verify-deps        # Verify all dependencies"
 echo "   python benchmark.py     # Test all benchmarks"
-echo "   rm -rf ./output/        # Clean old profiling outputs"
+echo "   rm -rf ./artifacts/runs/profile_harness        # Clean old profiling outputs"
 echo ""
 echo "📖 For detailed failure analysis:"
-echo "   cat output/\$(ls -t output/ | head -1)/summary.json | jq '.[] | select(.exit_code != 0)'"
-echo "   tail -f profile_runs/harness/latest.log"
+echo "   cat artifacts/runs/profile_harness/\$(ls -t artifacts/runs/profile_harness | head -1)/summary.json | jq '.[] | select(.exit_code != 0)'"
+echo "   cat artifacts/runs/profile_harness/latest_failures.txt"
 echo ""
 echo "[OK] System validation complete!"

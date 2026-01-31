@@ -67,6 +67,7 @@
 #ifdef USE_NVSHMEM
 #include <nvshmem.h>
 #include <nvshmemx.h>
+#include "../core/common/nvtx_utils.cuh"
 #endif
 
 // ============================================================================
@@ -491,6 +492,7 @@ void test_row_parallel() {
 // ============================================================================
 
 int main(int argc, char** argv) {
+    NVTX_RANGE("main");
 #ifdef USE_NVSHMEM
     // Initialize NVSHMEM
     nvshmem_init();
@@ -509,6 +511,7 @@ int main(int argc, char** argv) {
     // Parse command line
     const char* test_type = "all";
     for (int i = 1; i < argc; ++i) {
+        NVTX_RANGE("iteration");
         if (strcmp(argv[i], "--test") == 0 && i + 1 < argc) {
             test_type = argv[i + 1];
             break;

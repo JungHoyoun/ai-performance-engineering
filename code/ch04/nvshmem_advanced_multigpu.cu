@@ -39,6 +39,7 @@
 #ifdef USE_NVSHMEM
 #include <nvshmem.h>
 #include <nvshmemx.h>
+#include "../core/common/nvtx_utils.cuh"
 #else
 // Dummy definitions for educational compilation
 #define nvshmem_init()
@@ -148,7 +149,10 @@ void benchmark_ring_allreduce(int my_pe, int n_pes) {
     
     // Initialize with PE ID
     float *h_data = (float *)malloc(N * sizeof(float));
-    for (int i = 0; i < N; i++) h_data[i] = (float)(my_pe + 1);
+    for (int i = 0; i < N; i++) {
+        NVTX_RANGE("warmup");
+        h_data[i] = (float)(my_pe + 1);
+    }
     CUDA_CHECK(cudaMemcpy(d_data, h_data, N * sizeof(float), cudaMemcpyHostToDevice));
     
     nvshmem_barrier_all();
@@ -179,6 +183,7 @@ void benchmark_ring_allreduce(int my_pe, int n_pes) {
     bool correct = fabs(h_data[0] - expected) < 0.01f;
     
     if (my_pe == 0) {
+        NVTX_RANGE("verify");
         printf("  Time: %ld μs\n", duration.count());
         printf("  Data size: %.2f MB\n", N * sizeof(float) / (1024.0 * 1024.0));
         printf("  Bandwidth: %.2f GB/s\n", 
@@ -270,7 +275,10 @@ void benchmark_double_buffered_allreduce(int my_pe, int n_pes) {
     float *d_buf1 = (float *)nvshmem_malloc(chunk_size * sizeof(float));
     
     float *h_data = (float *)malloc(N * sizeof(float));
-    for (int i = 0; i < N; i++) h_data[i] = (float)(my_pe + 1);
+    for (int i = 0; i < N; i++) {
+        NVTX_RANGE("transfer_sync");
+        h_data[i] = (float)(my_pe + 1);
+    }
     CUDA_CHECK(cudaMemcpy(d_data, h_data, N * sizeof(float), cudaMemcpyHostToDevice));
     
     nvshmem_barrier_all();
@@ -287,6 +295,7 @@ void benchmark_double_buffered_allreduce(int my_pe, int n_pes) {
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
     
     if (my_pe == 0) {
+        NVTX_RANGE("reduce");
         printf("  Time: %ld μs (reduce-scatter phase only)\n", duration.count());
         printf("  Expected speedup: 10-20%% vs basic ring\n");
         printf("  Technique: Non-blocking puts + overlap\n");
@@ -362,7 +371,10 @@ void benchmark_recursive_halving_doubling(int my_pe, int n_pes) {
     float *d_recv = (float *)nvshmem_malloc(N * sizeof(float));
     
     float *h_data = (float *)malloc(N * sizeof(float));
-    for (int i = 0; i < N; i++) h_data[i] = (float)(my_pe + 1);
+    for (int i = 0; i < N; i++) {
+        NVTX_RANGE("transfer_sync");
+        h_data[i] = (float)(my_pe + 1);
+    }
     CUDA_CHECK(cudaMemcpy(d_data, h_data, N * sizeof(float), cudaMemcpyHostToDevice));
     
     nvshmem_barrier_all();
@@ -376,12 +388,14 @@ void benchmark_recursive_halving_doubling(int my_pe, int n_pes) {
     
     // Recursive halving (reduce)
     for (int step = 0; step < log_n; step++) {
+        NVTX_RANGE("compute_kernel:recursive_exchange_kernel");
         recursive_exchange_kernel<<<blocks, threads>>>(d_data, d_recv, N, my_pe, step, true);
         CUDA_CHECK(cudaDeviceSynchronize());
     }
     
     // Recursive doubling (gather)
     for (int step = log_n - 1; step >= 0; step--) {
+        NVTX_RANGE("compute_kernel:recursive_exchange_kernel");
         recursive_exchange_kernel<<<blocks, threads>>>(d_data, d_recv, N, my_pe, step, false);
         CUDA_CHECK(cudaDeviceSynchronize());
     }
@@ -390,6 +404,7 @@ void benchmark_recursive_halving_doubling(int my_pe, int n_pes) {
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
     
     if (my_pe == 0) {
+        NVTX_RANGE("batch");
         printf("  Time: %ld μs\n", duration.count());
         printf("  Steps: %d (vs %d for ring)\n", 2 * log_n, 2 * (n_pes - 1));
         printf("  Data size: %.2f MB\n", N * sizeof(float) / (1024.0 * 1024.0));
@@ -419,6 +434,7 @@ void benchmark_recursive_halving_doubling(int my_pe, int n_pes) {
 // ============================================================================
 
 int main() {
+    NVTX_RANGE("main");
     printf("╔════════════════════════════════════════════════════════════╗\n");
     printf("║  NVSHMEM Advanced Patterns for Multi-GPU Blackwell B200   ║\n");
     printf("║  Production-Quality Communication Algorithms               ║\n");

@@ -3,7 +3,7 @@
 
 include ../core/common/cuda_arch.mk
 
-NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) -lineinfo -Xptxas=-v
+NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) -lineinfo -Xptxas=-v $(CUDA_NVTX_CFLAGS)
 SUFFIX = $(TARGET_SUFFIX)
 INCLUDES = -I..
 COMMON_HEADERS = ../core/common/headers/arch_detection.cuh ../core/common/headers/tma_helpers.cuh
@@ -25,92 +25,92 @@ all: $(TARGETS)
 	@echo "✓ Built $(words $(BASE_TARGETS)) CUDA examples"
 
 # Default pattern rule for most .cu files
-%$(SUFFIX): %.cu $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -o $@ $<
+%$(SUFFIX): %.cu $(COMMON_HEADERS) $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
 # Verify binaries build with -DVERIFY=1 for harness checksum parsing
-%_verify$(SUFFIX): %.cu $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 $(INCLUDES) -o $@ $<
+%_verify$(SUFFIX): %.cu $(COMMON_HEADERS) $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 $(INCLUDES) -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
 # Special rules for files needing -rdc=true (cluster/DSMEM support)
-baseline_cluster_group$(SUFFIX): baseline_cluster_group.cu cluster_group_common.cuh $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $<
+baseline_cluster_group$(SUFFIX): baseline_cluster_group.cu cluster_group_common.cuh $(COMMON_HEADERS) $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
-baseline_cluster_group_verify$(SUFFIX): baseline_cluster_group.cu cluster_group_common.cuh $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 $(INCLUDES) -o $@ $<
+baseline_cluster_group_verify$(SUFFIX): baseline_cluster_group.cu cluster_group_common.cuh $(COMMON_HEADERS) $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 $(INCLUDES) -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
-optimized_cluster_group$(SUFFIX): optimized_cluster_group.cu cluster_group_common.cuh $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $<
+optimized_cluster_group$(SUFFIX): optimized_cluster_group.cu cluster_group_common.cuh $(COMMON_HEADERS) $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
-optimized_cluster_group_verify$(SUFFIX): optimized_cluster_group.cu cluster_group_common.cuh $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 $(INCLUDES) -o $@ $<
+optimized_cluster_group_verify$(SUFFIX): optimized_cluster_group.cu cluster_group_common.cuh $(COMMON_HEADERS) $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 $(INCLUDES) -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
-baseline_cluster_group_no_dsmem$(SUFFIX): baseline_cluster_group_no_dsmem.cu cluster_group_common.cuh $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $<
+baseline_cluster_group_no_dsmem$(SUFFIX): baseline_cluster_group_no_dsmem.cu cluster_group_common.cuh $(COMMON_HEADERS) $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
-baseline_cluster_group_no_dsmem_verify$(SUFFIX): baseline_cluster_group_no_dsmem.cu cluster_group_common.cuh $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 $(INCLUDES) -o $@ $<
+baseline_cluster_group_no_dsmem_verify$(SUFFIX): baseline_cluster_group_no_dsmem.cu cluster_group_common.cuh $(COMMON_HEADERS) $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 $(INCLUDES) -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
-optimized_cluster_group_no_dsmem$(SUFFIX): optimized_cluster_group_no_dsmem.cu cluster_group_common.cuh $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $<
+optimized_cluster_group_no_dsmem$(SUFFIX): optimized_cluster_group_no_dsmem.cu cluster_group_common.cuh $(COMMON_HEADERS) $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
-optimized_cluster_group_no_dsmem_verify$(SUFFIX): optimized_cluster_group_no_dsmem.cu cluster_group_common.cuh $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 $(INCLUDES) -o $@ $<
+optimized_cluster_group_no_dsmem_verify$(SUFFIX): optimized_cluster_group_no_dsmem.cu cluster_group_common.cuh $(COMMON_HEADERS) $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 $(INCLUDES) -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
-optimized_cluster_group_single_cta$(SUFFIX): optimized_cluster_group_single_cta.cu cluster_group_common.cuh $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $<
+optimized_cluster_group_single_cta$(SUFFIX): optimized_cluster_group_single_cta.cu cluster_group_common.cuh $(COMMON_HEADERS) $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
-optimized_cluster_group_single_cta_verify$(SUFFIX): optimized_cluster_group_single_cta.cu cluster_group_common.cuh $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 $(INCLUDES) -o $@ $<
+optimized_cluster_group_single_cta_verify$(SUFFIX): optimized_cluster_group_single_cta.cu cluster_group_common.cuh $(COMMON_HEADERS) $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 $(INCLUDES) -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
-tma_multicast_cluster$(SUFFIX): tma_multicast_cluster.cu $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -std=c++17 -rdc=true $(INCLUDES) -lcuda -o $@ $<
+tma_multicast_cluster$(SUFFIX): tma_multicast_cluster.cu $(COMMON_HEADERS) $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 -rdc=true $(INCLUDES) -lcuda -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
-tma_multicast_cluster_verify$(SUFFIX): tma_multicast_cluster.cu $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -std=c++17 -rdc=true -DVERIFY=1 $(INCLUDES) -lcuda -o $@ $<
+tma_multicast_cluster_verify$(SUFFIX): tma_multicast_cluster.cu $(COMMON_HEADERS) $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 -rdc=true -DVERIFY=1 $(INCLUDES) -lcuda -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
-tma_multicast_baseline$(SUFFIX): tma_multicast_baseline.cu $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -std=c++17 -rdc=true $(INCLUDES) -lcuda -o $@ $<
+tma_multicast_baseline$(SUFFIX): tma_multicast_baseline.cu $(COMMON_HEADERS) $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 -rdc=true $(INCLUDES) -lcuda -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
-tma_multicast_baseline_verify$(SUFFIX): tma_multicast_baseline.cu $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -std=c++17 -rdc=true -DVERIFY=1 $(INCLUDES) -lcuda -o $@ $<
+tma_multicast_baseline_verify$(SUFFIX): tma_multicast_baseline.cu $(COMMON_HEADERS) $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 -rdc=true -DVERIFY=1 $(INCLUDES) -lcuda -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
-optimized_dsmem_reduction$(SUFFIX): optimized_dsmem_reduction.cu $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $<
+optimized_dsmem_reduction$(SUFFIX): optimized_dsmem_reduction.cu $(COMMON_HEADERS) $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
-optimized_dsmem_reduction_verify$(SUFFIX): optimized_dsmem_reduction.cu $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 $(INCLUDES) -o $@ $<
+optimized_dsmem_reduction_verify$(SUFFIX): optimized_dsmem_reduction.cu $(COMMON_HEADERS) $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 $(INCLUDES) -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
-optimized_dsmem_reduction_cluster_atomic$(SUFFIX): optimized_dsmem_reduction_cluster_atomic.cu $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $<
+optimized_dsmem_reduction_cluster_atomic$(SUFFIX): optimized_dsmem_reduction_cluster_atomic.cu $(COMMON_HEADERS) $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
-optimized_dsmem_reduction_cluster_atomic_verify$(SUFFIX): optimized_dsmem_reduction_cluster_atomic.cu $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 $(INCLUDES) -o $@ $<
+optimized_dsmem_reduction_cluster_atomic_verify$(SUFFIX): optimized_dsmem_reduction_cluster_atomic.cu $(COMMON_HEADERS) $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 $(INCLUDES) -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
-optimized_dsmem_reduction_warp_specialized$(SUFFIX): optimized_dsmem_reduction_warp_specialized.cu $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $<
+optimized_dsmem_reduction_warp_specialized$(SUFFIX): optimized_dsmem_reduction_warp_specialized.cu $(COMMON_HEADERS) $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
-optimized_dsmem_reduction_warp_specialized_verify$(SUFFIX): optimized_dsmem_reduction_warp_specialized.cu $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 $(INCLUDES) -o $@ $<
+optimized_dsmem_reduction_warp_specialized_verify$(SUFFIX): optimized_dsmem_reduction_warp_specialized.cu $(COMMON_HEADERS) $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 $(INCLUDES) -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
 # Special rules for files needing C++20 or -lcuda
-baseline_flash_attn_tma_micro_pipeline$(SUFFIX): baseline_flash_attn_tma_micro_pipeline.cu
-	$(NVCC) $(NVCC_FLAGS) -std=c++20 $(INCLUDES) -o $@ $<
+baseline_flash_attn_tma_micro_pipeline$(SUFFIX): baseline_flash_attn_tma_micro_pipeline.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -std=c++20 $(INCLUDES) -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
-baseline_flash_attn_tma_micro_pipeline_verify$(SUFFIX): baseline_flash_attn_tma_micro_pipeline.cu
-	$(NVCC) $(NVCC_FLAGS) -std=c++20 -DVERIFY=1 $(INCLUDES) -o $@ $<
+baseline_flash_attn_tma_micro_pipeline_verify$(SUFFIX): baseline_flash_attn_tma_micro_pipeline.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -std=c++20 -DVERIFY=1 $(INCLUDES) -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
-optimized_flash_attn_tma_micro_pipeline$(SUFFIX): optimized_flash_attn_tma_micro_pipeline.cu
-	$(NVCC) $(NVCC_FLAGS) -std=c++20 $(INCLUDES) -lcuda -o $@ $<
+optimized_flash_attn_tma_micro_pipeline$(SUFFIX): optimized_flash_attn_tma_micro_pipeline.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -std=c++20 $(INCLUDES) -lcuda -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
-optimized_flash_attn_tma_micro_pipeline_verify$(SUFFIX): optimized_flash_attn_tma_micro_pipeline.cu
-	$(NVCC) $(NVCC_FLAGS) -std=c++20 -DVERIFY=1 $(INCLUDES) -lcuda -o $@ $<
+optimized_flash_attn_tma_micro_pipeline_verify$(SUFFIX): optimized_flash_attn_tma_micro_pipeline.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -std=c++20 -DVERIFY=1 $(INCLUDES) -lcuda -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
-tma_2d_pipeline_blackwell$(SUFFIX): tma_2d_pipeline_blackwell.cu $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -std=c++17 $(INCLUDES) -lcuda -o $@ $<
+tma_2d_pipeline_blackwell$(SUFFIX): tma_2d_pipeline_blackwell.cu $(COMMON_HEADERS) $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 $(INCLUDES) -lcuda -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
-tma_2d_pipeline_blackwell_verify$(SUFFIX): tma_2d_pipeline_blackwell.cu $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -std=c++17 -DVERIFY=1 $(INCLUDES) -lcuda -o $@ $<
+tma_2d_pipeline_blackwell_verify$(SUFFIX): tma_2d_pipeline_blackwell.cu $(COMMON_HEADERS) $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 -DVERIFY=1 $(INCLUDES) -lcuda -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
 # Architecture-specific targets
 b200: ARCH=sm_100

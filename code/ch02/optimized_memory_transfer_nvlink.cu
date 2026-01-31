@@ -33,6 +33,7 @@
 #include <cstdlib>
 #include <chrono>
 #include <vector>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
@@ -79,6 +80,7 @@ bool detect_grace_cpu() {
             if (cpuinfo) {
                 char line[256];
                 while (fgets(line, sizeof(line), cpuinfo)) {
+                    NVTX_RANGE("verify");
                     if (strstr(line, "Neoverse") || strstr(line, "0xd40")) {
                         fclose(cpuinfo);
                         return true;
@@ -164,6 +166,7 @@ SystemInfo detect_system_capabilities() {
             if (f) {
                 char line[256];
                 while (fgets(line, sizeof(line), f)) {
+                    NVTX_RANGE("iteration");
                     if (strstr(line, "NVLink-C2C")) {
                         info.has_nvlink_c2c = true;
                         break;
@@ -221,6 +224,7 @@ double benchmark_host_to_device(void* h_data, void* d_data, size_t size,
     // Benchmark
     auto start = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < iterations; i++) {
+        NVTX_RANGE("transfer_sync:h2d");
         CUDA_CHECK(cudaMemcpy(d_data, h_data, size, cudaMemcpyHostToDevice));
     }
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -245,6 +249,7 @@ double benchmark_device_to_host(void* d_data, void* h_data, size_t size,
     // Benchmark
     auto start = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < iterations; i++) {
+        NVTX_RANGE("transfer_sync:d2h");
         CUDA_CHECK(cudaMemcpy(h_data, d_data, size, cudaMemcpyDeviceToHost));
     }
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -273,6 +278,7 @@ void demonstrate_page_migration() {
     
     // Initialize on CPU
     for (size_t i = 0; i < size / sizeof(float); i++) {
+        NVTX_RANGE("setup");
         managed_data[i] = (float)i;
     }
     
@@ -376,8 +382,10 @@ void benchmark_multigpu_p2p_bandwidth(const SystemInfo& info) {
     
     // Enable P2P access between all GPU pairs
     for (int i = 0; i < max_gpus; i++) {
+        NVTX_RANGE("iteration");
         CUDA_CHECK(cudaSetDevice(i));
         for (int j = 0; j < max_gpus; j++) {
+            NVTX_RANGE("iteration");
             if (i != j) {
                 int can_access;
                 CUDA_CHECK(cudaDeviceCanAccessPeer(&can_access, i, j));
@@ -409,6 +417,7 @@ void benchmark_multigpu_p2p_bandwidth(const SystemInfo& info) {
     // Allocate memory on each GPU
     std::vector<float*> d_data(max_gpus, nullptr);
     for (int i = 0; i < max_gpus; i++) {
+        NVTX_RANGE("setup");
         CUDA_CHECK(cudaSetDevice(i));
         CUDA_CHECK(cudaMalloc(&d_data[i], transfer_size));
     }
@@ -421,7 +430,9 @@ void benchmark_multigpu_p2p_bandwidth(const SystemInfo& info) {
     int pair_count = 0;
     
     for (int src = 0; src < max_gpus; src++) {
+        NVTX_RANGE("warmup");
         for (int dst = src + 1; dst < max_gpus; dst++) {
+            NVTX_RANGE("warmup");
             CUDA_CHECK(cudaSetDevice(src));
             
             // Warmup
@@ -431,6 +442,7 @@ void benchmark_multigpu_p2p_bandwidth(const SystemInfo& info) {
             // Benchmark
             auto start = std::chrono::high_resolution_clock::now();
             for (int i = 0; i < iterations; i++) {
+                NVTX_RANGE("transfer_sync");
                 CUDA_CHECK(cudaMemcpyPeer(d_data[dst], dst, d_data[src], src, transfer_size));
             }
             CUDA_CHECK(cudaDeviceSynchronize());
@@ -463,6 +475,7 @@ void benchmark_multigpu_p2p_bandwidth(const SystemInfo& info) {
     
     // Cleanup
     for (int i = 0; i < max_gpus; i++) {
+        NVTX_RANGE("cleanup");
         CUDA_CHECK(cudaSetDevice(i));
         CUDA_CHECK(cudaFree(d_data[i]));
     }
@@ -506,6 +519,7 @@ void demonstrate_gb200_coherent_memory(const SystemInfo& info) {
     // Initialize on CPU
     printf("1. CPU: Initializing %.2f MB...\n", size / (1024.0 * 1024.0));
     for (int i = 0; i < num_elements; i++) {
+        NVTX_RANGE("setup");
         coherent_data[i] = (float)i;
     }
     
@@ -545,6 +559,7 @@ void demonstrate_gb200_coherent_memory(const SystemInfo& info) {
     // CPU writes, GPU reads
     start = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < num_elements; i++) {
+        NVTX_RANGE("compute_kernel");
         coherent_data[i] = (float)i * 0.5f;
     }
     coherent_memory_kernel<<<blocks, threads>>>(coherent_data, num_elements);
@@ -586,6 +601,7 @@ void run_transfer_benchmarks(const SystemInfo& info) {
     };
     
     for (size_t size : sizes) {
+        NVTX_RANGE("setup");
         printf("\nTransfer size: %.2f MB\n", size / (1024.0 * 1024.0));
         
         // Allocate memory
@@ -598,21 +614,26 @@ void run_transfer_benchmarks(const SystemInfo& info) {
         
         // Initialize
         for (size_t i = 0; i < size / sizeof(float); i++) {
+            NVTX_RANGE("setup");
             h_pageable[i] = (float)i;
             h_pinned[i] = (float)i;
         }
         
         // Benchmark H2D
         printf("\nHost → Device:\n");
+        NVTX_RANGE("transfer_sync:h2d");
         double h2d_pageable = benchmark_host_to_device(h_pageable, d_data, size, 
                                                        "Pageable memory");
+        NVTX_RANGE("transfer_sync:h2d");
         double h2d_pinned = benchmark_host_to_device(h_pinned, d_data, size,
                                                      "Pinned memory");
         
         // Benchmark D2H
         printf("\nDevice → Host:\n");
+        NVTX_RANGE("transfer_sync:d2h");
         double d2h_pageable = benchmark_device_to_host(d_data, h_pageable, size,
                                                        "Pageable memory");
+        NVTX_RANGE("transfer_sync:d2h");
         double d2h_pinned = benchmark_device_to_host(d_data, h_pinned, size,
                                                      "Pinned memory");
         
@@ -635,6 +656,7 @@ void run_transfer_benchmarks(const SystemInfo& info) {
 }
 
 int main() {
+    NVTX_RANGE("main");
     printf("=== NVLink-C2C CPU-GPU P2P Transfer (Blackwell) ===\n\n");
     
     // Detect system

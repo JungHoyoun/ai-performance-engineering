@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "../core/common/headers/tma_helpers.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 static void run_tma_example();
 
@@ -103,6 +104,7 @@ __global__ void InstructionSchedulingExample(const float *a, const float *b, flo
 }
 
 int main() {
+    NVTX_RANGE("main");
     const int N = 1024 * 1024;
     size_t bytes = N * sizeof(float);
     
@@ -114,6 +116,7 @@ int main() {
     
     // Initialize input data
     for (int i = 0; i < N; ++i) {
+        NVTX_RANGE("setup");
         h_in[i] = float(i % 1000) / 1000.0f;
     }
     
@@ -340,6 +343,7 @@ static void run_tma_example() {
 
     std::vector<float> h_in(ELEMS);
     for (int i = 0; i < ELEMS; ++i) {
+        NVTX_RANGE("setup");
         h_in[i] = static_cast<float>((i % 512) - 256) * 0.25f;
     }
     std::vector<float> h_out(ELEMS, 0.0f);
@@ -388,6 +392,7 @@ static void run_tma_example() {
     constexpr int kIters = 10;
     cudaEventRecord(start);
     for (int i = 0; i < kIters; ++i) {
+        NVTX_RANGE("compute_kernel");
         tma_example_kernel<TILE><<<blocks, THREADS>>>(in_desc, out_desc, total_tiles);
     }
     cudaEventRecord(stop);
@@ -401,6 +406,7 @@ static void run_tma_example() {
 
     bool ok = true;
     for (int i = 0; i < ELEMS; ++i) {
+        NVTX_RANGE("iteration");
         const float expected = h_in[i] * 1.5f + 1.0f;
         if (std::abs(h_out[i] - expected) > 1e-3f) {
             printf("TMA example mismatch at %d: got %f expected %f\n", i, h_out[i], expected);

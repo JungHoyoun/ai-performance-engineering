@@ -9,6 +9,7 @@
 #include <iostream>
 
 #include "cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 constexpr int N = 1 << 21;  // Moderate workload to surface occupancy effects without long runs.
 
@@ -49,6 +50,7 @@ void kernel(const float* in, float* out, int n, int smem_bytes, int unroll, int 
 }
 
 int main(int argc, char** argv) {
+    NVTX_RANGE("main");
   int block_size = 128;  // intentionally modest baseline
   int smem_bytes = 0;
   int unroll = 1;
@@ -56,6 +58,7 @@ int main(int argc, char** argv) {
   int reps = 50;  // number of kernel launches to amortize overhead
   // Basic flag parsing.
   for (int i = 1; i < argc; ++i) {
+      NVTX_RANGE("iteration");
     if (strcmp(argv[i], "--block-size") == 0 && i + 1 < argc) {
       block_size = std::max(1, atoi(argv[++i]));
     } else if (strcmp(argv[i], "--smem-bytes") == 0 && i + 1 < argc) {
@@ -81,7 +84,10 @@ int main(int argc, char** argv) {
   float *h_in, *h_out;
   cudaMallocHost(&h_in, N * sizeof(float));
   cudaMallocHost(&h_out, N * sizeof(float));
-  for (int i = 0; i < N; ++i) h_in[i] = static_cast<float>(i);
+  for (int i = 0; i < N; ++i) {
+      NVTX_RANGE("setup");
+      h_in[i] = static_cast<float>(i);
+  }
 
   float *d_in, *d_out;
   cudaMalloc(&d_in, N * sizeof(float));
@@ -96,6 +102,7 @@ int main(int argc, char** argv) {
   cudaEventCreate(&stop);
   cudaEventRecord(start);
   for (int r = 0; r < reps; ++r) {
+      NVTX_RANGE("compute_kernel:kernel:smem");
     kernel<<<grid, block, smem_bytes>>>(d_in, d_out, N, smem_bytes, unroll, inner_iters);
   }
   cudaEventRecord(stop);

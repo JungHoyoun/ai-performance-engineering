@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                      \
   do {                                                                        \
@@ -49,6 +50,7 @@ __global__ void parentKernel(float* data, int N, int* launch_count) {
 }
 
 int main() {
+    NVTX_RANGE("main");
     int device = 0;
     CUDA_CHECK(cudaGetDevice(&device));
     cudaDeviceProp prop;
@@ -91,6 +93,7 @@ int main() {
     CUDA_CHECK(cudaMemcpy(h_data.data(), d_data, N * sizeof(float), cudaMemcpyDeviceToHost));
     double checksum = 0.0;
     for (float v : h_data) {
+        NVTX_RANGE("verify");
         checksum += static_cast<double>(v);
     }
     VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));

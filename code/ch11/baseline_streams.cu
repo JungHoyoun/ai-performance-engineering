@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 #include <cstdio>
 #include <chrono>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
@@ -169,6 +170,7 @@ __global__ void scale_kernel_async(float* __restrict__ data, int n, float scale)
 }
 
 int main() {
+    NVTX_RANGE("main");
   constexpr int N = 1 << 22;
   constexpr size_t BYTES = N * sizeof(float);
 
@@ -176,6 +178,7 @@ int main() {
   CUDA_CHECK(cudaMallocHost(&h_a, BYTES));
   CUDA_CHECK(cudaMallocHost(&h_b, BYTES));
   for (int i = 0; i < N; ++i) {
+      NVTX_RANGE("setup");
     h_a[i] = 1.0f;
     h_b[i] = 2.0f;
   }
@@ -206,6 +209,7 @@ int main() {
   dim3 block(256);
   dim3 grid((N + block.x - 1) / block.x);
   for (int i = 0; i < WARMUP; ++i) {
+      NVTX_RANGE("warmup");
     scale_kernel<<<grid, block, 0, stream1>>>(d_a, N, 1.1f);
     scale_kernel<<<grid, block, 0, stream1>>>(d_a, N, 1.05f);
   }
@@ -213,6 +217,7 @@ int main() {
   
   CUDA_CHECK(cudaEventRecord(start, stream1));
   for (int i = 0; i < ITERS; ++i) {
+      NVTX_RANGE("compute_kernel:scale_kernel");
     scale_kernel<<<grid, block, 0, stream1>>>(d_a, N, 1.1f);
     scale_kernel<<<grid, block, 0, stream1>>>(d_a, N, 1.05f);
   }
@@ -236,6 +241,7 @@ int main() {
   printf("Using %s kernel for vectorization\n\n", is_blackwell ? "Float8 (256-bit)" : "float4 (128-bit)");
   
   for (int i = 0; i < WARMUP; ++i) {
+      NVTX_RANGE("warmup");
     if (is_blackwell) {
       scale_kernel_vectorized_float8<<<grid_vec, block, 0, stream1>>>(d_a, N, 1.1f);
     } else {
@@ -246,6 +252,7 @@ int main() {
   
   CUDA_CHECK(cudaEventRecord(start, stream1));
   for (int i = 0; i < ITERS; ++i) {
+      NVTX_RANGE("compute_kernel:scale_kernel_vectorized_float8");
     if (is_blackwell) {
       scale_kernel_vectorized_float8<<<grid_vec, block, 0, stream1>>>(d_a, N, 1.1f);
     } else {
@@ -260,12 +267,14 @@ int main() {
   
   // Async kernel (uses shared memory, architecture-agnostic)
   for (int i = 0; i < WARMUP; ++i) {
+      NVTX_RANGE("warmup");
     scale_kernel_async<<<grid_vec, block, 0, stream1>>>(d_a, N, 1.1f);
   }
   CUDA_CHECK(cudaStreamSynchronize(stream1));
   
   CUDA_CHECK(cudaEventRecord(start, stream1));
   for (int i = 0; i < ITERS; ++i) {
+      NVTX_RANGE("compute_kernel:scale_kernel_async");
     scale_kernel_async<<<grid_vec, block, 0, stream1>>>(d_a, N, 1.1f);
   }
   CUDA_CHECK(cudaEventRecord(stop, stream1));
@@ -301,6 +310,7 @@ int main() {
     if (!overlap) {
       // Naive sequential pipeline on a single stream with blocking transfers.
       for (int i = 0; i < BATCHES; ++i) {
+          NVTX_RANGE("transfer_sync:h2d");
         CUDA_CHECK(cudaMemcpy(d_a, h_a, BYTES, cudaMemcpyHostToDevice));
         if (is_blackwell) {
           scale_kernel_vectorized_float8<<<grid_vec, block, 0, stream1>>>(d_a, N, 1.05f);
@@ -326,6 +336,7 @@ int main() {
 
       cudaEvent_t h2d_done[2], compute_done[2], d2h_done[2];
       for (int i = 0; i < 2; ++i) {
+          NVTX_RANGE("batch");
         CUDA_CHECK(cudaEventCreateWithFlags(&h2d_done[i], cudaEventDisableTiming));
         CUDA_CHECK(cudaEventCreateWithFlags(&compute_done[i], cudaEventDisableTiming));
         CUDA_CHECK(cudaEventCreateWithFlags(&d2h_done[i], cudaEventDisableTiming));
@@ -334,6 +345,7 @@ int main() {
       CUDA_CHECK(cudaStreamSynchronize(d2h_stream));
 
       for (int i = 0; i < BATCHES; ++i) {
+          NVTX_RANGE("transfer_async:h2d");
         const int buf = i & 1;
         float* d_buf = buf == 0 ? d_a : d_b;
         float* h_buf = buf == 0 ? h_a : h_b;
@@ -361,6 +373,7 @@ int main() {
       CUDA_CHECK(cudaStreamSynchronize(d2h_stream));
 
       for (int i = 0; i < 2; ++i) {
+          NVTX_RANGE("iteration");
         CUDA_CHECK(cudaEventDestroy(h2d_done[i]));
         CUDA_CHECK(cudaEventDestroy(compute_done[i]));
         CUDA_CHECK(cudaEventDestroy(d2h_done[i]));

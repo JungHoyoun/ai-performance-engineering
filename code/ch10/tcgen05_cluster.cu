@@ -19,6 +19,7 @@
 #include <cute/arch/tmem_allocator_sm100.hpp>
 #include <cute/atom/mma_traits_sm100.hpp>
 #include <cute/arch/cluster_sm90.hpp>  // For cute::block_rank_in_cluster()
+#include "../core/common/nvtx_utils.cuh"
 
 using namespace cute;
 

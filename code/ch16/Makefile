@@ -22,8 +22,8 @@ all: $(TARGETS)
 	@echo "✓ Built $(words $(BASE_TARGETS)) CUDA examples"
 
 # Default pattern rule
-%$(SUFFIX): %.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
+%$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS) $(CUDA_NVTX_LDFLAGS)
 
 test: all
 	@for exe in $(TARGETS); do timeout 10s ./$$exe >/dev/null 2>&1 && echo "✓ $$exe" || echo "✗ $$exe"; done

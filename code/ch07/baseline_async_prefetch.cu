@@ -8,6 +8,7 @@
 #include <cmath>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call) \
     do { \
@@ -61,6 +62,7 @@ __global__ void naive_tiled_kernel(const float* __restrict__ data,
 }
 
 int main() {
+    NVTX_RANGE("main");
     constexpr int N = 64 * 1024 * 1024;  // 64M elements - larger workload
     constexpr int THREADS = 256;
     const size_t bytes = N * sizeof(float);
@@ -71,6 +73,7 @@ int main() {
     
     std::vector<float> h_in(N);
     for (int i = 0; i < N; ++i) {
+        NVTX_RANGE("setup");
         h_in[i] = static_cast<float>(i % 1000) / 1000.0f;
     }
     CUDA_CHECK(cudaMemcpy(d_in, h_in.data(), bytes, cudaMemcpyHostToDevice));
@@ -92,6 +95,7 @@ int main() {
     constexpr int iterations = 20;
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; i++) {
+        NVTX_RANGE("compute_kernel:naive_tiled_kernel:smem");
         naive_tiled_kernel<<<grid, THREADS, shared_bytes>>>(d_in, d_out, N, total_tiles);
     }
     CUDA_CHECK(cudaEventRecord(stop));
@@ -105,6 +109,7 @@ int main() {
     CUDA_CHECK(cudaMemcpy(h_out.data(), d_out, bytes, cudaMemcpyDeviceToHost));
     double checksum = 0.0;
     for (int i = 0; i < N; i += 10000) {
+        NVTX_RANGE("verify");
         checksum += h_out[i];
     }
     

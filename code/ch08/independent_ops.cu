@@ -2,6 +2,7 @@
 
 #include <cuda_runtime.h>
 #include <cstdio>
+#include "../core/common/nvtx_utils.cuh"
 
 constexpr int N = 1 << 20;
 
@@ -17,11 +18,13 @@ __global__ void independent_ops(const float* a, const float* b, float* out, int 
 }
 
 int main() {
+    NVTX_RANGE("main");
   float *h_a, *h_b, *h_out;
   cudaMallocHost(&h_a, N * sizeof(float));
   cudaMallocHost(&h_b, N * sizeof(float));
   cudaMallocHost(&h_out, N * sizeof(float));
   for (int i = 0; i < N; ++i) {
+      NVTX_RANGE("setup");
     h_a[i] = static_cast<float>(i);
     h_b[i] = static_cast<float>(N - i);
   }

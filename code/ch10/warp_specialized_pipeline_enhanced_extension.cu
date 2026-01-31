@@ -6,6 +6,7 @@
 #include <cuda_runtime.h>
 #include <cuda/pipeline>
 #include <cooperative_groups.h>
+#include "../core/common/nvtx_utils.cuh"
 
 namespace cg = cooperative_groups;
 

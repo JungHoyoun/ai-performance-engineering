@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <vector>
+#include "../core/common/nvtx_utils.cuh"
 
 namespace {
 
@@ -21,6 +22,7 @@ void check(cudaError_t err) {
 }  // namespace
 
 int main() {
+    NVTX_RANGE("main");
     using namespace ch11;
 
     const int tiles = 128;
@@ -49,6 +51,7 @@ int main() {
     const size_t shared_bytes = 3 * kPipelineStages * kTileElems * sizeof(float);
 
     for (int s = 0; s < 2; ++s) {
+        NVTX_RANGE("compute_kernel:warp_specialized_kernel_two_pipelines_multistream:smem");
         size_t tile_offset = static_cast<size_t>(s) * tiles_per_stream * kTileElems;
         const float* a_ptr = d_a + tile_offset;
         const float* b_ptr = d_b + tile_offset;
@@ -66,6 +69,7 @@ int main() {
 
     double max_err = 0.0;
     for (size_t i = 0; i < elems; ++i) {
+        NVTX_RANGE("cleanup");
         // Kernel computes a + b
         double expected = h_a[i] + h_b[i];
         max_err = std::max(max_err, std::abs(expected - h_out[i]));

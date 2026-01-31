@@ -22,6 +22,7 @@
 #include <string>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call) \
     do { \
@@ -53,11 +54,14 @@ void quantize_to_nvfp4(const float* input, uint8_t* output_packed,
     
     // Compute per-row scales (block-scaled along the column dimension).
     for (int r = 0; r < rows; ++r) {
+        NVTX_RANGE("iteration");
         for (int block = 0; block < num_scale_cols; ++block) {
+            NVTX_RANGE("iteration");
             const int block_start = block * FP4_BLOCK_SIZE;
             
             float max_abs = 0.0f;
             for (int i = 0; i < FP4_BLOCK_SIZE; ++i) {
+                NVTX_RANGE("iteration");
                 max_abs = std::max(max_abs, std::abs(input[r * cols + block_start + i]));
             }
             
@@ -68,10 +72,13 @@ void quantize_to_nvfp4(const float* input, uint8_t* output_packed,
 
     // Pack in row-major order: consecutive elements are adjacent columns.
     for (int r = 0; r < rows; ++r) {
+        NVTX_RANGE("iteration");
         for (int block = 0; block < num_scale_cols; ++block) {
+            NVTX_RANGE("iteration");
             const int block_start = block * FP4_BLOCK_SIZE;
             float scale = static_cast<float>(scales[r * num_scale_cols + block]);
             for (int i = 0; i < FP4_BLOCK_SIZE; i += 2) {
+                NVTX_RANGE("iteration");
                 float v0 = input[r * cols + block_start + i];
                 float v1 = input[r * cols + block_start + i + 1];
 
@@ -88,6 +95,7 @@ void quantize_to_nvfp4(const float* input, uint8_t* output_packed,
 }
 
 int main(int argc, char** argv) {
+    NVTX_RANGE("main");
     std::cout << "=== Optimized FP4 Hardware Kernel (cuBLASLt Tensor Cores) ===" << std::endl;
     
     // Check GPU
@@ -119,8 +127,14 @@ int main(int argc, char** argv) {
     // Initialize with random values
     std::mt19937 gen(42);
     std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
-    for (auto& v : h_A_fp32) v = dis(gen);
-    for (auto& v : h_B_fp32) v = dis(gen);
+    for (auto& v : h_A_fp32) {
+        NVTX_RANGE("setup");
+        v = dis(gen);
+    }
+    for (auto& v : h_B_fp32) {
+        NVTX_RANGE("setup");
+        v = dis(gen);
+    }
 
     // Quantize to NVFP4
     quantize_to_nvfp4(h_A_fp32.data(), h_A_packed.data(), h_A_scales.data(), M, K);
@@ -198,6 +212,7 @@ int main(int argc, char** argv) {
                                                          &workspaceSize, sizeof(workspaceSize)));
 
     cublasLtMatmulHeuristicResult_t heuristicResult = {};
+        NVTX_RANGE("compute_math");
     int returnedResults = 0;
     cublasStatus_t heuristicStatus = cublasLtMatmulAlgoGetHeuristic(
         ltHandle, matmulDesc, layoutA, layoutB, layoutC, layoutC,
@@ -211,6 +226,7 @@ int main(int argc, char** argv) {
 
     // Warmup
     for (int i = 0; i < 5; ++i) {
+        NVTX_RANGE("warmup");
         CUBLASLT_CHECK(cublasLtMatmul(ltHandle, matmulDesc, &alpha,
                                        d_A, layoutA, d_B, layoutB, &beta,
                                        d_C, layoutC, d_C, layoutC,
@@ -226,6 +242,7 @@ int main(int argc, char** argv) {
     const int iterations = 100;
     CUDA_CHECK(cudaEventRecord(start, stream));
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("compute_math:ltmatmul");
         CUBLASLT_CHECK(cublasLtMatmul(ltHandle, matmulDesc, &alpha,
                                        d_A, layoutA, d_B, layoutB, &beta,
                                        d_C, layoutC, d_C, layoutC,
@@ -246,6 +263,7 @@ int main(int argc, char** argv) {
     // Optional dump for harness verification: --dump-output <path>
     std::string dump_path;
     for (int i = 1; i < argc; ++i) {
+        NVTX_RANGE("verify");
         std::string arg(argv[i]);
         if (arg == "--dump-output") {
             if (i + 1 >= argc) {
@@ -271,6 +289,7 @@ int main(int argc, char** argv) {
     CUDA_CHECK(cudaMemcpy(h_C.data(), d_C, elements_C * sizeof(__half), cudaMemcpyDeviceToHost));
     double checksum = 0.0;
     for (const auto& v : h_C) {
+        NVTX_RANGE("verify");
         checksum += static_cast<double>(__half2float(v));
     }
     checksum /= static_cast<double>(elements_C);

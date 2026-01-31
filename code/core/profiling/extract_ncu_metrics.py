@@ -7,7 +7,7 @@ Usage examples:
       --metrics gpu__time_duration.avg,gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed
 
   python core/profiling/extract_ncu_metrics.py --example ch06_add_parallel \
-      --metrics default --output output/metrics/ch06_add_parallel.csv
+      --metrics default --output artifacts/runs/analysis/metrics/ch06_add_parallel.csv
 
 By default we collect a set of latency/throughput counters that are useful when
 contrasting vectorised vs scalar kernels. The script reuses the profiling harness'
@@ -76,7 +76,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        help="Optional CSV output path. Defaults to output/metrics/<example>_<timestamp>.csv",
+        help="Optional CSV output path. Defaults to artifacts/runs/analysis/metrics/<example>_<timestamp>.csv",
     )
     parser.add_argument(
         "--replay-mode",
@@ -106,7 +106,7 @@ def main() -> None:
     if args.output:
         output_path = args.output.resolve()
     else:
-        output_dir = REPO_ROOT / "output" / "metrics"
+        output_dir = REPO_ROOT / "artifacts" / "runs" / "analysis" / "metrics"
         output_path = output_dir / f"{example.name}_{timestamp}.csv"
     ensure_dirs(output_path)
 

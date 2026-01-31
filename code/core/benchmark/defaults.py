@@ -84,10 +84,12 @@ class BenchmarkDefaults:
     # Feature flags
     enable_memory_tracking: bool = False
     enable_profiling: bool = False
-    enable_nsys: bool = False
+    # When profiling is enabled, prefer collecting both nsys + ncu by default.
+    enable_nsys: bool = True
     enable_ncu: bool = True
     enable_proton: bool = False
-    enable_nvtx: Optional[bool] = None  # Auto-enabled if profiling enabled
+    # Always emit NVTX ranges when profiling is active (can be overridden per-run).
+    enable_nvtx: Optional[bool] = True
     allow_virtualization: bool = True
     # Free allocator state between benchmarks by default.
     enable_cleanup: bool = True
@@ -147,7 +149,8 @@ class BenchmarkDefaults:
     
     # Output defaults
     profiling_output_dir: Optional[str] = None
-    ncu_metric_set: str = "auto"  # 'auto', 'deep_dive', 'roofline', 'minimal'
+    # Default to speed-of-light (minimal) for routine compares.
+    ncu_metric_set: str = "minimal"  # 'auto', 'deep_dive', 'roofline', 'minimal'
     ncu_replay_mode: str = "application"  # 'kernel' or 'application'
     ncu_replay_mode_override: bool = False  # Honor ncu_replay_mode when profiling preset is minimal
     

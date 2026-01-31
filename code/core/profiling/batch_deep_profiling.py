@@ -9,7 +9,7 @@ Examples:
     # Profile a subset
     python core/profiling/batch_deep_profiling.py --workload ch10_double_buffered_pipeline
 
-    # Profile everything (writes into output/)
+    # Profile everything (writes into artifacts/runs/batch_deep_profiling/)
     python core/profiling/batch_deep_profiling.py
 """
 
@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Iterable, List
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PROFILES_DIR = REPO_ROOT / "output"
+PROFILES_DIR = REPO_ROOT / "artifacts" / "runs" / "batch_deep_profiling"
 DEEP_PROFILER = REPO_ROOT / "core" / "analysis" / "deep_profiling_report.py"
 
 # Nsight metrics tuned for Blackwell (SM 12.x instruction counters + L1 bytes).

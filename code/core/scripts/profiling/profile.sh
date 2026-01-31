@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HARNESS="${SCRIPT_DIR}/profile_harness.py"
 PYTORCH_RUNNER="${SCRIPT_DIR}/pytorch_profiler_runner.py"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-DEFAULT_OUTPUT_ROOT="${REPO_ROOT}/output/manual"
+DEFAULT_OUTPUT_ROOT="${REPO_ROOT}/artifacts/runs/profile_manual"
 PYTHON_DEFAULT="${PYTHON:-python}"
 
 DEFAULT_NCU_METRICS_RAW="$($PYTHON_DEFAULT -c "import sys; sys.path.insert(0, '$SCRIPT_DIR'); from metrics_config import BASE_NCU_METRICS; print(','.join(BASE_NCU_METRICS))" 2>/dev/null || true)"

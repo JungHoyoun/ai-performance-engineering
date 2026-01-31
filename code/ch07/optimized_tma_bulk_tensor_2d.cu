@@ -17,9 +17,11 @@
 
 #include "../core/common/headers/tma_helpers.cuh"
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #if CUDART_VERSION < 13000
 int main() {
+    NVTX_RANGE("main");
     std::printf("SKIP: optimized_tma_bulk_tensor_2d requires CUDA 13.0+ for cp.async.bulk.tensor\n");
     return 0;
 }
@@ -105,6 +107,7 @@ __global__ void tma_bulk_copy_kernel(const __grid_constant__ CUtensorMap in_desc
 float checksum(const std::vector<float>& data) {
     double sum = 0.0;
     for (float v : data) {
+        NVTX_RANGE("verify");
         sum += static_cast<double>(v);
     }
     return static_cast<float>(sum / static_cast<double>(data.size()));
@@ -134,6 +137,7 @@ int main() {
 
     std::vector<float> h_src(width * height);
     for (int i = 0; i < width * height; ++i) {
+        NVTX_RANGE("setup");
         h_src[i] = static_cast<float>((i % 127) - 63) * 0.01f;
     }
 
@@ -193,6 +197,7 @@ int main() {
 
     check_cuda(cudaEventRecord(start), "event record start");
     for (int iter = 0; iter < ITERATIONS; ++iter) {
+        NVTX_RANGE("compute_kernel");
         tma_bulk_copy_kernel<TILE_M, TILE_N><<<grid, block_tma>>>(
             in_desc, out_desc, width, height);
         check_cuda(cudaGetLastError(), "iteration launch");

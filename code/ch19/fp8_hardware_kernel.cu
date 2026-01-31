@@ -10,6 +10,7 @@
 #include <iostream>
 #include <vector>
 #include <chrono>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call) \
     do { \
@@ -68,6 +69,7 @@ __global__ void fp16_gemm_kernel(
 }
 
 int main() {
+    NVTX_RANGE("main");
     std::cout << "=== FP8 Hardware Kernel Benchmark (Simplified) ===" << std::endl;
     std::cout << "Note: Using FP16 as proxy for FP8 (real FP8 requires WMMA/Tensor Engine)" << std::endl;
     
@@ -83,8 +85,14 @@ int main() {
     std::vector<float> h_C_fp16(size_C);
     
     // Initialize with random data
-    for (size_t i = 0; i < size_A; ++i) h_A[i] = (rand() % 100) / 100.0f;
-    for (size_t i = 0; i < size_B; ++i) h_B[i] = (rand() % 100) / 100.0f;
+    for (size_t i = 0; i < size_A; ++i) {
+        NVTX_RANGE("setup");
+        h_A[i] = (rand() % 100) / 100.0f;
+    }
+    for (size_t i = 0; i < size_B; ++i) {
+        NVTX_RANGE("setup");
+        h_B[i] = (rand() % 100) / 100.0f;
+    }
     
     // Allocate device memory
     // Note: Using __half for FP8 demo (real FP8 would use __nv_fp8_e4m3 with WMMA)
@@ -109,11 +117,13 @@ int main() {
     std::vector<__half> h_B_fp16(size_B);
     
     for (size_t i = 0; i < size_A; ++i) {
+        NVTX_RANGE("iteration");
         __half hf = __float2half(h_A[i]);
         h_A_fp8[i] = hf;   // FP8 proxy (simplified)
         h_A_fp16[i] = hf;
     }
     for (size_t i = 0; i < size_B; ++i) {
+        NVTX_RANGE("transfer_sync");
         __half hf = __float2half(h_B[i]);
         h_B_fp8[i] = hf;   // FP8 proxy (simplified)
         h_B_fp16[i] = hf;
@@ -142,6 +152,7 @@ int main() {
     const int iterations = 50;
     cudaEventRecord(start_fp8);
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("compute_kernel");
         fp8_gemm_kernel<4096, 4096, 4096><<<grid, block>>>(d_A_fp8, d_B_fp8, d_C_fp8, M, N, K);
     }
     cudaEventRecord(stop_fp8);
@@ -158,6 +169,7 @@ int main() {
     
     cudaEventRecord(start_fp16);
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("compute_kernel");
         fp16_gemm_kernel<4096, 4096, 4096><<<grid, block>>>(d_A_fp16, d_B_fp16, d_C_fp16, M, N, K);
     }
     cudaEventRecord(stop_fp16);

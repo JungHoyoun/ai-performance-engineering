@@ -13,6 +13,7 @@
 #include <vector>
 #include <chrono>
 #include "../core/common/headers/profiling_helpers.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
@@ -80,6 +81,7 @@ float measure_bandwidth(
     
     // Warmup
     for (int i = 0; i < 5; ++i) {
+        NVTX_RANGE("warmup");
         kernel<<<grid, block, 0, stream>>>(d_data, n);
     }
     CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -93,6 +95,7 @@ float measure_bandwidth(
     {
         PROFILE_KERNEL_LAUNCH(name);
         for (int i = 0; i < iterations; ++i) {
+            NVTX_RANGE("compute_kernel:kernel");
             kernel<<<grid, block, 0, stream>>>(d_data, n);
         }
     }
@@ -113,6 +116,7 @@ float measure_bandwidth(
 }
 
 int main() {
+    NVTX_RANGE("main");
     constexpr int N = 10'000'000;  // 10M elements (~40 MB)
     constexpr int ITERATIONS = 100;
     
@@ -125,6 +129,7 @@ int main() {
     // Allocate host and device memory
     std::vector<float> h_data(N);
     for (int i = 0; i < N; ++i) {
+        NVTX_RANGE("setup");
         h_data[i] = static_cast<float>(i);
     }
     
@@ -155,6 +160,7 @@ int main() {
     
     // Warmup
     for (int i = 0; i < 5; ++i) {
+        NVTX_RANGE("warmup");
         kernel_add<<<grid, block, 0, stream>>>(d_data, N);
         kernel_multiply<<<grid, block, 0, stream>>>(d_data, N);
         kernel_sqrt<<<grid, block, 0, stream>>>(d_data, N);
@@ -166,6 +172,7 @@ int main() {
     {
         PROFILE_KERNEL_LAUNCH("separate_kernels");
         for (int i = 0; i < ITERATIONS; ++i) {
+            NVTX_RANGE("compute_kernel:kernel_add");
             kernel_add<<<grid, block, 0, stream>>>(d_data, N);
             kernel_multiply<<<grid, block, 0, stream>>>(d_data, N);
             kernel_sqrt<<<grid, block, 0, stream>>>(d_data, N);
@@ -200,6 +207,7 @@ int main() {
     
     // Warmup
     for (int i = 0; i < 5; ++i) {
+        NVTX_RANGE("compute_graph:launch");
         CUDA_CHECK(cudaGraphLaunch(exec, stream));
     }
     CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -209,6 +217,7 @@ int main() {
     {
         PROFILE_KERNEL_LAUNCH("graph_separate_kernels");
         for (int i = 0; i < ITERATIONS; ++i) {
+            NVTX_RANGE("compute_graph:launch");
             CUDA_CHECK(cudaGraphLaunch(exec, stream));
         }
     }
@@ -231,6 +240,7 @@ int main() {
     
     // Warmup
     for (int i = 0; i < 5; ++i) {
+        NVTX_RANGE("warmup");
         kernel_fused<<<grid, block, 0, stream>>>(d_data, N);
     }
     CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -240,6 +250,7 @@ int main() {
     {
         PROFILE_KERNEL_LAUNCH("fused_kernel");
         for (int i = 0; i < ITERATIONS; ++i) {
+            NVTX_RANGE("compute_kernel:kernel_fused");
             kernel_fused<<<grid, block, 0, stream>>>(d_data, N);
         }
     }

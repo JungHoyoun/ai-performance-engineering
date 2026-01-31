@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <chrono>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
@@ -32,6 +33,7 @@ static void enable_peer_access(int src, int dst) {
 }
 
 int main() {
+    NVTX_RANGE("main");
     int device_count = 0;
     CUDA_CHECK(cudaGetDeviceCount(&device_count));
     if (device_count < 2) {
@@ -69,6 +71,7 @@ int main() {
 
     auto start = std::chrono::high_resolution_clock::now();
     for (int iter = 0; iter < iterations; ++iter) {
+        NVTX_RANGE("transfer_sync");
         CUDA_CHECK(cudaMemcpyPeer(d_dst, dst_device, d_src, src_device, bytes));
     }
     CUDA_CHECK(cudaDeviceSynchronize());

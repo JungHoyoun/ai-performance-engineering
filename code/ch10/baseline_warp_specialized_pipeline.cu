@@ -5,6 +5,7 @@
 #include <numeric>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 namespace {
 constexpr int TILE_SIZE = 64;
@@ -108,6 +109,7 @@ void run_baseline(int tiles) {
 
     double checksum = 0.0;
     for (float v : h_C) {
+        NVTX_RANGE("verify");
         checksum += v;
     }
 
@@ -127,6 +129,7 @@ void run_baseline(int tiles) {
 } // namespace
 
 int main() {
+    NVTX_RANGE("main");
     int tiles = 512;
     run_baseline(tiles);
     return 0;

@@ -10,7 +10,7 @@
 - NEVER delete anything (tracked or untracked, modified or not) unless I explicitly ask.
 - If you notice unexpected local file modifications, always call them out and ask for guidance; default to keeping them as-is and including them in the changes unless I explicitly say otherwise.
 - When you detect modified or untracked files, please treat them as part of this task.
-- If a file is already modified or open in the editor, keep its current contents as-is and include it in the final change list; ask before making any further edits to it.
+- If a file is already modified or open in the editor, keep its current contents as-is and include it in the final change list; you may continue editing without asking.
 - The Amazon book link in `README.md` is expected to fail automated link checks due to bot protection; treat it as an allowlisted exception.
 
 ## Deprecations (CRITICAL)

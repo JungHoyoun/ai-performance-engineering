@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
     do {                                                                     \
@@ -182,6 +183,7 @@ __global__ void gemm_double_buffered_kernel(
 }
 
 int main() {
+    NVTX_RANGE("main");
     // Larger matrices to show double-buffering benefit
     const int M = 2048;
     const int N = 2048;
@@ -195,8 +197,14 @@ int main() {
     std::vector<float> h_C(M * N, 0.0f);
     std::mt19937 rng(42);
     std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
-    for (auto& v : h_A) v = dist(rng);
-    for (auto& v : h_B) v = dist(rng);
+    for (auto& v : h_A) {
+        NVTX_RANGE("setup");
+        v = dist(rng);
+    }
+    for (auto& v : h_B) {
+        NVTX_RANGE("setup");
+        v = dist(rng);
+    }
 
     float *d_A = nullptr, *d_B = nullptr, *d_C = nullptr;
     CUDA_CHECK(cudaMalloc(&d_A, bytes_A));
@@ -222,6 +230,7 @@ int main() {
     const int iterations = 10;
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("compute_kernel:smem");
         gemm_double_buffered_kernel<TILE_M, TILE_N, CHUNK_K, THREAD_TILE_M, THREAD_TILE_N>
             <<<grid, block, shared_bytes>>>(d_A, d_B, d_C, M, N, K);
     }
@@ -234,7 +243,10 @@ int main() {
     CUDA_CHECK(cudaMemcpy(h_C.data(), d_C, bytes_C, cudaMemcpyDeviceToHost));
 
     double checksum = 0.0;
-    for (float v : h_C) checksum += v;
+    for (float v : h_C) {
+        NVTX_RANGE("verify");
+        checksum += v;
+    }
     checksum /= static_cast<double>(M * N);
 
     std::printf("Optimized GEMM (double buffered tiles): %.3f ms (avg over %d iters)\n",

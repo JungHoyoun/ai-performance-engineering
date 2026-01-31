@@ -100,7 +100,7 @@ class HTAAnalyzer:
         output_dir: Optional[Path] = None,
         hta_path: Optional[str] = None,
     ):
-        self.output_dir = Path(output_dir) if output_dir else Path("./hta_output")
+        self.output_dir = Path(output_dir) if output_dir else Path("artifacts/runs/analysis/hta")
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.hta_path = hta_path
         self._hta_available = self._check_hta_available()
@@ -505,5 +505,4 @@ class HTAAnalyzer:
     </script>
 </body>
 </html>'''
-
 

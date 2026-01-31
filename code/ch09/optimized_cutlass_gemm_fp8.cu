@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <iostream>
 #include <random>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                         \
   do {                                                                           \
@@ -38,6 +39,7 @@
   } while (0)
 
 int main() {
+    NVTX_RANGE("main");
     // Matrix dimensions - same as baseline for fair comparison
     constexpr int M = 4096;
     constexpr int N = 4096;
@@ -64,12 +66,15 @@ int main() {
     std::mt19937 gen(42);
     std::uniform_real_distribution<float> dis(-0.5f, 0.5f);
     for (size_t i = 0; i < elements_A * kBatchCount; ++i) {
+        NVTX_RANGE("setup");
         h_A[i] = __nv_fp8_e4m3(dis(gen));
     }
     for (size_t i = 0; i < elements_B * kBatchCount; ++i) {
+        NVTX_RANGE("setup");
         h_B[i] = __nv_fp8_e4m3(dis(gen));
     }
     for (size_t i = 0; i < elements_C * kBatchCount; ++i) {
+        NVTX_RANGE("setup");
         h_C[i] = __half(0.0f);
     }
 
@@ -139,6 +144,7 @@ int main() {
 
     // Warmup
     for (int batch = 0; batch < kBatchCount; ++batch) {
+        NVTX_RANGE("compute_math:ltmatmul");
         const size_t offset_A = batch * elements_A;
         const size_t offset_B = batch * elements_B;
         const size_t offset_C = batch * elements_C;
@@ -162,7 +168,9 @@ int main() {
     // Timed section: Kernel execution only
     CUDA_CHECK(cudaEventRecord(start, stream));
     for (int iter = 0; iter < kIterations; ++iter) {
+        NVTX_RANGE("batch");
         for (int batch = 0; batch < kBatchCount; ++batch) {
+            NVTX_RANGE("compute_math:ltmatmul");
             const size_t offset_A = batch * elements_A;
             const size_t offset_B = batch * elements_B;
             const size_t offset_C = batch * elements_C;

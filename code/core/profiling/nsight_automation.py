@@ -252,6 +252,56 @@ class NsightAutomation:
                 )
             return None
     
+    def build_ncu_command(
+        self,
+        *,
+        command: List[str],
+        output_path: Path,
+        workload_type: str = 'memory_bound',
+        kernel_filter: Optional[str] = None,
+        sampling_interval: Optional[int] = None,
+        metric_set: str = 'full',
+        launch_skip: Optional[int] = None,
+        launch_count: Optional[int] = None,
+        replay_mode: str = 'application',
+    ) -> List[str]:
+        """Build the Nsight Compute command without executing it."""
+        if workload_type not in self.METRIC_SETS:
+            raise ValueError(f"Unsupported workload_type: {workload_type}")
+        metrics = self.METRIC_SETS[workload_type]
+        metric_set_norm = str(metric_set).lower()
+        ncu_set_map = {
+            'full': 'full',
+            'speed-of-light': 'speed-of-light',
+            'roofline': 'roofline',
+            'minimal': 'speed-of-light',  # Minimal uses speed-of-light set
+        }
+        if metric_set_norm not in ncu_set_map:
+            raise ValueError(f"Unsupported metric_set: {metric_set}")
+        ncu_set = ncu_set_map[metric_set_norm]
+        ncu_cmd = [
+            'ncu',
+            '--set', ncu_set,
+            '--target-processes', 'all',
+            '--export', str(output_path),
+            '--force-overwrite',
+        ]
+        if replay_mode:
+            ncu_cmd.extend(['--replay-mode', replay_mode])
+        # Only add custom metrics when using the full set; other sets bring their own.
+        if metrics and ncu_set == 'full':
+            ncu_cmd.extend(['--metrics', ",".join(metrics)])
+        if kernel_filter:
+            ncu_cmd.extend(['--kernel-name', kernel_filter])
+        if launch_skip is not None:
+            ncu_cmd.extend(['--launch-skip', str(launch_skip)])
+        if launch_count is not None:
+            ncu_cmd.extend(['--launch-count', str(launch_count)])
+        if sampling_interval:
+            ncu_cmd.extend(['--pm-sampling-interval', str(sampling_interval)])
+        ncu_cmd.extend(command)
+        return ncu_cmd
+
     def profile_ncu(
         self,
         command: List[str],
@@ -261,6 +311,10 @@ class NsightAutomation:
         force_lineinfo: bool = True,
         timeout_seconds: Optional[float] = None,
         sampling_interval: Optional[int] = None,
+        metric_set: str = 'full',
+        launch_skip: Optional[int] = None,
+        launch_count: Optional[int] = None,
+        replay_mode: str = 'application',
     ) -> Optional[Path]:
         """Run Nsight Compute profiling.
         
@@ -268,8 +322,12 @@ class NsightAutomation:
             command: Command to profile
             output_name: Base name for output file
             workload_type: Type of workload for metric selection
-            kernel_filter: Optional kernel name filter
+            kernel_filter: Optional kernel name filter (auto-limits launches when set)
             sampling_interval: pm-sampling-interval value (cycles between samples)
+            metric_set: Metric set to use ('full', 'speed-of-light', 'roofline', 'minimal')
+            launch_skip: Number of kernel launches to skip before profiling
+            launch_count: Number of kernel launches to profile (None = all remaining)
+            replay_mode: Replay mode ('application' or 'kernel')
         
         Returns:
             output_path: Path to .ncu-rep file, or None if failed
@@ -280,30 +338,24 @@ class NsightAutomation:
         self.last_error = None
         
         output_path = self.output_dir / f"{output_name}.ncu-rep"
-        
-        # Get metrics for workload type
-        metrics = self.METRIC_SETS.get(workload_type, self.METRIC_SETS['memory_bound'])
-        
-        # Build ncu command
-        ncu_cmd = [
-            'ncu',
-            '--set', 'full',  # Full metric set
-            '--target-processes', 'all',
-            '--export', str(output_path),
-            '--force-overwrite',
-        ]
-        
-        # Add custom metrics (single --metrics invocation; ncu rejects repeated flag)
-        if metrics:
-            ncu_cmd.extend(['--metrics', ",".join(metrics)])
-        
-        # Add kernel filter if specified
         if kernel_filter:
-            ncu_cmd.extend(['--kernel-name', kernel_filter])
-        if sampling_interval:
-            ncu_cmd.extend(['--pm-sampling-interval', str(sampling_interval)])
-        
-        ncu_cmd.extend(command)
+            # Auto-limit when a kernel filter is specified to avoid timeouts
+            # on workloads with many launches; caller can override explicitly.
+            if launch_skip is None:
+                launch_skip = 100
+            if launch_count is None:
+                launch_count = 1
+        ncu_cmd = self.build_ncu_command(
+            command=command,
+            output_path=output_path,
+            workload_type=workload_type,
+            kernel_filter=kernel_filter,
+            sampling_interval=sampling_interval,
+            metric_set=metric_set,
+            launch_skip=launch_skip,
+            launch_count=launch_count,
+            replay_mode=replay_mode,
+        )
         
         logger.info(f"Running: {' '.join(ncu_cmd[:6])} ...")
         self.last_run = {
@@ -312,6 +364,11 @@ class NsightAutomation:
             "timeout_seconds": timeout_seconds,
             "workload_type": workload_type,
             "sampling_interval": sampling_interval,
+            "metric_set": metric_set,
+            "launch_skip": launch_skip,
+            "launch_count": launch_count,
+            "replay_mode": replay_mode,
+            "kernel_filter": kernel_filter,
         }
         
         try:

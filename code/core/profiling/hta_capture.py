@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 class HTACaptureAutomation:
     """Run an Nsight Systems capture and immediately analyze it with HTA."""
 
-    def __init__(self, output_root: Path = Path("artifacts/hta")):
+    def __init__(self, output_root: Path = Path("artifacts/runs")):
         self.output_root = output_root
         self.output_root.mkdir(parents=True, exist_ok=True)
         self.last_error: Optional[str] = None

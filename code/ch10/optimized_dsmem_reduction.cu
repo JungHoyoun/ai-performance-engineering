@@ -33,6 +33,7 @@
 #include <numeric>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 namespace cg = cooperative_groups;
 
@@ -243,6 +244,7 @@ __global__ void final_reduction_kernel(
 //============================================================================
 
 int main() {
+    NVTX_RANGE("main");
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     
@@ -277,6 +279,7 @@ int main() {
     // Initialize with known pattern
     std::vector<float> h_input(N);
     for (int i = 0; i < N; ++i) {
+        NVTX_RANGE("warmup");
         h_input[i] = 1.0f;  // Sum should equal N
     }
     CUDA_CHECK(cudaMemcpy(d_input, h_input.data(), N * sizeof(float), cudaMemcpyHostToDevice));
@@ -296,6 +299,7 @@ int main() {
     CUDA_CHECK(cudaMemset(d_output, 0, num_clusters * sizeof(float)));
     
     for (int i = 0; i < warmup; ++i) {
+        NVTX_RANGE("warmup");
         standard_block_reduction_kernel<<<num_blocks, BLOCK_SIZE>>>(d_input, d_partial, N);
         final_reduction_kernel<<<num_clusters, BLOCK_SIZE>>>(d_partial, d_output, num_blocks, CLUSTER_SIZE);
     }
@@ -303,6 +307,7 @@ int main() {
     
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("compute_kernel:standard_block_reduction_kernel");
         standard_block_reduction_kernel<<<num_blocks, BLOCK_SIZE>>>(d_input, d_partial, N);
         final_reduction_kernel<<<num_clusters, BLOCK_SIZE>>>(d_partial, d_output, num_blocks, CLUSTER_SIZE);
     }
@@ -345,12 +350,14 @@ int main() {
     // Launch with cluster structure using CUDA 13.0+ API
     // cudaLaunchKernelEx requires function pointer and unpacked arguments
     for (int i = 0; i < warmup; ++i) {
+        NVTX_RANGE("warmup");
         CUDA_CHECK(cudaLaunchKernelEx(&config, dsmem_cluster_reduction_kernel, d_input, d_output, N, elements_per_cluster));
     }
     CUDA_CHECK(cudaDeviceSynchronize());
     
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("iteration");
         CUDA_CHECK(cudaLaunchKernelEx(&config, dsmem_cluster_reduction_kernel, d_input, d_output, N, elements_per_cluster));
     }
     CUDA_CHECK(cudaEventRecord(stop));

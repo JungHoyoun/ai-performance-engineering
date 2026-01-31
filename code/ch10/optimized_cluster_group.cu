@@ -7,6 +7,7 @@
 
 #include "cluster_group_common.cuh"
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 namespace cg = cooperative_groups;
 
@@ -142,6 +143,7 @@ ProbeResult probe_dsmem_support() {
 }
 
 int main() {
+    NVTX_RANGE("main");
 #if !defined(__CUDACC_VER_MAJOR__) || (__CUDACC_VER_MAJOR__ < 13)
     fprintf(stderr, "SKIPPED: CUDA 13+ required for cluster DSMEM support.\n");
     return 3;
@@ -234,6 +236,7 @@ int main() {
 
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < kIterations; ++i) {
+        NVTX_RANGE("iteration");
         CUDA_CHECK(cudaLaunchKernelExC(&config, (void*)cluster_dual_kernel, args));
     }
     CUDA_CHECK(cudaEventRecord(stop));
@@ -264,6 +267,7 @@ int main() {
         float diff = 0.0f;
         const std::size_t limit = std::min(a.size(), b.size());
         for (std::size_t i = 0; i < limit; ++i) {
+            NVTX_RANGE("verify");
             diff = std::max(diff, std::abs(a[i] - b[i]));
         }
         return diff;
@@ -275,6 +279,7 @@ int main() {
 
     double checksum = 0.0;
     for (int i = 0; i < chunks; ++i) {
+        NVTX_RANGE("verify");
         checksum += static_cast<double>(h_sum[i]) + static_cast<double>(h_squares[i]);
     }
     checksum /= static_cast<double>(chunks);

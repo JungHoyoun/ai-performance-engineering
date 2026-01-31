@@ -28,6 +28,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                       \
     do {                                                                       \
@@ -239,12 +240,14 @@ void benchmark_cache_policies() {
         
         // Warmup
         for (int i = 0; i < warmup; ++i) {
+            NVTX_RANGE("warmup");
             kernel<<<g, block>>>(d_a, d_b, d_c, n / elem_per_thread);
         }
         CUDA_CHECK(cudaDeviceSynchronize());
         
         CUDA_CHECK(cudaEventRecord(start));
         for (int i = 0; i < iterations; ++i) {
+            NVTX_RANGE("compute_kernel:kernel");
             kernel<<<g, block>>>(d_a, d_b, d_c, n / elem_per_thread);
         }
         CUDA_CHECK(cudaEventRecord(stop));
@@ -271,6 +274,7 @@ void benchmark_cache_policies() {
         CUDA_CHECK(cudaDeviceSynchronize());
         
         for (int i = 0; i < warmup; ++i) {
+            NVTX_RANGE("warmup");
             vector_add_cache_streaming_vec4<<<grid_vec4, block>>>(
                 reinterpret_cast<const float4*>(d_a),
                 reinterpret_cast<const float4*>(d_b),
@@ -282,6 +286,7 @@ void benchmark_cache_policies() {
         
         CUDA_CHECK(cudaEventRecord(start));
         for (int i = 0; i < iterations; ++i) {
+            NVTX_RANGE("compute_kernel:vector_add_cache_streaming_vec4");
             vector_add_cache_streaming_vec4<<<grid_vec4, block>>>(
                 reinterpret_cast<const float4*>(d_a),
                 reinterpret_cast<const float4*>(d_b),
@@ -304,6 +309,7 @@ void benchmark_cache_policies() {
     printf("%-25s %10s %15s\n", "-------", "---------", "----------------");
     
     for (const auto& r : results) {
+        NVTX_RANGE("iteration");
         printf("%-25s %10.3f %15.1f\n", r.name, r.ms, r.bandwidth);
     }
     
@@ -311,6 +317,7 @@ void benchmark_cache_policies() {
     printf("\nSpeedup vs default:\n");
     float baseline = results[0].ms;
     for (const auto& r : results) {
+        NVTX_RANGE("iteration");
         printf("  %-25s %.2fx\n", r.name, baseline / r.ms);
     }
     
@@ -329,6 +336,7 @@ void benchmark_cache_policies() {
 }
 
 int main() {
+    NVTX_RANGE("main");
     benchmark_cache_policies();
     return 0;
 }

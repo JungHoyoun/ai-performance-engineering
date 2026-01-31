@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call) \
     do { \
@@ -52,11 +53,14 @@ static void quantize_to_nvfp4(
     const int num_scale_cols = cols / FP4_BLOCK_SIZE;
     // Compute per-row scales (block-scaled along the column dimension).
     for (int r = 0; r < rows; ++r) {
+        NVTX_RANGE("iteration");
         for (int block = 0; block < num_scale_cols; ++block) {
+            NVTX_RANGE("iteration");
             const int block_start = block * FP4_BLOCK_SIZE;
 
             float max_abs = 0.0f;
             for (int i = 0; i < FP4_BLOCK_SIZE; ++i) {
+                NVTX_RANGE("iteration");
                 max_abs = std::max(max_abs, std::abs(input[r * cols + block_start + i]));
             }
 
@@ -67,10 +71,13 @@ static void quantize_to_nvfp4(
 
     // Pack in row-major order: consecutive elements are adjacent columns.
     for (int r = 0; r < rows; ++r) {
+        NVTX_RANGE("iteration");
         for (int block = 0; block < num_scale_cols; ++block) {
+            NVTX_RANGE("iteration");
             const int block_start = block * FP4_BLOCK_SIZE;
             float scale = static_cast<float>(scales[r * num_scale_cols + block]);
             for (int i = 0; i < FP4_BLOCK_SIZE; i += 2) {
+                NVTX_RANGE("iteration");
                 float v0 = input[r * cols + block_start + i];
                 float v1 = input[r * cols + block_start + i + 1];
 
@@ -144,6 +151,7 @@ __global__ void nvfp4_gemm_manual(
 
 static std::string parse_dump_path(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
+        NVTX_RANGE("iteration");
         std::string arg(argv[i]);
         if (arg == "--dump-output") {
             if (i + 1 >= argc) {
@@ -156,6 +164,7 @@ static std::string parse_dump_path(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
+    NVTX_RANGE("main");
     try {
         std::string dump_path = parse_dump_path(argc, argv);
 
@@ -183,9 +192,11 @@ int main(int argc, char** argv) {
         std::mt19937 gen(42);
         std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
         for (auto& v : h_A_fp32) {
+            NVTX_RANGE("iteration");
             v = dis(gen);
         }
         for (auto& v : h_B_fp32) {
+            NVTX_RANGE("iteration");
             v = dis(gen);
         }
 
@@ -224,6 +235,7 @@ int main(int argc, char** argv) {
         const int iterations = 10;
         CUDA_CHECK(cudaEventRecord(start));
         for (int i = 0; i < iterations; ++i) {
+            NVTX_RANGE("compute_kernel:nvfp4_gemm_manual");
             nvfp4_gemm_manual<<<grid, block>>>(d_A, d_B, d_A_scales, d_B_scales, d_C, M, N, K);
         }
         CUDA_CHECK(cudaEventRecord(stop));
@@ -253,6 +265,7 @@ int main(int argc, char** argv) {
         CUDA_CHECK(cudaMemcpy(h_C_verify.data(), d_C, elements_C * sizeof(__half), cudaMemcpyDeviceToHost));
         double checksum = 0.0;
         for (const auto& v : h_C_verify) {
+            NVTX_RANGE("verify");
             checksum += static_cast<double>(__half2float(v));
         }
         checksum /= static_cast<double>(elements_C);

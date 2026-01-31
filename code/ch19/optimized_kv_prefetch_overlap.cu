@@ -2,6 +2,7 @@
 #include <cuda_runtime.h>
 #include <cstdio>
 #include <vector>
+#include "../core/common/nvtx_utils.cuh"
 
 namespace {
 constexpr size_t KV_BYTES = 2ull << 20;
@@ -21,6 +22,7 @@ void run_optimized(int iterations) {
     cudaMallocHost(&host_in, iterations * elems_per_chunk * sizeof(float));
     cudaMallocHost(&host_out, iterations * elems_per_chunk * sizeof(float));
     for (size_t i = 0; i < static_cast<size_t>(iterations) * elems_per_chunk; ++i) {
+        NVTX_RANGE("setup");
         host_in[i] = static_cast<float>((i % 17) * 0.5f);
     }
 
@@ -28,6 +30,7 @@ void run_optimized(int iterations) {
     cudaStream_t compute_streams[kStreams];
     float* device_slots[kStreams];
     for (int i = 0; i < kStreams; ++i) {
+        NVTX_RANGE("setup");
         cudaStreamCreateWithFlags(&compute_streams[i], cudaStreamNonBlocking);
         cudaMalloc(&device_slots[i], KV_BYTES);
     }
@@ -38,6 +41,7 @@ void run_optimized(int iterations) {
     cudaEventRecord(start);
 
     for (int it = 0; it < iterations; ++it) {
+        NVTX_RANGE("transfer_async:h2d");
         const int stream_id = it % kStreams;
         cudaStream_t st = compute_streams[stream_id];
         float* device_slot = device_slots[stream_id];
@@ -50,6 +54,7 @@ void run_optimized(int iterations) {
     }
 
     for (int i = 0; i < kStreams; ++i) {
+        NVTX_RANGE("iteration");
         cudaStreamSynchronize(compute_streams[i]);
     }
 
@@ -63,6 +68,7 @@ void run_optimized(int iterations) {
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
     for (int i = 0; i < kStreams; ++i) {
+        NVTX_RANGE("cleanup");
         cudaStreamDestroy(compute_streams[i]);
         cudaFree(device_slots[i]);
     }
@@ -72,6 +78,7 @@ void run_optimized(int iterations) {
 }  // namespace
 
 int main() {
+    NVTX_RANGE("main");
     run_optimized(16);
     return 0;
 }

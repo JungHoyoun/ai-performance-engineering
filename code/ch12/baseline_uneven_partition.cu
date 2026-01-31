@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "uneven_partition_common.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                        \
     do {                                                                        \
@@ -36,6 +37,7 @@ __global__ void static_partition_kernel(const float* in,
 }
 
 int main() {
+    NVTX_RANGE("main");
     constexpr int elems = (1 << 20) + 153;
     constexpr int warmup = 1;
     constexpr int iters = 10;
@@ -43,6 +45,7 @@ int main() {
     std::vector<float> h_in(elems);
     std::vector<float> h_out(elems, 0.0f);
     for (int i = 0; i < elems; ++i) {
+        NVTX_RANGE("warmup");
         h_in[i] = std::sin(0.0005f * static_cast<float>(i));
     }
 
@@ -55,6 +58,7 @@ int main() {
 
     auto run_static = [&](cudaStream_t stream) {
         for (const UnevenSegment& seg : segments) {
+            NVTX_RANGE("compute_kernel:static_partition_kernel");
             int blocks = (seg.length + 255) / 256;
             static_partition_kernel<<<blocks, 256, 0, stream>>>(
                 d_in,
@@ -66,6 +70,7 @@ int main() {
     };
 
     for (int i = 0; i < warmup; ++i) {
+        NVTX_RANGE("warmup");
         CUDA_CHECK(cudaMemset(d_out, 0, elems * sizeof(float)));
         run_static(nullptr);
     }
@@ -77,6 +82,7 @@ int main() {
 
     CUDA_CHECK(cudaEventRecord(start_evt));
     for (int iter = 0; iter < iters; ++iter) {
+        NVTX_RANGE("iteration");
         CUDA_CHECK(cudaMemset(d_out, 0, elems * sizeof(float)));
         run_static(nullptr);
     }
@@ -90,6 +96,7 @@ int main() {
     CUDA_CHECK(cudaMemcpy(h_out.data(), d_out, elems * sizeof(float), cudaMemcpyDeviceToHost));
     double max_err = 0.0;
     for (int i = 0; i < elems; ++i) {
+        NVTX_RANGE("cleanup");
         const double input = static_cast<double>(h_in[i]);
         const double expected = input * input + 0.5 * input;
         max_err = std::max(max_err, std::abs(static_cast<double>(h_out[i]) - expected));

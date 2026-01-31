@@ -4,6 +4,7 @@
 #include <cuda_runtime.h>
 #include <cstdlib>
 #include <cstdio>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                       \
   do {                                                                         \
@@ -16,6 +17,7 @@
   } while (0)
 
 int main() {
+    NVTX_RANGE("main");
   cudaMemPool_t pool;
   CUDA_CHECK(cudaDeviceGetDefaultMemPool(&pool, /*device=*/0));
 

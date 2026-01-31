@@ -5,6 +5,7 @@
 #include <stdlib.h>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call) \
     do { \
@@ -29,6 +30,7 @@ __global__ void baseline_copy(const float* __restrict__ src,
 }
 
 int main() {
+    NVTX_RANGE("main");
     const size_t target_bytes = 512ULL * 1024 * 1024;  // 512 MB
     const size_t n = target_bytes / sizeof(float);
     
@@ -45,6 +47,7 @@ int main() {
     const int iterations = 10;
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; i++) {
+        NVTX_RANGE("compute_kernel:baseline_copy");
         baseline_copy<<<8, 64>>>(d_src, d_dst, n);
     }
     CUDA_CHECK(cudaEventRecord(stop));

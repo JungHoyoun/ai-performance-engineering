@@ -5,10 +5,9 @@
 // archive so existing build systems can continue linking with the familiar flag.
 
 #include <cuda_runtime.h>
-#include <nvtx3/nvToolsExt.h>
-
 #include <cstdio>
 #include <vector>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
@@ -46,42 +45,31 @@ class SimpleModel {
   }
 
   void encode(const std::vector<Token>& prompt) {
-    nvtxRangePush("encode");
+    NVTX_RANGE("step:encode");
     for (size_t i = 0; i < prompt.size(); ++i) {
       char label[32];
-      std::snprintf(label, sizeof(label), "token_%zu", i);
-      nvtxRangePush(label);
-      run_kernel("attention", 0xFF00FF00);
-      run_kernel("feedforward", 0xFF0000FF);
-      nvtxRangePop();
+      std::snprintf(label, sizeof(label), "batch:token_%zu", i);
+      NVTX_RANGE(label);
+      run_kernel("compute_math:attention");
+      run_kernel("compute_math:feedforward");
     }
-    nvtxRangePop();
   }
 
   Token decode() {
-    nvtxRangePush("decode_step");
-    run_kernel("attention", 0xFF00FF00);
-    run_kernel("feedforward", 0xFF0000FF);
-    nvtxRangePop();
+    NVTX_RANGE("step:decode");
+    run_kernel("compute_math:attention");
+    run_kernel("compute_math:feedforward");
     return Token{42};
   }
 
  private:
-  void run_kernel(const char* name, uint32_t color) {
-    nvtxEventAttributes_t attr{};
-    attr.version = NVTX_VERSION;
-    attr.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
-    attr.colorType = NVTX_COLOR_ARGB;
-    attr.color = color;
-    attr.messageType = NVTX_MESSAGE_TYPE_ASCII;
-    attr.message.ascii = name;
-    nvtxRangePushEx(&attr);
+  void run_kernel(const char* name) {
+    NVTX_RANGE(name);
     dim3 block(256);
     dim3 grid((dim_ + block.x - 1) / block.x);
     simple_model_dummy_kernel<<<grid, block>>>(weights_, cache_, dim_);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
-    nvtxRangePop();
   }
 
   int dim_;
@@ -90,21 +78,20 @@ class SimpleModel {
 };
 
 int main() {
+  NVTX_RANGE("step:main");
   std::printf("Build example: nvcc nvtx_profiling.cu -std=c++17 -O3 -lineinfo -o nvtx_profiling\n");
 
   SimpleModel model;
   std::vector<Token> prompt(32);
 
-  nvtxRangePush("Inference");
+  NVTX_RANGE("step:inference");
   model.encode(prompt);
   for (int i = 0; i < 5; ++i) {
     char label[32];
-    std::snprintf(label, sizeof(label), "decode_%d", i);
-    nvtxRangePush(label);
+    std::snprintf(label, sizeof(label), "iteration:decode_%d", i);
+    NVTX_RANGE(label);
     model.decode();
-    nvtxRangePop();
   }
-  nvtxRangePop();
 
   return 0;
 }

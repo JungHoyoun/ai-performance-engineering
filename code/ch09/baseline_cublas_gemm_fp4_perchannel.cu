@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                         \
   do {                                                                           \
@@ -67,11 +68,14 @@ void quantize_to_nvfp4(const float* input,
     const int num_scale_cols = cols / FP4_BLOCK_SIZE;
 
     for (int r = 0; r < rows; ++r) {
+        NVTX_RANGE("iteration");
         for (int block = 0; block < num_scale_cols; ++block) {
+            NVTX_RANGE("iteration");
             const int block_start = block * FP4_BLOCK_SIZE;
 
             float max_abs = 0.0f;
             for (int i = 0; i < FP4_BLOCK_SIZE; ++i) {
+                NVTX_RANGE("iteration");
                 max_abs = std::max(max_abs, std::abs(input[r * cols + block_start + i]));
             }
 
@@ -79,6 +83,7 @@ void quantize_to_nvfp4(const float* input,
             scales[r * num_scale_cols + block] = __nv_fp8_e4m3(scale);
 
             for (int i = 0; i < FP4_BLOCK_SIZE; i += 2) {
+                NVTX_RANGE("iteration");
                 float v0 = input[r * cols + block_start + i];
                 float v1 = input[r * cols + block_start + i + 1];
 
@@ -95,6 +100,7 @@ void quantize_to_nvfp4(const float* input,
 }
 
 int main() {
+    NVTX_RANGE("main");
     cudaDeviceProp prop{};
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     if (prop.major < 10) {
@@ -125,10 +131,17 @@ int main() {
 
     std::mt19937 gen(42);
     std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
-    for (auto& v : h_A_fp32) v = dis(gen);
-    for (auto& v : h_B_fp32) v = dis(gen);
+    for (auto& v : h_A_fp32) {
+        NVTX_RANGE("batch");
+        v = dis(gen);
+    }
+    for (auto& v : h_B_fp32) {
+        NVTX_RANGE("batch");
+        v = dis(gen);
+    }
 
     for (int batch = 0; batch < kBatchCount; ++batch) {
+        NVTX_RANGE("batch");
         quantize_to_nvfp4(h_A_fp32.data() + batch * kM * kK,
                           h_A_packed.data() + batch * elements_A_packed,
                           h_A_scales.data() + batch * num_scales_A,
@@ -228,6 +241,7 @@ int main() {
     float beta = 0.0f;
 
     for (int batch = 0; batch < kBatchCount; ++batch) {
+        NVTX_RANGE("compute_math:ltmatmul");
         const size_t offset_A = batch * elements_A_packed;
         const size_t offset_B = batch * elements_B_packed;
         const size_t offset_C = batch * elements_C;
@@ -251,7 +265,9 @@ int main() {
 
     CUDA_CHECK(cudaEventRecord(start, stream));
     for (int iter = 0; iter < kIterations; ++iter) {
+        NVTX_RANGE("batch");
         for (int batch = 0; batch < kBatchCount; ++batch) {
+            NVTX_RANGE("compute_math:ltmatmul");
             const size_t offset_A = batch * elements_A_packed;
             const size_t offset_B = batch * elements_B_packed;
             const size_t offset_C = batch * elements_C;
@@ -280,6 +296,7 @@ int main() {
     std::mt19937 scale_gen(42);
     std::uniform_real_distribution<float> scale_dis(0.75f, 1.25f);
     for (auto& v : h_scales) {
+        NVTX_RANGE("setup");
         v = scale_dis(scale_gen);
     }
     float* d_scales = nullptr;
@@ -289,6 +306,7 @@ int main() {
     dim3 block(16, 16);
     dim3 grid((kN + block.x - 1) / block.x, (kM + block.y - 1) / block.y);
     for (int batch = 0; batch < kBatchCount; ++batch) {
+        NVTX_RANGE("compute_kernel:apply_per_channel_scale");
         const size_t offset_C = batch * elements_C;
         apply_per_channel_scale<<<grid, block, 0, stream>>>(d_C + offset_C, d_scales, kM, kN);
     }
@@ -299,6 +317,7 @@ int main() {
     CUDA_CHECK(cudaMemcpy(h_C.data(), d_C, elements_C * kBatchCount * sizeof(__half), cudaMemcpyDeviceToHost));
     double checksum = 0.0;
     for (size_t i = 0; i < elements_C * kBatchCount; ++i) {
+        NVTX_RANGE("verify");
         checksum += std::abs(static_cast<double>(__half2float(h_C[i])));
     }
     VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));

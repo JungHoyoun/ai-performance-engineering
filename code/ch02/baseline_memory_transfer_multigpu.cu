@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <chrono>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
@@ -18,6 +19,7 @@
   } while (0)
 
 int main() {
+    NVTX_RANGE("main");
     int device_count = 0;
     CUDA_CHECK(cudaGetDeviceCount(&device_count));
     if (device_count < 2) {
@@ -60,6 +62,7 @@ int main() {
 
     auto start = std::chrono::high_resolution_clock::now();
     for (int iter = 0; iter < iterations; ++iter) {
+        NVTX_RANGE("transfer_sync:h2d");
         CUDA_CHECK(cudaSetDevice(src_device));
         CUDA_CHECK(cudaMemcpy(h_buffer, d_src, bytes, cudaMemcpyDeviceToHost));
         CUDA_CHECK(cudaSetDevice(dst_device));

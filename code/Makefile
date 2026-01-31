@@ -474,7 +474,7 @@ smart-status:
 # Dashboard
 dashboard:
 	@echo "Starting dashboard at http://localhost:8765"
-	@python -m dashboard.api.server
+	@python -m dashboard.api.server serve
 
 # TUI (Terminal UI)
 tui:

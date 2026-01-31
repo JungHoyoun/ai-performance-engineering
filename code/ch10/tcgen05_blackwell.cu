@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "../core/common/headers/arch_detection.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                                 \
     do {                                                                                 \
@@ -135,6 +136,7 @@ void launch_simple_kernel(int M, int N, int K,
 }
 
 int main(int argc, char** argv) {
+    NVTX_RANGE("main");
     int M = 1024, N = 1024, K = 1024;
     if (argc > 1) M = std::atoi(argv[1]);
     if (argc > 2) N = std::atoi(argv[2]);
@@ -155,7 +157,9 @@ int main(int argc, char** argv) {
     std::vector<float> h_ref(size_C);
 
     for (auto& v : h_A) { v = __float2half(static_cast<float>(rand()) / RAND_MAX); }
+        NVTX_RANGE("iteration");
     for (auto& v : h_B) { v = __float2half(static_cast<float>(rand()) / RAND_MAX); }
+        NVTX_RANGE("iteration");
 
     // Allocate device memory ONCE before timing
     size_t size_A_bytes = size_A * sizeof(__half);
@@ -195,6 +199,7 @@ int main(int argc, char** argv) {
     const int iterations = 50;
     cudaEventRecord(start);
     for (int iter = 0; iter < iterations; ++iter) {
+        NVTX_RANGE("compute_kernel");
         if (cfg.m == 128 && cfg.n == 128 && cfg.k == 64) {
             simple_fp16_gemm<128, 128, 64><<<grid, block>>>(d_A, d_B, d_C, M, N, K);
         } else if (cfg.m == 64 && cfg.n == 64 && cfg.k == 32) {
@@ -224,6 +229,7 @@ int main(int argc, char** argv) {
     CUDA_CHECK(cudaMemcpy(&h_C[0], d_C, sizeof(float), cudaMemcpyDeviceToHost));
     float ref_val = 0.0f;
     for (int k = 0; k < K; ++k) {
+        NVTX_RANGE("compute_math");
         ref_val += __half2float(h_A[k]) * __half2float(h_B[k * N]);
     }
     printf("Sample element check: GPU=%.3f, CPU=%.3f (diff=%.3e)\n", 

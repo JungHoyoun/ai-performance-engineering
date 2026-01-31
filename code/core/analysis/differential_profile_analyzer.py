@@ -10,10 +10,10 @@ Takes two deep_profiling_report.py JSON outputs and generates:
 
 Usage:
     python core/analysis/differential_profile_analyzer.py \\
-        --baseline output/baseline_deep_profile.json \\
-        --optimized output/optimized_deep_profile.json \\
-        --output-json output/differential_analysis.json \\
-        --output-md output/differential_analysis.md
+        --baseline artifacts/runs/analysis/baseline_deep_profile.json \\
+        --optimized artifacts/runs/analysis/optimized_deep_profile.json \\
+        --output-json artifacts/runs/analysis/differential_analysis.json \\
+        --output-md artifacts/runs/analysis/differential_analysis.md
 """
 
 from __future__ import annotations

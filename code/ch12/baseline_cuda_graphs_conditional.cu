@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 #include <cstdio>
 #include <vector>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
@@ -43,6 +44,7 @@ __global__ void predicate_kernel(int* condition, float* data, int n, float thres
 }
 
 int main() {
+    NVTX_RANGE("main");
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     std::printf("Baseline Conditional Graphs (standard dynamic dispatch) on %s (SM %d.%d)\n", 
@@ -55,6 +57,7 @@ int main() {
     
     std::vector<float> h_data(N);
     for (int i = 0; i < N; ++i) {
+        NVTX_RANGE("setup");
         h_data[i] = 1.0f + (i % 100) * 0.01f;
     }
     CUDA_CHECK(cudaMemcpy(d_data, h_data.data(), bytes, cudaMemcpyHostToDevice));
@@ -76,6 +79,7 @@ int main() {
     // This demonstrates the cost of host-device synchronization
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < ITERS; ++i) {
+        NVTX_RANGE("transfer_sync:d2h");
         // Evaluate condition on device
         predicate_kernel<<<1, 1>>>(d_condition, d_data, N, THRESHOLD);
         

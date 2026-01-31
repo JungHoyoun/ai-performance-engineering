@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cuda_runtime.h>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(cmd)                                                     \
     do {                                                                    \
@@ -26,6 +27,7 @@ __global__ void saxpy(int n, float a, const float* __restrict__ x, float* __rest
 }
 
 int main() {
+    NVTX_RANGE("main");
     constexpr int N = 1 << 20;
     constexpr float A = 2.0f;
 
@@ -36,6 +38,7 @@ int main() {
     float* x_host = new float[N];
     float* y_host = new float[N];
     for (int i = 0; i < N; ++i) {
+        NVTX_RANGE("setup");
         x_host[i] = 1.0f;
         y_host[i] = 2.0f;
     }
@@ -53,6 +56,7 @@ int main() {
 
     float max_err = 0.0f;
     for (int i = 0; i < N; ++i) {
+        NVTX_RANGE("cleanup");
         max_err = fmaxf(max_err, fabsf(y_host[i] - 4.0f));
     }
     std::printf("max error = %g\n", max_err);

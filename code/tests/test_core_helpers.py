@@ -3,6 +3,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import mcp.mcp_server as mcp_server
+from core.harness.benchmark_harness import lock_gpu_clocks
+
 from core import (
     profile_artifacts,
     compile_analysis,
@@ -120,23 +123,24 @@ def test_profile_insights_nsys_comparison(tmp_path: Path):
     )
 
     baseline_prefix = tmp_path / "baseline_test"
-    subprocess.run(
-        [
-            "nsys",
-            "profile",
-            "--force-overwrite=true",
-            "-t",
-            "cuda,nvtx,osrt",
-            "-o",
-            str(baseline_prefix),
-            sys.executable,
-            str(script),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+    with lock_gpu_clocks():
+        subprocess.run(
+            [
+                "nsys",
+                "profile",
+                "--force-overwrite=true",
+                "-t",
+                "cuda,nvtx,osrt",
+                "-o",
+                str(baseline_prefix),
+                sys.executable,
+                str(script),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
 
     baseline_rep = baseline_prefix.with_suffix(".nsys-rep")
     assert baseline_rep.exists()
@@ -186,22 +190,23 @@ def test_profile_insights_ncu_comparison_from_rep(tmp_path: Path):
     )
 
     out_prefix = tmp_path / "ncu_test"
-    subprocess.run(
-        [
-            "ncu",
-            "--metrics",
-            metrics,
-            "--force-overwrite",
-            "-o",
-            str(out_prefix),
-            sys.executable,
-            str(script),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=180,
-    )
+    with lock_gpu_clocks():
+        subprocess.run(
+            [
+                "ncu",
+                "--metrics",
+                metrics,
+                "--force-overwrite",
+                "-o",
+                str(out_prefix),
+                sys.executable,
+                str(script),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
 
     rep = out_prefix.with_suffix(".ncu-rep")
     assert rep.exists()
@@ -252,6 +257,102 @@ def test_profile_insights_ncu_pair_key_selects_csv(tmp_path: Path):
     assert metrics["sm__throughput"]["baseline"] == "50"
     assert metrics["sm__throughput"]["optimized"] == "70"
     assert "baseline_sources" not in comparison
+
+
+def test_mcp_compare_tools_include_metrics(tmp_path: Path):
+    script = tmp_path / "compare_script.py"
+    script.write_text(
+        (
+            "import torch\n"
+            "assert torch.cuda.is_available(), 'CUDA required for compare tool test'\n"
+            "x = torch.randn(1024, device='cuda')\n"
+            "with torch.cuda.nvtx.range('compare_tool_range'):\n"
+            "    y = x * 2\n"
+            "torch.cuda.synchronize()\n"
+            "print(float(y[0].item()))\n"
+        ),
+        encoding="utf-8",
+    )
+
+    baseline_prefix = tmp_path / "baseline_compare"
+    with lock_gpu_clocks():
+        subprocess.run(
+            [
+                "nsys",
+                "profile",
+                "--force-overwrite=true",
+                "-t",
+                "cuda,nvtx,osrt",
+                "-o",
+                str(baseline_prefix),
+                sys.executable,
+                str(script),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    baseline_nsys = baseline_prefix.with_suffix(".nsys-rep")
+    assert baseline_nsys.exists()
+    optimized_nsys = tmp_path / "optimized_compare.nsys-rep"
+    optimized_nsys.write_bytes(baseline_nsys.read_bytes())
+
+    metrics = ",".join(
+        [
+            "gpu__time_duration.avg",
+            "sm__throughput.avg.pct_of_peak_sustained_elapsed",
+            "gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed",
+            "lts__throughput.avg.pct_of_peak_sustained_elapsed",
+            "sm__warps_active.avg.pct_of_peak_sustained_active",
+        ]
+    )
+    out_prefix = tmp_path / "ncu_compare"
+    with lock_gpu_clocks():
+        subprocess.run(
+            [
+                "ncu",
+                "--metrics",
+                metrics,
+                "--force-overwrite",
+                "-o",
+                str(out_prefix),
+                sys.executable,
+                str(script),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    rep = out_prefix.with_suffix(".ncu-rep")
+    assert rep.exists()
+    (tmp_path / "baseline_compare.ncu-rep").write_bytes(rep.read_bytes())
+    (tmp_path / "optimized_compare.ncu-rep").write_bytes(rep.read_bytes())
+
+    nsys_result = mcp_server.tool_compare_nsys({"profiles_dir": str(tmp_path)})
+    if (tmp_path / "baseline_compare.nsys-rep").exists() and (tmp_path / "optimized_compare.nsys-rep").exists():
+        assert nsys_result.get("metrics"), "nsys comparison should include metrics"
+    ncu_from_nsys = nsys_result.get("ncu_comparison")
+    if (tmp_path / "baseline_compare.ncu-rep").exists() and (tmp_path / "optimized_compare.ncu-rep").exists():
+        assert ncu_from_nsys, "nsys comparison should include ncu metrics when captured"
+        assert ncu_from_nsys.get("kernel_comparison") or ncu_from_nsys.get("metrics")
+
+    ncu_result = mcp_server.tool_compare_ncu({"profiles_dir": str(tmp_path)})
+    if (tmp_path / "baseline_compare.ncu-rep").exists() and (tmp_path / "optimized_compare.ncu-rep").exists():
+        assert ncu_result.get("kernel_comparison") or ncu_result.get("metrics"), "ncu comparison should include metrics"
+    nsys_from_ncu = ncu_result.get("nsys_comparison")
+    if (tmp_path / "baseline_compare.nsys-rep").exists() and (tmp_path / "optimized_compare.nsys-rep").exists():
+        assert nsys_from_ncu, "ncu comparison should include nsys metrics when captured"
+        assert nsys_from_ncu.get("metrics")
+
+    profile_result = mcp_server.tool_profile_compare({"profiles_dir": str(tmp_path)})
+    if (tmp_path / "baseline_compare.nsys-rep").exists() and (tmp_path / "optimized_compare.nsys-rep").exists():
+        assert profile_result.get("nsys_comparison"), "profile compare should include nsys metrics when captured"
+        assert profile_result["nsys_comparison"].get("metrics"), "profile compare should include nsys metric entries"
+    if (tmp_path / "baseline_compare.ncu-rep").exists() and (tmp_path / "optimized_compare.ncu-rep").exists():
+        assert profile_result.get("ncu_comparison"), "profile compare should include ncu metrics when captured"
+        assert profile_result["ncu_comparison"].get("kernel_comparison") or profile_result["ncu_comparison"].get("metrics")
 
 
 def test_profile_insights_normalizes_repeated_names():

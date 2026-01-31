@@ -3,7 +3,7 @@
 
 include ../core/common/cuda_arch.mk
 
-NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) -lineinfo
+NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) -lineinfo $(CUDA_NVTX_CFLAGS)
 SUFFIX = $(TARGET_SUFFIX)
 
 # Auto-detect all .cu files and derive targets
@@ -20,19 +20,19 @@ all: $(TARGETS)
 	@echo "✓ Built $(words $(BASE_TARGETS)) CUDA examples"
 
 # Default pattern rule
-%$(SUFFIX): %.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $< -lcuda
+%$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -o $@ $< -lcuda $(CUDA_NVTX_LDFLAGS)
 
 # Verify binaries build with -DVERIFY=1 for harness checksum parsing
-%_verify$(SUFFIX): %.cu
-	$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -o $@ $< -lcuda
+%_verify$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -o $@ $< -lcuda $(CUDA_NVTX_LDFLAGS)
 
 # Special rule for files needing cuBLAS
-optimized_fp4_hardware_kernel$(SUFFIX): optimized_fp4_hardware_kernel.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $< -lcuda -lcublasLt -lcublas
+optimized_fp4_hardware_kernel$(SUFFIX): optimized_fp4_hardware_kernel.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -o $@ $< -lcuda -lcublasLt -lcublas $(CUDA_NVTX_LDFLAGS)
 
-optimized_fp4_hardware_kernel_verify$(SUFFIX): optimized_fp4_hardware_kernel.cu
-	$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -o $@ $< -lcuda -lcublasLt -lcublas
+optimized_fp4_hardware_kernel_verify$(SUFFIX): optimized_fp4_hardware_kernel.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -o $@ $< -lcuda -lcublasLt -lcublas $(CUDA_NVTX_LDFLAGS)
 
 test: all
 	@for exe in $(TARGETS); do timeout 10s ./$$exe >/dev/null 2>&1 && echo "✓ $$exe" || echo "✗ $$exe"; done

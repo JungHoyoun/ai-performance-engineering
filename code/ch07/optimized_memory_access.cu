@@ -8,6 +8,7 @@
 
 #include "../core/common/headers/cuda_helpers.cuh"
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 // CUDA 13 + Blackwell: 32-byte aligned type for 256-bit loads
 struct alignas(32) Float8 {
@@ -62,7 +63,10 @@ __global__ void coalesced_copy(const Float8* __restrict__ src,
 
 float checksum(const std::vector<float>& data) {
   double acc = 0.0;
-  for (float v : data) acc += static_cast<double>(v);
+  for (float v : data) {
+      NVTX_RANGE("verify");
+      acc += static_cast<double>(v);
+  }
   return static_cast<float>(acc / static_cast<double>(data.size()));
 }
 
@@ -75,11 +79,13 @@ float max_abs_diff(const std::vector<float>& a, const std::vector<float>& b) {
 }
 
 int main() {
+    NVTX_RANGE("main");
   static_assert(N % 8 == 0, "N must be divisible by 8 for Float8");
   const int n_vec = N / 8;
 
   std::vector<float> h_src(N), h_dst(N, 0.0f);
   for (int i = 0; i < N; ++i) {
+      NVTX_RANGE("setup");
     h_src[i] = static_cast<float>((i % 2048) - 1024) / 256.0f;
   }
 
@@ -105,6 +111,7 @@ int main() {
 
   CUDA_CHECK(cudaEventRecord(start));
   for (int iter = 0; iter < REPEAT; ++iter) {
+      NVTX_RANGE("compute_kernel:coalesced_copy");
     coalesced_copy<<<grid, block>>>(
         reinterpret_cast<const Float8*>(d_src),
         reinterpret_cast<Float8*>(d_dst),

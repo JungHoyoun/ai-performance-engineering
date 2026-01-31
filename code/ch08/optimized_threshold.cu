@@ -8,10 +8,12 @@
 
 #include "threshold_common.cuh"
 #include "threshold_async_kernel.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 using namespace ch08;
 
 int main() {
+    NVTX_RANGE("main");
     const int count = 1 << 26;
     const float threshold = 0.5f;
     const size_t bytes = static_cast<size_t>(count) * sizeof(float);
@@ -20,6 +22,7 @@ int main() {
     std::mt19937 gen(42);
     std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
     for (int i = 0; i < count; ++i) {
+        NVTX_RANGE("setup");
         h_input[i] = dist(gen);
     }
 
@@ -66,6 +69,7 @@ int main() {
     };
 
     for (int i = 0; i < 5; ++i) {
+        NVTX_RANGE("warmup");
         run_threshold("warmup");
     }
     cudaDeviceSynchronize();
@@ -73,6 +77,7 @@ int main() {
     const int iterations = 50;
     cudaEventRecord(start);
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("iteration");
         run_threshold("benchmark");
     }
     cudaEventRecord(stop);

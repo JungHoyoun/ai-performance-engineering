@@ -32,6 +32,7 @@
 #ifdef USE_NVSHMEM
 #include <nvshmem.h>
 #include <nvshmemx.h>
+#include "../core/common/nvtx_utils.cuh"
 #endif
 
 #define CUDA_CHECK(expr)                                                     \
@@ -59,6 +60,7 @@ struct NodeContext {
 
 int parse_int_flag(const char *flag, int argc, char **argv, int default_value) {
     for (int i = 1; i < argc; ++i) {
+        NVTX_RANGE("iteration");
         if (strcmp(argv[i], flag) == 0 && (i + 1) < argc) {
             return std::atoi(argv[i + 1]);
         }
@@ -110,6 +112,7 @@ float hierarchical_reduce(NodeContext &ctx, float local_value, float *scratch) {
         node_sum = scratch[0];
         int node_members = std::min(ctx.gpus_per_node, ctx.world_size - node_leader_rank);
         for (int i = 1; i < node_members; ++i) {
+            NVTX_RANGE("iteration");
             float val = nvshmem_float_g(scratch, node_leader_rank + i);
             node_sum += val;
         }
@@ -130,6 +133,7 @@ float hierarchical_reduce(NodeContext &ctx, float local_value, float *scratch) {
         global_sum = scratch[0];
         int total_nodes = ctx.num_nodes;
         for (int node = 1; node < total_nodes; ++node) {
+            NVTX_RANGE("iteration");
             int leader = node * ctx.gpus_per_node;
             if (leader >= ctx.world_size) {
                 leader = ctx.world_size - 1;
@@ -171,6 +175,7 @@ void run_multinode_demo(int argc, char **argv) {
     if (ctx.local_rank == 0) {
         float avg = global_sum / ctx.world_size;
         for (int peer = 0; peer < ctx.world_size; ++peer) {
+            NVTX_RANGE("iteration");
             nvshmem_float_p(scratch, avg, peer);
         }
     }
@@ -197,6 +202,7 @@ void run_multinode_demo(int, char **) {
 #endif  // USE_NVSHMEM
 
 int main(int argc, char **argv) {
+    NVTX_RANGE("main");
 #ifdef USE_NVSHMEM
     nvshmem_init();
     CUDA_CHECK(cudaSetDevice(nvshmem_my_pe() % std::max(1, parse_int_flag("--gpus-per-node", argc, argv, 4))));

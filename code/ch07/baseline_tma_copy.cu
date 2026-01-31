@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
@@ -70,6 +71,7 @@ float checksum(const std::vector<float>& data) {
 }  // namespace
 
 int main() {
+    NVTX_RANGE("main");
     const size_t bytes = static_cast<size_t>(kElements) * sizeof(float);
 
     float *d_src = nullptr, *d_dst = nullptr;
@@ -79,6 +81,7 @@ int main() {
     float* h_input = nullptr;
     CUDA_CHECK(cudaMallocHost(&h_input, bytes));
     for (int i = 0; i < kElements; ++i) {
+        NVTX_RANGE("warmup");
         h_input[i] = static_cast<float>((i % 1024) - 512) / 128.0f;
     }
     CUDA_CHECK(cudaMemcpy(d_src, h_input, bytes, cudaMemcpyHostToDevice));
@@ -100,6 +103,7 @@ int main() {
     constexpr int kIterations = 20;
     CUDA_CHECK(cudaEventRecord(start, stream));
     for (int iter = 0; iter < kIterations; ++iter) {
+        NVTX_RANGE("transfer_async:h2d");
         CUDA_CHECK(cudaMemcpyAsync(d_src, h_input, bytes, cudaMemcpyHostToDevice, stream));
         naive_neighbor_copy_kernel<<<grid, kThreadsPerBlock, 0, stream>>>(d_src, d_dst, kElements);
         CUDA_CHECK(cudaGetLastError());
@@ -118,6 +122,7 @@ int main() {
     if (kValidateOutput) {
         std::vector<float> h_reference(kElements);
         for (int i = 0; i < kElements; ++i) {
+            NVTX_RANGE("verify");
             const int near_idx = (i + 1 < kElements) ? (i + 1) : (kElements - 1);
             const int far_idx = (i + kLookahead < kElements) ? (i + kLookahead) : (kElements - 1);
             h_reference[i] = combine_values(h_input[i], h_input[near_idx], h_input[far_idx]);
@@ -125,6 +130,7 @@ int main() {
 
         float max_error = 0.0f;
         for (int i = 0; i < kElements; ++i) {
+            NVTX_RANGE("verify");
             max_error = std::max(max_error, std::abs(h_reference[i] - h_output[i]));
         }
         std::printf("Output checksum: %.6f (max error %.6f)\n", checksum(h_output), max_error);

@@ -127,8 +127,8 @@ def main(argv: List[str]) -> int:
     parser.add_argument("patterns", nargs="+", help="Glob pattern(s) or file path(s) to .nsys-rep or CSV files")
     parser.add_argument(
         "--output",
-        default="output/nsys_summary.csv",
-        help="Destination CSV file (default: output/nsys_summary.csv)",
+        default="artifacts/runs/analysis/nsys_summary.csv",
+        help="Destination CSV file (default: artifacts/runs/analysis/nsys_summary.csv)",
     )
     args = parser.parse_args(argv)
 

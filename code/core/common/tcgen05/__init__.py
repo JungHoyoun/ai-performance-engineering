@@ -354,6 +354,24 @@ def load_tcgen05_warp_specialized_module():
     return _load_extension("ch10_tcgen05_warp_specialized_ext", [_REPO_ROOT / "ch10" / "tcgen05_warp_specialized.cu"])
 
 
+@lru_cache(None)
+def load_tcgen05_warp_specialized_cutlass_module():
+    """Compile (if needed) and return the Chapter 10 CUTLASS-style warp-specialized tcgen05 matmul extension."""
+    return _load_extension(
+        "ch10_tcgen05_warp_specialized_cutlass_ext",
+        [_REPO_ROOT / "ch10" / "tcgen05_warp_specialized_cutlass.cu"],
+    )
+
+
+@lru_cache(None)
+def load_tcgen05_warpgroup_specialized_module():
+    """Compile (if needed) and return the Chapter 10 warpgroup-specialized tcgen05 matmul extension."""
+    return _load_extension(
+        "ch10_tcgen05_warpgroup_specialized_ext",
+        [_REPO_ROOT / "ch10" / "tcgen05_warpgroup_specialized.cu"],
+    )
+
+
 def matmul_tcgen05(a: torch.Tensor, b: torch.Tensor, *, module_name: str = "tcgen05 matmul") -> torch.Tensor:
     """Execute the CUTLASS tcgen05 GEMM after ensuring hardware/toolchain support."""
     ensure_tcgen05_supported(loader=load_matmul_tcgen05_module, module_name=module_name)
@@ -393,6 +411,8 @@ __all__ = [
     "load_tcgen05_pipelined_module",
     "load_tcgen05_cluster_module",
     "load_tcgen05_warp_specialized_module",
+    "load_tcgen05_warp_specialized_cutlass_module",
+    "load_tcgen05_warpgroup_specialized_module",
     "matmul_tcgen05",
     "matmul_tcgen05_bias_silu",
     "matmul_tiling_tcgen05",

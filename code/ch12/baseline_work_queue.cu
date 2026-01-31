@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "work_queue_common.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
@@ -43,13 +44,17 @@ __global__ void compute_static(const float* input,
 }
 
 int main() {
+    NVTX_RANGE("main");
   constexpr int N = 1 << 20;
   constexpr int kWarmup = 1;
   constexpr int kIters = 10;
   constexpr int blocks = 32;
   constexpr int threads = 256;
   std::vector<float> h_in(N);
-  for (int i = 0; i < N; ++i) h_in[i] = float(i) / N;
+  for (int i = 0; i < N; ++i) {
+      NVTX_RANGE("setup");
+      h_in[i] = float(i) / N;
+  }
   std::vector<int> h_work = build_workloads(N);
   float *d_in = nullptr, *d_out = nullptr;
   int* d_work = nullptr;
@@ -66,6 +71,7 @@ int main() {
   CUDA_CHECK(cudaEventCreate(&stop));
 
   for (int i = 0; i < kWarmup; ++i) {
+      NVTX_RANGE("warmup");
     CUDA_CHECK(cudaMemset(d_out, 0, N * sizeof(float)));
     compute_static<<<blocks, threads>>>(d_in, d_work, d_out, N, chunk_size);
   }
@@ -73,6 +79,7 @@ int main() {
 
   CUDA_CHECK(cudaEventRecord(start));
   for (int iter = 0; iter < kIters; ++iter) {
+      NVTX_RANGE("compute_kernel:compute_static");
     CUDA_CHECK(cudaMemset(d_out, 0, N * sizeof(float)));
     compute_static<<<blocks, threads>>>(d_in, d_work, d_out, N, chunk_size);
   }
@@ -85,7 +92,10 @@ int main() {
 
   CUDA_CHECK(cudaMemcpy(h_in.data(), d_out, N * sizeof(float), cudaMemcpyDeviceToHost));
   double checksum = 0.0;
-  for (float v : h_in) checksum += static_cast<double>(v);
+  for (float v : h_in) {
+      NVTX_RANGE("verify");
+      checksum += static_cast<double>(v);
+  }
   std::printf("Baseline checksum: %.6e\n", checksum);
 
   CUDA_CHECK(cudaFree(d_in));

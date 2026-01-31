@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 #include <cmath>
 #include <cstdio>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
@@ -25,10 +26,12 @@ __global__ void sampleKernel(float* data, int n) {
 }
 
 int main() {
+    NVTX_RANGE("main");
   constexpr int N = 1 << 20;
   float* h_data = nullptr;
   CUDA_CHECK(cudaMallocHost(&h_data, N * sizeof(float)));
   for (int i = 0; i < N; ++i) {
+      NVTX_RANGE("setup");
     h_data[i] = static_cast<float>(i % 1000) / 1000.0f;
   }
 

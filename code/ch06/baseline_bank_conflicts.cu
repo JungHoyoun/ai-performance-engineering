@@ -8,6 +8,7 @@
 #include <cstdlib>
 
 #include "../core/common/headers/profiling_helpers.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define NUM_BANKS 32
 #define INNER_SWEEPS 256
@@ -66,6 +67,7 @@ float measure_kernel(
     int blocks = (N + TILE_VALUES - 1) / TILE_VALUES;
 
     for (int launch = 0; launch < launches; ++launch) {
+        NVTX_RANGE("compute_kernel:kernel");
         kernel<<<blocks, threads_per_block, 0, stream>>>(d_output, d_input, N);
     }
     cudaStreamSynchronize(stream);
@@ -74,6 +76,7 @@ float measure_kernel(
     {
         PROFILE_KERNEL_LAUNCH(name);
         for (int launch = 0; launch < launches; ++launch) {
+            NVTX_RANGE("compute_kernel:kernel");
             kernel<<<blocks, threads_per_block, 0, stream>>>(d_output, d_input, N);
         }
     }
@@ -88,6 +91,7 @@ float measure_kernel(
 }
 
 int main() {
+    NVTX_RANGE("main");
     const int N = 1 << 20;
     const int threads_per_block = 256;
     const int baseline_launches = 32;
@@ -108,6 +112,7 @@ int main() {
     cudaMallocHost(&h_output, N * sizeof(float));
 
     for (int i = 0; i < N; ++i) {
+        NVTX_RANGE("setup");
         h_input[i] = static_cast<float>(i % 1024);
     }
 

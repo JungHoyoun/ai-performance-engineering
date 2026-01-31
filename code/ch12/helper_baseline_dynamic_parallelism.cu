@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "dynamic_segments_common.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                        \
     do {                                                                        \
@@ -30,6 +31,7 @@ __global__ void scale_segment_kernel(float* data, int length, float scale) {
 }
 
 int main() {
+    NVTX_RANGE("main");
     constexpr int kElements = 1 << 22;
     constexpr int kThreads = 128;
     constexpr int kWarmup = 1;
@@ -37,6 +39,7 @@ int main() {
 
     std::vector<float> h_data(kElements);
     for (int i = 0; i < kElements; ++i) {
+        NVTX_RANGE("setup");
         h_data[i] = std::sin(0.001f * static_cast<float>(i));
     }
     const std::vector<Segment> segments = build_segments(kElements);
@@ -54,6 +57,7 @@ int main() {
 
     auto run_chain = [&](cudaStream_t stream) {
         for (const Segment& seg : segments) {
+            NVTX_RANGE("compute_kernel:scale_segment_kernel");
             int blocks = (seg.length + kThreads - 1) / kThreads;
             scale_segment_kernel<<<blocks, kThreads, 0, stream>>>(
                 d_data + seg.offset,
@@ -64,6 +68,7 @@ int main() {
 
     reset_input();
     for (int i = 0; i < kWarmup; ++i) {
+        NVTX_RANGE("warmup");
         run_chain(nullptr);
     }
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -74,6 +79,7 @@ int main() {
 
     CUDA_CHECK(cudaEventRecord(start));
     for (int iter = 0; iter < kIters; ++iter) {
+        NVTX_RANGE("iteration");
         reset_input();
         run_chain(nullptr);
     }
@@ -87,6 +93,7 @@ int main() {
     CUDA_CHECK(cudaMemcpy(h_data.data(), d_data, h_data.size() * sizeof(float), cudaMemcpyDeviceToHost));
     double checksum = 0.0;
     for (float v : h_data) {
+        NVTX_RANGE("verify");
         checksum += static_cast<double>(v);
     }
     std::printf("Baseline checksum: %.6e\n", checksum);

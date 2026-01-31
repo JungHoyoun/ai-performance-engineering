@@ -16,6 +16,7 @@
 #include <numeric>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 namespace cg = cooperative_groups;
 
@@ -148,6 +149,7 @@ void dsmem_reduction_kernel_v3(
 }
 
 int main() {
+    NVTX_RANGE("main");
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     
@@ -210,6 +212,7 @@ int main() {
     // Warmup
     const int warmup = 5;
     for (int i = 0; i < warmup; ++i) {
+        NVTX_RANGE("warmup");
         CUDA_CHECK(cudaLaunchKernelExC(&config, (void*)dsmem_reduction_kernel_v3, args));
     }
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -218,6 +221,7 @@ int main() {
     const int iterations = 50;
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("iteration");
         CUDA_CHECK(cudaLaunchKernelExC(&config, (void*)dsmem_reduction_kernel_v3, args));
     }
     CUDA_CHECK(cudaEventRecord(stop));

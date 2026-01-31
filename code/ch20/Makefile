@@ -3,7 +3,7 @@
 
 include ../core/common/cuda_arch.mk
 
-NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) -lineinfo
+NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) -lineinfo $(CUDA_NVTX_CFLAGS)
 SUFFIX = $(TARGET_SUFFIX)
 
 # Auto-detect all .cu files and derive targets
@@ -19,8 +19,8 @@ all: $(TARGETS)
 	@echo "✓ Built $(words $(BASE_TARGETS)) CUDA examples"
 
 # Default pattern rule
-%$(SUFFIX): %.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $< -lcuda
+%$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -o $@ $< -lcuda $(CUDA_NVTX_LDFLAGS)
 
 run: all
 	@for exe in $(TARGETS); do ./$$exe; done

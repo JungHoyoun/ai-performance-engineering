@@ -107,7 +107,6 @@ import traceback
 import time
 import threading
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -119,6 +118,7 @@ if str(CODE_ROOT) not in sys.path:
     sys.path.insert(0, str(CODE_ROOT))
 
 from core.harness.progress import ProgressEvent, ProgressRecorder
+from core.jobs import JobStore
 
 # MCP Protocol Types
 @dataclass
@@ -245,13 +245,13 @@ _OUTPUT_ENVELOPE_SUMMARY = (
 # Explicit overrides for tools that have notable runtime/side effects.
 _EXPECTATION_OVERRIDES: Dict[str, str] = {
     "aisp_run_benchmarks": "Runs the bench CLI; can take minutes and writes artifacts/logs under artifacts/runs/<run_id>/ by default. Run IDs are self-describing (timestamp + run kind + targets). Also runs triage + HTML report generation unless auto_analyze/auto_report are disabled. Use artifacts_dir to control output location. For full baseline-vs-optimized profiling + diffs, use profile='deep_dive' or aisp_benchmark_deep_dive_compare.",
-    "aisp_benchmark_deep_dive_compare": "Runs bench with profile='deep_dive' (slow) and then compares baseline vs optimized profiles (nsys+ncu). Writes a self-describing run directory under output_dir (default: artifacts/runs).",
+    "aisp_benchmark_deep_dive_compare": "Runs bench with profile='deep_dive' (slow) and then compares baseline vs optimized profiles (nsys+ncu). Emits side-by-side JSON + narrative and writes a self-describing run directory under output_dir (default: artifacts/runs).",
     "aisp_benchmark_report": "Generates a report from existing benchmark JSON; writes PDF/HTML to the chosen output.",
     "aisp_benchmark_export": "Exports existing benchmark JSON to csv/markdown/json; writes to the chosen output file.",
     "aisp_benchmark_compare_runs": "Diffs two benchmark JSON files; CPU-bound and quick, writes only if an output is specified.",
     "aisp_profile_nsys": "Calls Nsight Systems; requires nsys installed and writes .nsys-rep under artifacts/runs/<run_id>/profiles/tools/<tool>/<label>/ by default. Slow/interactive; run aisp_status or aisp_triage first. Default preset is full; set preset=light explicitly to shrink traces.",
     "aisp_profile_ncu": "Calls Nsight Compute; requires ncu installed and writes .ncu-rep under artifacts/runs/<run_id>/profiles/tools/<tool>/<label>/ by default. Slow/interactive; run aisp_status or aisp_triage first. Defaults to memory_bound metric set; opt into heavier modes explicitly.",
-    "aisp_profile_compare": "Generates flame graph comparison; parses NSYS reports and may traverse multiple files; allow extra runtime.",
+    "aisp_profile_compare": "Generates flame graph comparison + side-by-side Nsight Systems/Compute JSON report; parses NSYS reports and may traverse multiple files; allow extra runtime.",
     "aisp_hw_speed": "Runs GPU/host micro-benchmarks; stresses hardware briefly. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
     "aisp_hw_roofline": "Runs roofline micro-benchmark; stresses memory subsystem briefly. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
     "aisp_hw_disk": "Runs disk I/O hardware benchmark; writes temporary files to tmp_dir. Supports precheck_only/dry_run/timeout_seconds.",
@@ -1117,59 +1117,12 @@ def _normalize_result(result: Any) -> Any:
     return result
 
 
-_JOB_EXECUTOR = ThreadPoolExecutor(max_workers=int(os.environ.get("AISP_MCP_JOB_WORKERS", "4") or "4"))
-_JOB_STORE: Dict[str, Dict[str, Any]] = {}
-_JOB_LOCK = threading.Lock()
-_JOB_TTL_SECONDS = int(os.environ.get("AISP_MCP_JOB_TTL_SECONDS", "3600") or "3600")
-_JOB_MAX_ENTRIES = int(os.environ.get("AISP_MCP_JOB_MAX_ENTRIES", "1000") or "1000")
-_JOB_CLEANUP_INTERVAL_SECONDS = float(os.environ.get("AISP_MCP_JOB_CLEANUP_INTERVAL_SECONDS", "30") or "30")
-_JOB_LAST_CLEANUP_TS = 0.0
+JOB_STORE = JobStore.get()
 
 
 def _cleanup_job_store(now: Optional[float] = None) -> None:
     """Evict old job records to keep long-running MCP sessions bounded."""
-    global _JOB_LAST_CLEANUP_TS
-    now = time.time() if now is None else now
-    if now - _JOB_LAST_CLEANUP_TS < _JOB_CLEANUP_INTERVAL_SECONDS:
-        return
-    with _JOB_LOCK:
-        if now - _JOB_LAST_CLEANUP_TS < _JOB_CLEANUP_INTERVAL_SECONDS:
-            return
-        _JOB_LAST_CLEANUP_TS = now
-
-        # Evict completed/errored jobs older than TTL.
-        expired: List[str] = []
-        for job_id, record in list(_JOB_STORE.items()):
-            status = record.get("status")
-            if status == "running":
-                continue
-            ts = record.get("finished_at") or record.get("submitted_at") or 0.0
-            try:
-                age = now - float(ts)
-            except (TypeError, ValueError):
-                age = 0.0
-            if age > _JOB_TTL_SECONDS:
-                expired.append(job_id)
-        for job_id in expired:
-            _JOB_STORE.pop(job_id, None)
-
-        # Enforce max entries by evicting oldest completed jobs first.
-        if len(_JOB_STORE) <= _JOB_MAX_ENTRIES:
-            return
-        completed: List[Tuple[float, str]] = []
-        for job_id, record in _JOB_STORE.items():
-            status = record.get("status")
-            if status == "running":
-                continue
-            ts = record.get("finished_at") or record.get("submitted_at") or 0.0
-            try:
-                completed.append((float(ts), job_id))
-            except (TypeError, ValueError):
-                completed.append((0.0, job_id))
-        completed.sort(key=lambda item: item[0])
-        while len(_JOB_STORE) > _JOB_MAX_ENTRIES and completed:
-            _, job_id = completed.pop(0)
-            _JOB_STORE.pop(job_id, None)
+    JOB_STORE.cleanup(now)
 
 
 def _queue_job(
@@ -1179,59 +1132,12 @@ def _queue_job(
     run_metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Run a task in the background and return a ticket for polling."""
-    _cleanup_job_store()
-    job_id = f"{tool_name}-{uuid.uuid4().hex[:10]}"
-    submitted_at = time.time()
-    record: Dict[str, Any] = {
-        "job_id": job_id,
-        "tool": tool_name,
-        "status": "running",
-        "submitted_at": submitted_at,
-        "arguments": _sanitize_arguments(arguments),
-    }
-    if run_metadata:
-        for key, value in run_metadata.items():
-            record[key] = str(value) if isinstance(value, Path) else value
-    with _JOB_LOCK:
-        if len(_JOB_STORE) >= _JOB_MAX_ENTRIES:
-            raise RuntimeError(
-                f"Job queue is full ({len(_JOB_STORE)} >= {_JOB_MAX_ENTRIES}). "
-                "Poll existing jobs with aisp_job_status or increase AISP_MCP_JOB_MAX_ENTRIES."
-            )
-        _JOB_STORE[job_id] = record
-
-    def _runner():
-        try:
-            result = runner()
-            status = "completed"
-            error = None
-        except Exception as exc:  # pragma: no cover - defensive
-            status = "error"
-            error = {"error": str(exc), "traceback": traceback.format_exc()}
-            result = None
-        finished_at = time.time()
-        with _JOB_LOCK:
-            record.update(
-                {
-                    "status": status,
-                    "result": result if result is not None else error,
-                    "finished_at": finished_at,
-                    "duration_ms": int((finished_at - submitted_at) * 1000),
-                }
-            )
-
-    _JOB_EXECUTOR.submit(_runner)
-    ticket = {
-        "job_id": job_id,
-        "status": "started",
-        "tool": tool_name,
-        "submitted_at": submitted_at,
-        "note": "Use aisp_job_status with job_id to poll until completed.",
-    }
-    if run_metadata:
-        for key, value in run_metadata.items():
-            ticket[key] = str(value) if isinstance(value, Path) else value
-    return ticket
+    return JOB_STORE.queue_job(
+        tool_name,
+        runner,
+        arguments=_sanitize_arguments(arguments),
+        run_metadata=run_metadata,
+    )
 
 
 def _context_snapshot() -> Dict[str, Any]:
@@ -1914,7 +1820,8 @@ def tool_benchmark_variants(params: Dict[str, Any]) -> Dict[str, Any]:
     "aisp_benchmark_deep_dive_compare",
     "Tags: benchmark, deep_dive, compare, baseline, optimized, nsys, ncu, torch, one-shot, workflow. "
     "ONE-SHOT deep-dive workflow: run benchmarks with profile='deep_dive' AND return structured diffs from Nsight Systems + Nsight Compute (+ any available profiler artifacts). "
-    "Writes outputs under artifacts/runs/<run_id>/ by default and returns {run_dir, results_json, analysis_json} plus per-benchmark profiles_dir + followup_tool_calls for chaining. "
+    "Also generates a side-by-side JSON report + narrative by default. "
+    "Writes outputs under artifacts/runs/<run_id>/ by default and returns {run_dir, results_json, analysis_json} plus per-benchmark profiles_dir + side_by_side_report + followup_tool_calls for chaining. "
     "Selection rule: for each example, compares baseline vs the best succeeded optimization by speedup (ties break arbitrarily); surfaces the chosen optimized file in the output. "
     "Defaults: iterations=1, warmup=5 to keep deep profiling fast; override if you need more stable timing stats. "
     "USE when: You want the common chain 'bench run → deep_dive profile → compare nsys+ncu' in one tool call. "
@@ -2184,6 +2091,15 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
                 nsys_comparison = profile_insights.compare_nsys_files(profiles_dir) if profiles_dir.exists() else None
                 ncu_comparison = profile_insights.compare_ncu_files(profiles_dir) if profiles_dir.exists() else None
                 profile_compare = profile_insights.generate_flamegraph_comparison(profiles_dir) if profiles_dir.exists() else None
+                side_by_side_report = None
+                side_by_side_error = None
+                if profiles_dir.exists():
+                    side_by_side_report = profile_insights.generate_side_by_side_report(
+                        profiles_dir,
+                        ncu_comparison=ncu_comparison,
+                    )
+                    if not side_by_side_report.get("success"):
+                        side_by_side_error = side_by_side_report.get("error", "side_by_side_failed")
 
                 followup_tool_calls = [
                     {"tool": "aisp_profile_compare", "params": {"profiles_dir": str(profiles_dir)}},
@@ -2207,6 +2123,8 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
                         "nsys_comparison": nsys_comparison,
                         "ncu_comparison": ncu_comparison,
                         "profile_compare": profile_compare,
+                        "side_by_side_report": side_by_side_report,
+                        "side_by_side_error": side_by_side_error,
                         "followup_tool_calls": followup_tool_calls,
                     }
                 )
@@ -3552,11 +3470,13 @@ def tool_profile_roofline(params: Dict[str, Any]) -> Dict[str, Any]:
     "aisp_profile_compare",
     "Tags: compare, flamegraph, baseline, optimized, speedup, visualization, why-faster. "
     "Generate visual flame graph comparison showing WHY optimized code is faster. "
-    "Returns: {speedup, cuda_api_comparison, kernel_breakdown, flame_diff, html_output (if requested)}. "
+    "Returns: {speedup, cuda_api_comparison, kernel_breakdown, flame_diff, side_by_side_report, html_output (if requested)}. "
+    "Also generates a side-by-side Nsight Systems + Nsight Compute JSON report + narrative by default. "
     "USE when: Understanding optimization impact visually, presenting before/after comparison. "
     "Example: \"Compare baseline vs optimized streams profiles\" or \"Why is the optimized code faster?\". "
     "Provide chapter (e.g., 'ch11') OR profiles_dir path (for example, benchmarks[].profiles_dir from aisp_benchmark_deep_dive_compare). "
     "If multiple pairs exist, provide pair to select one. Outputs interactive HTML if output_html set. "
+    "Always returns nsys/ncu comparison metrics when profiles are captured; analyze metric deltas for regressions/improvements. "
     "🕐 MEDIUM (~5s). WORKFLOW: profile baseline → optimize → aisp_profile_compare. NOT FOR: Raw comparison (use aisp_compare_nsys/ncu).",
     {"type": "object", "properties": with_context_params({
         "chapter": {
@@ -3625,6 +3545,14 @@ def tool_profile_compare(params: Dict[str, Any]) -> Dict[str, Any]:
     if result.get("error"):
         return result
 
+    nsys_comparison = profile_insights.compare_nsys_files(profiles_dir, pair_key=pair_key)
+    if nsys_comparison is not None:
+        result["nsys_comparison"] = nsys_comparison
+
+    ncu_comparison = profile_insights.compare_ncu_files(profiles_dir, pair_key=pair_key)
+    if ncu_comparison is not None:
+        result["ncu_comparison"] = ncu_comparison
+
     # NEW: Also get metric-level analysis via compare_profiles()
     # This adds improvements/regressions analysis and bottleneck shift detection
     if chapter:
@@ -3633,12 +3561,23 @@ def tool_profile_compare(params: Dict[str, Any]) -> Dict[str, Any]:
             if metric_comparison and not metric_comparison.get("error"):
                 if "metric_analysis" in metric_comparison:
                     result["metric_analysis"] = metric_comparison["metric_analysis"]
-                if "ncu_comparison" in metric_comparison:
+                if "ncu_comparison" in metric_comparison and "ncu_comparison" not in result:
                     result["ncu_comparison"] = metric_comparison["ncu_comparison"]
+                if "nsys_comparison" in metric_comparison and "nsys_comparison" not in result:
+                    result["nsys_comparison"] = metric_comparison["nsys_comparison"]
                 if "recommendations" in metric_comparison:
                     result["recommendations"] = metric_comparison["recommendations"]
         except Exception:
             pass  # Best effort - don't fail if metric analysis unavailable
+
+    side_by_side_report = profile_insights.generate_side_by_side_report(
+        profiles_dir,
+        pair_key=pair_key,
+        ncu_comparison=result.get("ncu_comparison"),
+    )
+    result["side_by_side_report"] = side_by_side_report
+    if not side_by_side_report.get("success"):
+        result["side_by_side_error"] = side_by_side_report.get("error", "side_by_side_failed")
 
     # Optionally generate HTML
     if output_html:
@@ -3658,13 +3597,16 @@ def tool_profile_compare(params: Dict[str, Any]) -> Dict[str, Any]:
     "aisp_profile_nsys",
     "Tags: nsys, nsight-systems, profile, timeline, trace, cuda-api, nvtx, deep-dive. "
     "Run Nsight Systems profiling to capture GPU timeline, CUDA API calls, kernel launches. "
-    "Returns: {output_path, success, run_details} and writes .nsys-rep file. "
+    "Returns: {output_path, success, run_details, nsys_metrics} and writes .nsys-rep file. "
     "USE when: Need detailed timeline view, understanding kernel launch patterns, API overhead. "
     "Example: \"Profile python train.py with nsys\" or \"Capture timeline for batch 32 inference\". "
     "⚠️ SLOW: 1-10+ minutes depending on workload. ALWAYS use dry_run=true first to preview command. "
     "PRESETS: preset='light' for quick/small traces, preset='full' (default) for comprehensive data. "
+    "STREAM/OVERLAP STUDIES: set full_timeline=true and add NVTX ranges in the code so overlap is visible. "
     "WORKFLOW: aisp_status → aisp_profile_nsys(dry_run=true) → aisp_profile_nsys → aisp_nsys_summary → aisp_compare_nsys. "
-    "FOR QUICK CHECKS: Use aisp_hw_speed or aisp_profile_kernels instead. NOT FOR: Kernel metrics (use aisp_profile_ncu).",
+    "COMPARE: aisp_compare_nsys auto-pairs baseline/optimized across subdirectories; pass pair if multiple pairs exist. "
+    "FOR QUICK CHECKS: Use aisp_hw_speed or aisp_profile_kernels instead. NOT FOR: Kernel metrics (use aisp_profile_ncu). "
+    "Analyze the returned nsys_metrics to explain timeline shifts and driver/API overhead changes.",
     {"type": "object", "properties": with_context_params({
         "command": {
             "type": "array",
@@ -3822,6 +3764,20 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
             force_lineinfo=force_lineinfo,
             timeout_seconds=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
         )
+        nsys_metrics: Dict[str, Any] = {}
+        nsys_metrics_error = None
+        if path:
+            try:
+                from core.profiling.metrics_extractor import extract_nsys_metrics
+                metrics_obj = extract_nsys_metrics(Path(path))
+                if hasattr(metrics_obj, "to_dict"):
+                    nsys_metrics = metrics_obj.to_dict()
+                elif hasattr(metrics_obj, "model_dump"):
+                    nsys_metrics = metrics_obj.model_dump()
+                else:
+                    nsys_metrics = dict(metrics_obj)  # type: ignore[arg-type]
+            except Exception as exc:
+                nsys_metrics_error = str(exc)
         result = {
             "success": path is not None,
             "output": str(path) if path else None,
@@ -3835,6 +3791,7 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
             "warning": "NSYS full timeline enabled by default: captures may run slower and produce large traces; set preset=light to keep it small." if preset == "full" or full_timeline else "Set preset=light to reduce trace size/runtime.",
             "error": auto.last_error if path is None else None,
             "run_details": getattr(auto, "last_run", {}),  # type: ignore[attr-defined]
+            "nsys_metrics": nsys_metrics,
             "suggestions": [
                 "Use preset=full only for deep dives; keep light for routine runs.",
                 "If disk space is low, set TMPDIR to a directory with >200MB free before capturing.",
@@ -3845,6 +3802,8 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
             "profiles_dir": str(profile_dir),
             "progress_path": str(progress_path),
         }
+        if nsys_metrics_error:
+            result["nsys_metrics_error"] = nsys_metrics_error
         _emit_progress_safe(
             progress_recorder,
             ProgressEvent(
@@ -3879,12 +3838,18 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
     "aisp_profile_ncu",
     "Tags: ncu, nsight-compute, profile, kernel-metrics, occupancy, memory-throughput. "
     "Run Nsight Compute profiling to capture detailed per-kernel metrics (occupancy, throughput, etc.). "
-    "Returns: {output_path, success, run_details} and writes .ncu-rep file. "
+    "Returns: {output_path, success, run_details, ncu_metrics} and writes .ncu-rep file. "
     "USE when: Deep-diving into specific kernel performance, optimizing occupancy, memory access. "
     "Example: \"Profile attention kernel with ncu\" or \"Get detailed metrics for matmul\". "
     "⚠️ VERY SLOW: Replays kernels. Use kernel_filter to limit scope. Use dry_run=true first. "
-    "workload_type: memory_bound (default, fast), compute_bound, tensor_core, attention. "
-    "🕐 SLOW (varies). WORKFLOW: aisp_profile_kernels → aisp_profile_ncu. NOT FOR: Timeline (use aisp_profile_nsys).",
+    "metric_set selects the NCU --set; workload_type picks custom metrics (only when metric_set=full). "
+    "workload_type: memory_bound (default, fast), compute_bound, tensor_core. "
+    "🕐 SLOW (varies). WORKFLOW: aisp_profile_kernels → aisp_profile_ncu. NOT FOR: Timeline (use aisp_profile_nsys). "
+    "DEFAULTS: use metric_set='minimal' (speed-of-light) for routine baseline/optimized compares; "
+    "use metric_set='roofline' for bound analysis; use metric_set='full' for deep dives. "
+    "COMPARE: aisp_compare_ncu auto-pairs baseline/optimized across subdirectories; pass pair if multiple pairs exist. "
+    "Use launch_skip/launch_count to limit captures on many-launch benchmarks (e.g., 4096 batches). "
+    "Analyze ncu_metrics to explain occupancy, throughput, and kernel-time shifts.",
     {"type": "object", "properties": with_context_params({
         "command": {
             "type": "array",
@@ -3907,8 +3872,8 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
         },
         "workload_type": {
             "type": "string",
-            "description": "Metric set: memory_bound, compute_bound, tensor_core, attention",
-            "enum": ["memory_bound", "compute_bound", "tensor_core", "attention"],
+            "description": "Metric list selection for metric_set=full: memory_bound, compute_bound, tensor_core",
+            "enum": ["memory_bound", "compute_bound", "tensor_core"],
             "default": "memory_bound"
         },
         "kernel_filter": {
@@ -3945,6 +3910,28 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
             "description": "Nsight Compute pm-sampling-interval (cycles). Increase to reduce overhead; omit for default.",
             "default": None
         },
+        "metric_set": {
+            "type": "string",
+            "description": "NCU --set selection: full, speed-of-light (minimal), roofline. workload_type is used only when metric_set=full.",
+            "enum": ["full", "speed-of-light", "roofline", "minimal"],
+            "default": "full"
+        },
+        "launch_skip": {
+            "type": "integer",
+            "description": "Number of kernel launches to skip before profiling (prevents timeout on many-launch benchmarks).",
+            "default": None
+        },
+        "launch_count": {
+            "type": "integer",
+            "description": "Number of kernel launches to profile (None = all remaining).",
+            "default": None
+        },
+        "replay_mode": {
+            "type": "string",
+            "description": "NCU replay mode: application (profile all launches) or kernel (profile one instance per kernel)",
+            "enum": ["application", "kernel"],
+            "default": "application"
+        },
     }), "required": ["command"]}
 )
 def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -3975,6 +3962,19 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
     timeout_seconds = None if timeout_param is None else int(timeout_param)
     sampling_param = params.get("pm_sampling_interval") if "pm_sampling_interval" in params else params.get("sampling_interval")
     sampling_interval = None if sampling_param in (None, "") else int(sampling_param)
+    metric_set = params.get("metric_set", "full")
+    launch_skip_param = params.get("launch_skip")
+    launch_skip = None if launch_skip_param is None else int(launch_skip_param)
+    launch_count_param = params.get("launch_count")
+    launch_count = None if launch_count_param is None else int(launch_count_param)
+    replay_mode = params.get("replay_mode", "application")
+    effective_launch_skip = launch_skip
+    effective_launch_count = launch_count
+    if kernel_filter:
+        if effective_launch_skip is None:
+            effective_launch_skip = 100
+        if effective_launch_count is None:
+            effective_launch_count = 1
 
     automation = NsightAutomation(profile_dir)
     cuda_check = _cuda_precheck()
@@ -4012,6 +4012,10 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
             "force_lineinfo": force_lineinfo,
             "timeout_seconds": timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
             "pm_sampling_interval": sampling_interval,
+            "metric_set": metric_set,
+            "launch_skip": effective_launch_skip,
+            "launch_count": effective_launch_count,
+            "replay_mode": replay_mode,
             "planned_output": str(output_path),
             "note": "Set dry_run=false to execute; use async=true to background the run.",
             "run_id": run_id,
@@ -4042,7 +4046,29 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
             force_lineinfo=force_lineinfo,
             timeout_seconds=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
             sampling_interval=sampling_interval,
+            metric_set=metric_set,
+            launch_skip=launch_skip,
+            launch_count=launch_count,
+            replay_mode=replay_mode,
         )
+        run_details = getattr(auto, "last_run", {})  # type: ignore[attr-defined]
+        launch_skip_used = run_details.get("launch_skip", launch_skip)
+        launch_count_used = run_details.get("launch_count", launch_count)
+        replay_mode_used = run_details.get("replay_mode", replay_mode)
+        ncu_metrics: Dict[str, Any] = {}
+        ncu_metrics_error = None
+        if path:
+            try:
+                from core.profiling.metrics_extractor import extract_ncu_metrics
+                metrics_obj = extract_ncu_metrics(Path(path))
+                if hasattr(metrics_obj, "to_dict"):
+                    ncu_metrics = metrics_obj.to_dict()
+                elif hasattr(metrics_obj, "model_dump"):
+                    ncu_metrics = metrics_obj.model_dump()
+                else:
+                    ncu_metrics = dict(metrics_obj)  # type: ignore[arg-type]
+            except Exception as exc:
+                ncu_metrics_error = str(exc)
 
         result = {
             "success": path is not None,
@@ -4053,14 +4079,22 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
             "force_lineinfo": force_lineinfo,
             "timeout_seconds": timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
             "pm_sampling_interval": sampling_interval,
+            "metric_set": metric_set,
+            "launch_skip": launch_skip_used,
+            "launch_count": launch_count_used,
+            "replay_mode": replay_mode_used,
+            "kernel_filter": kernel_filter,
             "timeout_hit": bool(auto.last_run.get("timeout_hit")) if hasattr(auto, "last_run") else False,  # type: ignore[attr-defined]
             "error": auto.last_error if path is None else None,
-            "run_details": getattr(auto, "last_run", {}),  # type: ignore[attr-defined]
+            "run_details": run_details,
+            "ncu_metrics": ncu_metrics,
             "run_id": run_id,
             "run_dir": str(run_dir),
             "profiles_dir": str(profile_dir),
             "progress_path": str(progress_path),
         }
+        if ncu_metrics_error:
+            result["ncu_metrics_error"] = ncu_metrics_error
         _emit_progress_safe(
             progress_recorder,
             ProgressEvent(
@@ -4095,10 +4129,11 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
     "aisp_profile_torch",
     "Tags: torch, profiler, pytorch, chrome-trace, autograd, cpu-gpu. "
     "Run PyTorch torch.profiler to capture CPU/GPU activity with Chrome trace output. "
-    "Returns: {trace_path, summary, success} and writes Chrome trace JSON + summary. "
+    "Returns: {trace_path, summary, torch_metrics, success} and writes Chrome trace JSON + summary. "
     "USE when: Profiling PyTorch code specifically, understanding autograd overhead, CPU/GPU interplay. "
     "Example: \"Profile my training script with torch.profiler\" or \"Get PyTorch trace for train.py\". "
-    "Output viewable in chrome://tracing or Perfetto. Emits NVTX for nsys correlation. 🕐 SLOW (varies). WORKFLOW: aisp_profile_kernels → aisp_profile_ncu. NOT FOR: Timeline (use aisp_profile_nsys).",
+    "Output viewable in chrome://tracing or Perfetto. Emits NVTX for nsys correlation. 🕐 SLOW (varies). WORKFLOW: aisp_profile_kernels → aisp_profile_ncu. NOT FOR: Timeline (use aisp_profile_nsys). "
+    "Analyze torch_metrics to identify CPU/GPU hotspots and autograd overhead.",
     {"type": "object", "properties": with_context_params({
         "script": {"type": "string", "description": "Path to Python script to profile"},
         "script_args": {"type": "array", "items": {"type": "string"}, "description": "Args forwarded to the script"},
@@ -4211,6 +4246,8 @@ def tool_profile_torch(params: Dict[str, Any]) -> Dict[str, Any]:
             use_nvtx=use_nvtx,
         )
         result.update({"torch_available": torch_available, "cuda_available": cuda_available})
+        result["torch_metrics"] = result.get("summary") or {}
+        result["report"] = result.get("summary")
         if not result.get("success"):
             result.setdefault("error", runner.last_error or "torch profiler failed")
         result["run_id"] = run_id
@@ -4252,10 +4289,11 @@ def tool_profile_torch(params: Dict[str, Any]) -> Dict[str, Any]:
     "aisp_profile_hta",
     "Tags: hta, holistic-trace, nsys, analysis, gpu-idle, timeline. "
     "Run Nsight Systems capture with HTA (Holistic Trace Analysis) for automated bottleneck detection. "
-    "Returns: {nsys_rep_path, trace_json_path, hta_report_path, analysis_summary}. "
+    "Returns: {nsys_rep_path, trace_json_path, hta_report_path, analysis_summary, nsys_metrics}. "
     "USE when: Want automated analysis of trace data, finding GPU idle time, communication bottlenecks. "
     "Example: \"Profile and analyze with HTA\" or \"Get holistic trace analysis for my script\". "
-    "Produces .nsys-rep + trace.json + hta_report.json with actionable insights. 🕐 MEDIUM (~30s). WORKFLOW: aisp_profile_torch → operators → optimize. NOT FOR: CUDA-level (use aisp_profile_nsys).",
+    "Produces .nsys-rep + trace.json + hta_report.json with actionable insights. 🕐 MEDIUM (~30s). WORKFLOW: aisp_profile_torch → operators → optimize. NOT FOR: CUDA-level (use aisp_profile_nsys). "
+    "Analyze nsys_metrics alongside analysis_summary to pinpoint idle gaps and API overhead.",
     {"type": "object", "properties": with_context_params({
         "command": {"type": "array", "items": {"type": "string"}, "description": "Command to profile (argv list)"},
         "output_name": {"type": "string", "description": "Label for the capture (used in profiles/tools/<tool>/<label>/)", "default": "mcp_hta"},
@@ -4354,12 +4392,30 @@ def tool_profile_hta(params: Dict[str, Any]) -> Dict[str, Any]:
             timeout_seconds=timeout_seconds,
         )
         result.update({"hta_available": hta_available, "nsys_available": nsight.nsys_available})
+        nsys_metrics: Dict[str, Any] = {}
+        nsys_metrics_error = None
+        nsys_rep_path = result.get("nsys_rep_path")
+        if nsys_rep_path:
+            try:
+                from core.profiling.metrics_extractor import extract_nsys_metrics
+                metrics_obj = extract_nsys_metrics(Path(nsys_rep_path))
+                if hasattr(metrics_obj, "to_dict"):
+                    nsys_metrics = metrics_obj.to_dict()
+                elif hasattr(metrics_obj, "model_dump"):
+                    nsys_metrics = metrics_obj.model_dump()
+                else:
+                    nsys_metrics = dict(metrics_obj)  # type: ignore[arg-type]
+            except Exception as exc:
+                nsys_metrics_error = str(exc)
         if not result.get("success"):
             result.setdefault("error", runner.last_error or "HTA capture failed")
         result["run_id"] = run_id
         result["run_dir"] = str(run_dir)
         result["profiles_dir"] = str(profile_dir)
         result["progress_path"] = str(progress_path)
+        result["nsys_metrics"] = nsys_metrics
+        if nsys_metrics_error:
+            result["nsys_metrics_error"] = nsys_metrics_error
         _emit_progress_safe(
             progress_recorder,
             ProgressEvent(
@@ -5228,10 +5284,12 @@ def tool_gpu_topology_matrix(params: Dict[str, Any]) -> Dict[str, Any]:
     "aisp_compare_nsys",
     "Tags: compare, nsys, nsight-systems, baseline, optimized, diff. "
     "Compare baseline vs optimized Nsight Systems reports. "
-    "Returns: {speedup, baseline_metrics, optimized_metrics, kernel_comparison}. "
+    "Returns: {speedup, baseline_metrics, optimized_metrics, kernel_comparison, side_by_side_report}. "
+    "If paired NCU profiles are present, also emits a side-by-side JSON report + narrative. "
     "🕐 MEDIUM (~5s). USE when: Comparing before/after nsys profiles. "
     "Tip: if you used aisp_benchmark_deep_dive_compare, pass benchmarks[].profiles_dir here. "
-    "If multiple pairs exist, provide pair to select one. "
+    "Auto-pairs baseline/optimized across subdirectories; if multiple pairs exist, provide pair to select one. "
+    "Always returns ncu/nsys comparison metrics when profiles are captured; analyze metric deltas to explain speedups/regressions. "
     "WORKFLOW: aisp_profile_nsys → optimize → aisp_compare_nsys. NOT FOR: Kernel metrics (use aisp_compare_ncu).",
     {"type": "object", "properties": with_context_params({
         "profiles_dir": {"type": "string", "description": "Directory with baseline/optimized .nsys-rep files (pair dir or a parent dir; use pair to select a sub-pair)"},
@@ -5251,6 +5309,17 @@ def tool_compare_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
         result = profile_insights.compare_nsys_files(profiles_dir, pair_key=pair_key)
         if result is None:
             result = {"error": "No comparable nsys files found", "success": False}
+        ncu_comparison = profile_insights.compare_ncu_files(profiles_dir, pair_key=pair_key)
+        if ncu_comparison is not None:
+            result["ncu_comparison"] = ncu_comparison
+        side_by_side_report = profile_insights.generate_side_by_side_report(
+            profiles_dir,
+            pair_key=pair_key,
+            ncu_comparison=result.get("ncu_comparison"),
+        )
+        result["side_by_side_report"] = side_by_side_report
+        if not side_by_side_report.get("success"):
+            result["side_by_side_error"] = side_by_side_report.get("error", "side_by_side_failed")
         return attach_context_if_requested(result, include_context, context_level)
     except Exception as e:
         return make_error(f"nsys comparison failed: {e}", include_context, context_level)
@@ -5260,10 +5329,12 @@ def tool_compare_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
     "aisp_compare_ncu",
     "Tags: compare, ncu, nsight-compute, baseline, optimized, kernel-metrics. "
     "Compare baseline vs optimized Nsight Compute kernel metrics. "
-    "Returns: {kernel_comparison: [{kernel, baseline_metrics, optimized_metrics}]}. "
+    "Returns: {kernel_comparison: [{kernel, baseline_metrics, optimized_metrics}], side_by_side_report}. "
+    "If paired NSYS profiles are present, also emits a side-by-side JSON report + narrative. "
     "🕐 MEDIUM (~5s). USE when: Deep-diving into kernel-level improvements. "
     "Tip: if you used aisp_benchmark_deep_dive_compare, pass benchmarks[].profiles_dir here. "
-    "If multiple pairs exist, provide pair to select one. "
+    "Auto-pairs baseline/optimized across subdirectories; if multiple pairs exist, provide pair to select one. "
+    "Always returns nsys/ncu comparison metrics when profiles are captured; analyze metric deltas to explain speedups/regressions. "
     "WORKFLOW: aisp_profile_ncu → optimize → aisp_compare_ncu. NOT FOR: Timeline comparison (use aisp_compare_nsys).",
     {"type": "object", "properties": with_context_params({
         "profiles_dir": {"type": "string", "description": "Directory with baseline/optimized .ncu-rep files (pair dir or a parent dir; use pair to select a sub-pair)"},
@@ -5283,6 +5354,17 @@ def tool_compare_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
         result = profile_insights.compare_ncu_files(profiles_dir, pair_key=pair_key)
         if result is None:
             result = {"error": "No comparable ncu files found", "success": False}
+        nsys_comparison = profile_insights.compare_nsys_files(profiles_dir, pair_key=pair_key)
+        if nsys_comparison is not None:
+            result["nsys_comparison"] = nsys_comparison
+        side_by_side_report = profile_insights.generate_side_by_side_report(
+            profiles_dir,
+            pair_key=pair_key,
+            ncu_comparison=result,
+        )
+        result["side_by_side_report"] = side_by_side_report
+        if not side_by_side_report.get("success"):
+            result["side_by_side_error"] = side_by_side_report.get("error", "side_by_side_failed")
         return attach_context_if_requested(result, include_context, context_level)
     except Exception as e:
         return make_error(f"ncu comparison failed: {e}", include_context, context_level)
@@ -5593,8 +5675,7 @@ def tool_job_status(params: Dict[str, Any]) -> Dict[str, Any]:
     if not job_id:
         return make_error("job_id is required", include_context, context_level)
     _cleanup_job_store()
-    with _JOB_LOCK:
-        record = _JOB_STORE.get(job_id)
+    record = JOB_STORE.get_status(job_id)
     if not record:
         return {
             "job_id": job_id,

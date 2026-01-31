@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <vector>
 #include "../core/common/headers/profiling_helpers.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
@@ -52,6 +53,7 @@ __global__ void copy_kernel(float* dst, const float* src, int n) {
 }
 
 int main() {
+    NVTX_RANGE("main");
     // Small data to make kernels fast (emphasize launch overhead)
     constexpr int N = 100'000;  // 100K elements (~400 KB)
     constexpr int ITERATIONS = 500;
@@ -69,6 +71,7 @@ int main() {
     // Allocate memory
     std::vector<float> h_data(N);
     for (int i = 0; i < N; ++i) {
+        NVTX_RANGE("setup");
         h_data[i] = static_cast<float>(i % 1000) / 1000.0f;
     }
     
@@ -90,6 +93,7 @@ int main() {
     
     // Warmup
     for (int i = 0; i < 5; ++i) {
+        NVTX_RANGE("warmup");
         saxpy_kernel<<<grid, block, 0, stream>>>(d_c, d_a, 1.0f, N);
     }
     CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -103,6 +107,7 @@ int main() {
     
     CUDA_CHECK(cudaEventRecord(start, stream));
     for (int i = 0; i < ITERATIONS; ++i) {
+        NVTX_RANGE("compute_kernel:saxpy_kernel");
         // 16 small kernel launches per iteration - accumulates launch overhead
         saxpy_kernel<<<grid, block, 0, stream>>>(d_c, d_a, 1.001f, N);
         scale_kernel<<<grid, block, 0, stream>>>(d_c, 0.999f, N);

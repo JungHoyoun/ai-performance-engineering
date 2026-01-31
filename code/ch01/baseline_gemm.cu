@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
@@ -67,6 +68,7 @@ void fill_matrix(float* data, int elements, float value) {
 
 // Benchmark individual GEMM calls (simulating original PyTorch behavior)
 int main() {
+    NVTX_RANGE("main");
     cublasHandle_t handle;
     CUBLAS_CHECK(cublasCreate(&handle));
     CUBLAS_CHECK(cublasSetMathMode(handle, CUBLAS_TF32_TENSOR_OP_MATH));
@@ -81,6 +83,7 @@ int main() {
     
     // Allocate matrices for each GEMM
     for (int i = 0; i < batch_count; ++i) {
+        NVTX_RANGE("setup");
         CUDA_CHECK(cudaMalloc(&d_A[i], m * k * sizeof(float)));
         CUDA_CHECK(cudaMalloc(&d_B[i], k * n * sizeof(float)));
         CUDA_CHECK(cudaMalloc(&d_C[i], m * n * sizeof(float)));
@@ -94,6 +97,7 @@ int main() {
     // Warmup
     const float alpha = 1.0f, beta = 0.0f;
     for (int i = 0; i < batch_count; ++i) {
+        NVTX_RANGE("compute_math:sgemm");
         CUBLAS_CHECK(cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,
                                  n, m, k, &alpha,
                                  d_B[i], n, d_A[i], k,
@@ -108,7 +112,9 @@ int main() {
     
     CUDA_CHECK(cudaEventRecord(start));
     for (int iter = 0; iter < 100; ++iter) {
+        NVTX_RANGE("batch");
         for (int i = 0; i < batch_count; ++i) {
+            NVTX_RANGE("compute_math:sgemm");
             CUBLAS_CHECK(cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,
                                      n, m, k, &alpha,
                                      d_B[i], n, d_A[i], k,
@@ -132,6 +138,7 @@ int main() {
     
     // Cleanup
     for (int i = 0; i < batch_count; ++i) {
+        NVTX_RANGE("cleanup");
         CUDA_CHECK(cudaFree(d_A[i]));
         CUDA_CHECK(cudaFree(d_B[i]));
         CUDA_CHECK(cudaFree(d_C[i]));

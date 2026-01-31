@@ -8,6 +8,7 @@
 
 #include "../core/common/headers/cuda_helpers.cuh"
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 constexpr int N = 1 << 23;           // 32 MB footprint
 constexpr int REPEAT = 40;
@@ -29,7 +30,10 @@ __global__ void uncoalesced_copy(const float* __restrict__ in,
 
 float checksum(const std::vector<float>& data) {
   double acc = 0.0;
-  for (float v : data) acc += static_cast<double>(v);
+  for (float v : data) {
+      NVTX_RANGE("verify");
+      acc += static_cast<double>(v);
+  }
   return static_cast<float>(acc / static_cast<double>(data.size()));
 }
 
@@ -42,8 +46,10 @@ float max_abs_diff(const std::vector<float>& a, const std::vector<float>& b) {
 }
 
 int main() {
+    NVTX_RANGE("main");
   std::vector<float> h_src(N), h_dst(N, 0.0f);
   for (int i = 0; i < N; ++i) {
+      NVTX_RANGE("setup");
     h_src[i] = static_cast<float>((i % 4096) - 2048) / 512.0f;
   }
 
@@ -67,6 +73,7 @@ int main() {
 
   CUDA_CHECK(cudaEventRecord(start));
   for (int iter = 0; iter < REPEAT; ++iter) {
+      NVTX_RANGE("compute_kernel:uncoalesced_copy");
     uncoalesced_copy<<<grid, block>>>(d_src, d_dst, N, mask);
   }
   CUDA_CHECK_LAST_ERROR();

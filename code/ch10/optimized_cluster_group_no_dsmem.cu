@@ -6,6 +6,7 @@
 
 #include "cluster_group_common.cuh"
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                        \
     do {                                                                        \
@@ -86,6 +87,7 @@ __global__ void optimized_no_dsmem_kernel(const float* __restrict__ input,
 }
 
 int main() {
+    NVTX_RANGE("main");
     CUDA_CHECK(cudaSetDevice(0));
 
     std::vector<float> h_input(kTotalElements);
@@ -122,6 +124,7 @@ int main() {
 
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < kIterations; ++i) {
+        NVTX_RANGE("compute_kernel:optimized_no_dsmem_kernel:smem");
         optimized_no_dsmem_kernel<<<grid, block, shared_bytes>>>(
             d_input, d_sum, d_sq, chunk_elems, chunks, kTotalElements);
     }
@@ -142,6 +145,7 @@ int main() {
 
     double checksum = 0.0;
     for (int i = 0; i < chunks; ++i) {
+        NVTX_RANGE("verify");
         checksum += static_cast<double>(h_sum[i]) + static_cast<double>(h_squares[i]);
     }
     checksum /= static_cast<double>(chunks);

@@ -28,37 +28,37 @@ all: $(TARGETS)
 	@echo "✓ Built $(words $(BASE_TARGETS)) CUDA examples"
 
 # Default pattern rule
-%$(SUFFIX): %.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
+%$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS) $(CUDA_NVTX_LDFLAGS)
 
 # Verify binaries build with -DVERIFY=1 for harness checksum parsing
-%_verify$(SUFFIX): %.cu
-	$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -o $@ $< $(NVCC_LIBS)
+%_verify$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -o $@ $< $(NVCC_LIBS) $(CUDA_NVTX_LDFLAGS)
 
 # Special rules for files needing -rdc=true (dynamic parallelism / device-side launch)
-optimized_uneven_static$(SUFFIX): optimized_uneven_static.cu
-	$(NVCC) $(NVCC_FLAGS) -rdc=true -o $@ $< -lcudadevrt $(NVCC_LIBS)
+optimized_uneven_static$(SUFFIX): optimized_uneven_static.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true -o $@ $< -lcudadevrt $(NVCC_LIBS) $(CUDA_NVTX_LDFLAGS)
 
-optimized_uneven_static_verify$(SUFFIX): optimized_uneven_static.cu
-	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 -o $@ $< -lcudadevrt $(NVCC_LIBS)
+optimized_uneven_static_verify$(SUFFIX): optimized_uneven_static.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 -o $@ $< -lcudadevrt $(NVCC_LIBS) $(CUDA_NVTX_LDFLAGS)
 
-optimized_dynamic_parallelism_host$(SUFFIX): optimized_dynamic_parallelism_host.cu
-	$(NVCC) $(NVCC_FLAGS) -rdc=true -o $@ $< -lcudadevrt $(NVCC_LIBS)
+optimized_dynamic_parallelism_host$(SUFFIX): optimized_dynamic_parallelism_host.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true -o $@ $< -lcudadevrt $(NVCC_LIBS) $(CUDA_NVTX_LDFLAGS)
 
-optimized_dynamic_parallelism_host_verify$(SUFFIX): optimized_dynamic_parallelism_host.cu
-	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 -o $@ $< -lcudadevrt $(NVCC_LIBS)
+optimized_dynamic_parallelism_host_verify$(SUFFIX): optimized_dynamic_parallelism_host.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 -o $@ $< -lcudadevrt $(NVCC_LIBS) $(CUDA_NVTX_LDFLAGS)
 
-baseline_dynamic_parallelism_device$(SUFFIX): baseline_dynamic_parallelism_device.cu
-	$(NVCC) $(NVCC_FLAGS) -rdc=true -o $@ $< -lcudadevrt $(NVCC_LIBS)
+baseline_dynamic_parallelism_device$(SUFFIX): baseline_dynamic_parallelism_device.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true -o $@ $< -lcudadevrt $(NVCC_LIBS) $(CUDA_NVTX_LDFLAGS)
 
-baseline_dynamic_parallelism_device_verify$(SUFFIX): baseline_dynamic_parallelism_device.cu
-	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 -o $@ $< -lcudadevrt $(NVCC_LIBS)
+baseline_dynamic_parallelism_device_verify$(SUFFIX): baseline_dynamic_parallelism_device.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 -o $@ $< -lcudadevrt $(NVCC_LIBS) $(CUDA_NVTX_LDFLAGS)
 
-optimized_dynamic_parallelism_device$(SUFFIX): optimized_dynamic_parallelism_device.cu
-	$(NVCC) $(NVCC_FLAGS) -rdc=true -o $@ $< -lcudadevrt $(NVCC_LIBS)
+optimized_dynamic_parallelism_device$(SUFFIX): optimized_dynamic_parallelism_device.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true -o $@ $< -lcudadevrt $(NVCC_LIBS) $(CUDA_NVTX_LDFLAGS)
 
-optimized_dynamic_parallelism_device_verify$(SUFFIX): optimized_dynamic_parallelism_device.cu
-	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 -o $@ $< -lcudadevrt $(NVCC_LIBS)
+optimized_dynamic_parallelism_device_verify$(SUFFIX): optimized_dynamic_parallelism_device.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 -o $@ $< -lcudadevrt $(NVCC_LIBS) $(CUDA_NVTX_LDFLAGS)
 
 # Architecture targets
 b200: ARCH=sm_100

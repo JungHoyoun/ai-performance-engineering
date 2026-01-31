@@ -9,6 +9,7 @@
 #include <random>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                         \
   do {                                                                           \
@@ -41,6 +42,7 @@
   } while (0)
 
 int main() {
+    NVTX_RANGE("main");
     constexpr int M = 1024;
     constexpr int N = 1024;
     constexpr int K = 1024;
@@ -65,9 +67,11 @@ int main() {
     std::mt19937 gen(42);
     std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
     for (size_t i = 0; i < elems_A * batch_count; ++i) {
+        NVTX_RANGE("batch");
         h_A[i] = dis(gen);
     }
     for (size_t i = 0; i < elems_B * batch_count; ++i) {
+        NVTX_RANGE("batch");
         h_B[i] = dis(gen);
     }
     std::fill(h_C, h_C + (elems_C * batch_count), 0.0f);
@@ -176,6 +180,7 @@ int main() {
 
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("compute_math:ltmatmul");
         if (returnedResults > 0) {
             CUBLASLT_CHECK(cublasLtMatmul(
                 ltHandle,
@@ -230,6 +235,7 @@ int main() {
 #ifdef VERIFY
     double checksum = 0.0;
     for (size_t i = 0; i < elems_C; ++i) {
+        NVTX_RANGE("verify");
         checksum += std::abs(static_cast<double>(h_C[i]));
     }
     VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));

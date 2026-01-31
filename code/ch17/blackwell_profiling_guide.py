@@ -18,6 +18,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import torch
 import torch.profiler as profiler
+from core.profiling.nvtx_helper import standardize_nvtx_label
 
 _EXTRAS_REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_EXTRAS_REPO_ROOT) not in sys.path:
@@ -48,7 +49,8 @@ class NsightSystemsProfiler:
         """Push an NVTX range when CUDA is available."""
         if self.trace_nvtx and torch.cuda.is_available():
             try:
-                torch.cuda.nvtx.range_push(f"Profile: {self.output_name}")
+                label = standardize_nvtx_label(f"step:profile_{self.output_name}")
+                torch.cuda.nvtx.range_push(label)
                 self._nvtx_pushed = True
             except Exception:
                 self._nvtx_pushed = False

@@ -4,7 +4,9 @@
 #include <vector>
 #include <numeric>
 #include <chrono>
+#include <cstdint>
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 namespace {
 constexpr int TILE = 32;
@@ -67,23 +69,38 @@ void run_baseline() {
     std::vector<float> h_A(batches * TILE_ELEMS);
     std::vector<float> h_B(batches * TILE_ELEMS);
     std::vector<float> h_C(batches * TILE_ELEMS);
-    std::iota(h_A.begin(), h_A.end(), 0.0f);
-    std::iota(h_B.begin(), h_B.end(), 1.0f);
+    {
+        NVTX_RANGE("setup:host_init");
+        std::iota(h_A.begin(), h_A.end(), 0.0f);
+        std::iota(h_B.begin(), h_B.end(), 1.0f);
+    }
 
     cudaDeviceSynchronize();
     const auto start = std::chrono::high_resolution_clock::now();
 
     for (int b = 0; b < batches; ++b) {
+        char batch_label[32];
+        std::snprintf(batch_label, sizeof(batch_label), "batch:%d", b);
+        NVTX_RANGE(batch_label);
         float *dA = nullptr, *dB = nullptr, *dC = nullptr;
         cudaMalloc(&dA, bytes);
         cudaMalloc(&dB, bytes);
         cudaMalloc(&dC, bytes);
 
-        cudaMemcpy(dA, h_A.data() + b * TILE_ELEMS, bytes, cudaMemcpyHostToDevice);
-        cudaMemcpy(dB, h_B.data() + b * TILE_ELEMS, bytes, cudaMemcpyHostToDevice);
+        {
+            NVTX_RANGE("transfer_sync:h2d");
+            cudaMemcpy(dA, h_A.data() + b * TILE_ELEMS, bytes, cudaMemcpyHostToDevice);
+            cudaMemcpy(dB, h_B.data() + b * TILE_ELEMS, bytes, cudaMemcpyHostToDevice);
+        }
 
-        simple_warp_specialized_kernel<<<1, THREADS, 3 * bytes>>>(dA, dB, dC);
-        cudaMemcpy(h_C.data() + b * TILE_ELEMS, dC, bytes, cudaMemcpyDeviceToHost);
+        {
+            NVTX_RANGE("compute_kernel:warp_specialized");
+            simple_warp_specialized_kernel<<<1, THREADS, 3 * bytes>>>(dA, dB, dC);
+        }
+        {
+            NVTX_RANGE("transfer_sync:d2h");
+            cudaMemcpy(h_C.data() + b * TILE_ELEMS, dC, bytes, cudaMemcpyDeviceToHost);
+        }
 
         cudaFree(dA);
         cudaFree(dB);
@@ -95,7 +112,12 @@ void run_baseline() {
     const double ms = std::chrono::duration<double, std::milli>(stop - start).count();
 
     double checksum = 0.0;
-    for (float v : h_C) checksum += v;
+    {
+        NVTX_RANGE("verify:checksum");
+        for (float v : h_C) {
+            checksum += v;
+        }
+    }
 
     const float verify_checksum = static_cast<float>(checksum);
     VERIFY_PRINT_CHECKSUM(verify_checksum);
@@ -104,6 +126,7 @@ void run_baseline() {
 }  // namespace
 
 int main() {
+    NVTX_RANGE("step:main");
     run_baseline();
     return 0;
 }

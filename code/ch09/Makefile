@@ -2,7 +2,7 @@
 
 include ../core/common/cuda_arch.mk
 
-NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS)
+NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) $(CUDA_NVTX_CFLAGS)
 SUFFIX = $(TARGET_SUFFIX)
 CUTLASS_ROOT := ../third_party/pytorch-src/third_party/cutlass
 CUTLASS_INCLUDES := -I$(CUTLASS_ROOT)/include -I$(CUTLASS_ROOT)/tools/util/include -I$(CUTLASS_ROOT)/examples/common
@@ -20,36 +20,36 @@ all: $(TARGETS)
 	@echo "✓ Targeting $(ARCH_NAME)"
 	@echo "✓ Built $(words $(BASE_TARGETS)) CUDA examples"
 
-$(addsuffix $(SUFFIX), $(BASE_TARGETS)): %$(SUFFIX): %.cu
+$(addsuffix $(SUFFIX), $(BASE_TARGETS)): %$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
 	@echo "Building $@..."
 	@if [ "$*" = "cutlass_gemm_example" ] || [ "$*" = "micro_tiling_matmul" ]; then \
-		$(NVCC) $(NVCC_FLAGS) -lcublas -lcuda -o $@ $<; \
+		$(NVCC) $(NVCC_FLAGS) -lcublas -lcuda -o $@ $<; \ $(CUDA_NVTX_LDFLAGS)
 	elif [ "$*" = "baseline_cutlass_gemm_fp4_perchannel" ] || [ "$*" = "optimized_cutlass_gemm_fp4_perchannel" ]; then \
-		$(NVCC) $(NVCC_FLAGS) $(CUTLASS_INCLUDES) -lcuda -o $@ $<; \
+		$(NVCC) $(NVCC_FLAGS) $(CUTLASS_INCLUDES) -lcuda -o $@ $<; \ $(CUDA_NVTX_LDFLAGS)
 	elif [ "$*" = "baseline_cutlass_gemm" ] || [ "$*" = "optimized_cutlass_gemm" ] || \
 	     [ "$*" = "baseline_cutlass_gemm_fp16" ] || [ "$*" = "optimized_cutlass_gemm_fp16" ] || \
 	     [ "$*" = "baseline_cutlass_gemm_fp8" ] || [ "$*" = "optimized_cutlass_gemm_fp8" ] || \
 	     [ "$*" = "baseline_cutlass_gemm_fp4" ] || [ "$*" = "optimized_cutlass_gemm_fp4" ] || \
 	     [ "$*" = "baseline_cublas_gemm_fp4_perchannel" ] || [ "$*" = "optimized_cublas_gemm_fp4_perchannel" ]; then \
-		$(NVCC) $(NVCC_FLAGS) -lcublas -lcublasLt -lcuda -o $@ $<; \
+		$(NVCC) $(NVCC_FLAGS) -lcublas -lcublasLt -lcuda -o $@ $<; \ $(CUDA_NVTX_LDFLAGS)
 	else \
-		$(NVCC) $(NVCC_FLAGS) -lcuda -o $@ $<; \
+		$(NVCC) $(NVCC_FLAGS) -lcuda -o $@ $<; \ $(CUDA_NVTX_LDFLAGS)
 	fi
 
-$(VERIFY_TARGETS): %_verify$(SUFFIX): %.cu
+$(VERIFY_TARGETS): %_verify$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
 	@echo "Building $@ (verify)..."
 	@if [ "$*" = "cutlass_gemm_example" ] || [ "$*" = "micro_tiling_matmul" ]; then \
-		$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -lcublas -lcuda -o $@ $<; \
+		$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -lcublas -lcuda -o $@ $<; \ $(CUDA_NVTX_LDFLAGS)
 	elif [ "$*" = "baseline_cutlass_gemm_fp4_perchannel" ] || [ "$*" = "optimized_cutlass_gemm_fp4_perchannel" ]; then \
-		$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 $(CUTLASS_INCLUDES) -lcuda -o $@ $<; \
+		$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 $(CUTLASS_INCLUDES) -lcuda -o $@ $<; \ $(CUDA_NVTX_LDFLAGS)
 	elif [ "$*" = "baseline_cutlass_gemm" ] || [ "$*" = "optimized_cutlass_gemm" ] || \
 	     [ "$*" = "baseline_cutlass_gemm_fp16" ] || [ "$*" = "optimized_cutlass_gemm_fp16" ] || \
 	     [ "$*" = "baseline_cutlass_gemm_fp8" ] || [ "$*" = "optimized_cutlass_gemm_fp8" ] || \
 	     [ "$*" = "baseline_cutlass_gemm_fp4" ] || [ "$*" = "optimized_cutlass_gemm_fp4" ] || \
 	     [ "$*" = "baseline_cublas_gemm_fp4_perchannel" ] || [ "$*" = "optimized_cublas_gemm_fp4_perchannel" ]; then \
-		$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -lcublas -lcublasLt -lcuda -o $@ $<; \
+		$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -lcublas -lcublasLt -lcuda -o $@ $<; \ $(CUDA_NVTX_LDFLAGS)
 	else \
-		$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -lcuda -o $@ $<; \
+		$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -lcuda -o $@ $<; \ $(CUDA_NVTX_LDFLAGS)
 	fi
 
 compare: clean

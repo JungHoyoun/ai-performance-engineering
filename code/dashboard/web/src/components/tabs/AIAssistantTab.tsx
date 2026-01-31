@@ -22,9 +22,10 @@ import {
   Sparkles,
   HelpCircle,
 } from 'lucide-react';
-import { getMcpTools, getMcpStatus, callMcpTool } from '@/lib/api';
-import { cn } from '@/lib/utils';
+import { getAiTools, executeAiTool } from '@/lib/api';
+import { cn, formatBytes } from '@/lib/utils';
 import { useToast } from '@/components/Toast';
+import type { GpuInfo } from '@/types';
 
 interface McpTool {
   name: string;
@@ -74,6 +75,106 @@ const categoryColors: Record<string, string> = {
   other: 'text-white/40',
 };
 
+const priorityStyles: Record<string, string> = {
+  high: 'bg-accent-danger/20 text-accent-danger border-accent-danger/30',
+  medium: 'bg-accent-warning/20 text-accent-warning border-accent-warning/30',
+  low: 'bg-accent-success/20 text-accent-success border-accent-success/30',
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function extractGpuInfo(payload: unknown): GpuInfo | null {
+  if (!payload) return null;
+  if (isRecord(payload) && isRecord(payload.gpu)) {
+    return payload.gpu as GpuInfo;
+  }
+  if (isRecord(payload) && 'memory_total' in payload && 'utilization' in payload) {
+    return payload as GpuInfo;
+  }
+  return null;
+}
+
+function renderGpuSummary(gpu: GpuInfo) {
+  const memoryTotal = typeof gpu.memory_total === 'number' ? gpu.memory_total * 1e6 : 0;
+  const memoryUsed = typeof gpu.memory_used === 'number' ? gpu.memory_used * 1e6 : 0;
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-white/70">
+      <div>
+        <div className="text-white/40 mb-1">GPU</div>
+        <div className="text-white">{gpu.name}</div>
+      </div>
+      <div>
+        <div className="text-white/40 mb-1">Memory</div>
+        <div className="text-white">
+          {formatBytes(memoryUsed)} / {formatBytes(memoryTotal)}
+        </div>
+      </div>
+      <div>
+        <div className="text-white/40 mb-1">Utilization</div>
+        <div className="text-white">{gpu.utilization}%</div>
+      </div>
+      <div>
+        <div className="text-white/40 mb-1">Temperature</div>
+        <div className="text-white">{gpu.temperature}°C</div>
+      </div>
+    </div>
+  );
+}
+
+function renderRecommendations(recommendations: unknown) {
+  if (!Array.isArray(recommendations) || recommendations.length === 0) return null;
+  return (
+    <div className="space-y-2">
+      {recommendations.map((rec, index) => {
+        if (typeof rec === 'string') {
+          return (
+            <div key={`rec-${index}`} className="flex items-start gap-2 text-sm text-white/80">
+              <span className="mt-1 h-1.5 w-1.5 rounded-full bg-accent-primary" />
+              <span>{rec}</span>
+            </div>
+          );
+        }
+        if (isRecord(rec)) {
+          const priority = String(rec.priority || rec.severity || '').toLowerCase();
+          const badgeClass = priorityStyles[priority] || 'bg-white/10 text-white/60 border-white/10';
+          return (
+            <div key={`rec-${index}`} className="rounded-lg border border-white/10 bg-white/5 px-3 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-medium text-white">
+                  {rec.title || rec.name || `Recommendation ${index + 1}`}
+                </div>
+                {priority && (
+                  <span className={`text-[10px] uppercase px-2 py-0.5 rounded-full border ${badgeClass}`}>
+                    {priority}
+                  </span>
+                )}
+              </div>
+              {rec.description && <div className="text-xs text-white/60 mt-1">{String(rec.description)}</div>}
+            </div>
+          );
+        }
+        return null;
+      })}
+    </div>
+  );
+}
+
+function renderKeyValue(payload: Record<string, unknown>) {
+  const entries = Object.entries(payload).slice(0, 8);
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-white/70">
+      {entries.map(([key, value]) => (
+        <div key={key} className="flex items-start justify-between gap-2">
+          <span className="text-white/40">{key}</span>
+          <span className="text-white break-all">{String(value)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function AIAssistantTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -94,17 +195,14 @@ export function AIAssistantTab() {
       setLoading(true);
       setError(null);
       
-      const [toolsData, statusData] = await Promise.all([
-        getMcpTools(),
-        getMcpStatus(),
-      ]);
-      
+      const toolsData = await getAiTools();
       const toolsResult = toolsData as any;
-      const statusResult = statusData as any;
-      
       setTools(toolsResult.tools || []);
       setCategories(toolsResult.categories || {});
-      setMcpStatus(statusResult);
+      setMcpStatus({
+        available: toolsResult.available !== false,
+        tools_count: toolsResult.count || toolsResult.tools?.length || 0,
+      });
       
       if (toolsResult.error) {
         setError(toolsResult.error);
@@ -151,7 +249,7 @@ export function AIAssistantTab() {
     
     try {
       setExecuting(true);
-      const result = await callMcpTool(selectedTool.name, toolParams) as ToolResult;
+      const result = await executeAiTool(selectedTool.name, toolParams) as ToolResult;
       setResults(prev => [result, ...prev.slice(0, 9)]); // Keep last 10 results
       
       if (result.success) {
@@ -179,6 +277,85 @@ export function AIAssistantTab() {
     showToast('Copied to clipboard', 'success');
   };
 
+  const renderResultContent = (result: ToolResult) => {
+    const payload = result.success ? result.result : { error: result.error };
+    const errorMessage =
+      (isRecord(payload) && typeof payload.error === 'string' && payload.error) ||
+      (typeof result.error === 'string' ? result.error : '');
+
+    if (errorMessage) {
+      return (
+        <div className="rounded-lg border border-accent-danger/30 bg-accent-danger/10 px-4 py-3 text-sm text-accent-danger">
+          {errorMessage}
+        </div>
+      );
+    }
+
+    const gpuInfo = extractGpuInfo(payload);
+    if (gpuInfo) {
+      return (
+        <div className="rounded-lg border border-white/10 bg-white/5 px-4 py-3">
+          {renderGpuSummary(gpuInfo)}
+        </div>
+      );
+    }
+
+    if (isRecord(payload)) {
+      const summaryText = typeof payload.summary === 'string' ? payload.summary : null;
+      const recommendations =
+        payload.recommendations || payload.priority_recommendations || payload.actions;
+      const keyFindings = payload.key_findings || payload.findings;
+
+      return (
+        <div className="space-y-3">
+          {summaryText && (
+            <div className="rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/80">
+              {summaryText}
+            </div>
+          )}
+          {Array.isArray(keyFindings) && keyFindings.length > 0 && (
+            <div className="rounded-lg border border-white/10 bg-white/5 px-4 py-3">
+              <div className="text-xs uppercase text-white/40 mb-2">Key findings</div>
+              {renderRecommendations(keyFindings)}
+            </div>
+          )}
+          {renderRecommendations(recommendations)}
+          {!summaryText && !recommendations && !keyFindings && renderKeyValue(payload)}
+          <details className="text-xs text-white/40">
+            <summary className="cursor-pointer hover:text-white/70">Raw JSON</summary>
+            <pre className="mt-2 text-xs text-white/60 bg-black/20 rounded-lg p-3 overflow-x-auto max-h-48">
+              {JSON.stringify(payload, null, 2)}
+            </pre>
+          </details>
+        </div>
+      );
+    }
+
+    if (Array.isArray(payload)) {
+      return (
+        <div className="space-y-2">
+          {payload.slice(0, 8).map((item, index) => (
+            <div key={`array-${index}`} className="text-sm text-white/70">
+              {typeof item === 'string' ? item : JSON.stringify(item)}
+            </div>
+          ))}
+          <details className="text-xs text-white/40">
+            <summary className="cursor-pointer hover:text-white/70">Raw JSON</summary>
+            <pre className="mt-2 text-xs text-white/60 bg-black/20 rounded-lg p-3 overflow-x-auto max-h-48">
+              {JSON.stringify(payload, null, 2)}
+            </pre>
+          </details>
+        </div>
+      );
+    }
+
+    return (
+      <pre className="text-xs text-white/70 bg-black/20 rounded-lg p-3 overflow-x-auto max-h-48">
+        {JSON.stringify(payload, null, 2)}
+      </pre>
+    );
+  };
+
   const filteredTools = searchQuery
     ? tools.filter(t => 
         t.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -200,9 +377,11 @@ export function AIAssistantTab() {
   if (loading) {
     return (
       <div className="card">
-        <div className="card-body flex items-center justify-center py-20">
-          <Loader2 className="w-8 h-8 animate-spin text-accent-secondary" />
-          <span className="ml-3 text-white/50">Loading AI tools...</span>
+        <div className="card-body space-y-4 animate-pulse">
+          <div className="h-4 w-40 bg-white/10 rounded" />
+          <div className="h-10 bg-white/5 rounded" />
+          <div className="h-10 bg-white/5 rounded" />
+          <div className="h-10 bg-white/5 rounded" />
         </div>
       </div>
     );
@@ -458,9 +637,7 @@ export function AIAssistantTab() {
                             )}
                           </button>
                         </div>
-                        <pre className="text-xs text-white/70 bg-black/20 rounded-lg p-3 overflow-x-auto max-h-48">
-                          {JSON.stringify(result.success ? result.result : { error: result.error }, null, 2)}
-                        </pre>
+                        {renderResultContent(result)}
                       </div>
                     ))}
                   </div>
@@ -522,7 +699,3 @@ export function AIAssistantTab() {
     </div>
   );
 }
-
-
-
-

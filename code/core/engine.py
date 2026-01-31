@@ -899,7 +899,70 @@ class AIDomain:
         Args:
             concept: The concept to explain (e.g., "flash-attention", "tensor parallelism")
         """
-        return _safe_call(_get_handler().get_llm_explanation, concept)
+        if not concept or not concept.strip():
+            return {"success": False, "error": "concept is required"}
+        try:
+            import re
+            from core.book import BookCitation, TECHNIQUE_CHAPTERS, get_citations
+
+            citations = get_citations(concept, max_results=3)
+            if not citations:
+                return {
+                    "success": False,
+                    "concept": concept,
+                    "error": "No relevant book citations found.",
+                }
+
+            def _summary(text: str) -> str:
+                sentences = re.split(r"(?<=[.!?])\\s+", text.strip())
+                return " ".join(sentences[:2]).strip()
+
+            def _key_points(text: str) -> List[str]:
+                bullets = re.findall(r"^(?:[-*]|\\d+\\.)\\s+(.*)$", text, flags=re.MULTILINE)
+                if bullets:
+                    return [bp.strip() for bp in bullets[:5] if bp.strip()]
+                summary = _summary(text)
+                return [summary] if summary else []
+
+            top_citation = citations[0]
+            key_points: List[str] = []
+            for citation in citations:
+                key_points.extend(_key_points(citation.content))
+            key_points = [kp for kp in key_points if kp]
+            if not key_points:
+                key_points = _key_points(top_citation.content)
+
+            chapters = {citation.chapter for citation in citations}
+            related_concepts: List[str] = []
+            for technique, tech_chapters in TECHNIQUE_CHAPTERS.items():
+                if technique.lower() == concept.lower():
+                    continue
+                if chapters.intersection(set(tech_chapters)):
+                    related_concepts.append(technique)
+            related_concepts = related_concepts[:6]
+
+            citation_payload = [
+                {
+                    "chapter": citation.chapter,
+                    "chapter_title": citation.chapter_title,
+                    "section": citation.section,
+                    "content": citation.content,
+                    "relevance_score": citation.relevance_score,
+                    "line_number": citation.line_number,
+                }
+                for citation in citations
+            ]
+
+            return {
+                "success": True,
+                "concept": concept,
+                "explanation": _summary(top_citation.content),
+                "key_points": key_points[:5],
+                "citations": citation_payload,
+                "related_concepts": related_concepts,
+            }
+        except Exception as exc:
+            return {"success": False, "concept": concept, "error": str(exc)}
     
     def analyze_kernel(self, code: str) -> Dict[str, Any]:
         """

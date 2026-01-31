@@ -20,6 +20,7 @@
 
 #include "../core/common/headers/cuda_verify.cuh"
 #include "../core/common/headers/tma_helpers.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 namespace cg = cooperative_groups;
 namespace cptx = cuda::ptx;
@@ -212,6 +213,7 @@ void tma_multicast_gemm_kernel(
 //============================================================================
 
 int main(int argc, char** argv) {
+    NVTX_RANGE("main");
     cudaDeviceProp prop{};
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
 
@@ -251,13 +253,20 @@ int main(int argc, char** argv) {
 
     std::vector<float> h_A(static_cast<size_t>(M) * K);
     std::vector<float> h_B(static_cast<size_t>(K) * N);
-    for (size_t i = 0; i < h_A.size(); ++i) h_A[i] = (float)(rand() % 100) / 100.0f;
-    for (size_t i = 0; i < h_B.size(); ++i) h_B[i] = (float)(rand() % 100) / 100.0f;
+    for (size_t i = 0; i < h_A.size() {
+        NVTX_RANGE("setup");
+        ; ++i) h_A[i] = (float)(rand() % 100) / 100.0f;
+    }
+    for (size_t i = 0; i < h_B.size() {
+        NVTX_RANGE("setup");
+        ; ++i) h_B[i] = (float)(rand() % 100) / 100.0f;
+    }
 
     CUDA_CHECK(cudaMemcpy(d_A, h_A.data(), bytes_A, cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_B, h_B.data(), bytes_B, cudaMemcpyHostToDevice));
 
     CUtensorMap b_desc{};
+        NVTX_RANGE("iteration");
     cuda_tma::check_cu(cuInit(0), "cuInit");
     auto encode = cuda_tma::load_cuTensorMapEncodeTiled();
     if (!encode) {
@@ -312,6 +321,7 @@ int main(int argc, char** argv) {
     const int iterations = 20;
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("iteration");
         CUDA_CHECK(cudaLaunchKernelEx(&config, tma_multicast_gemm_kernel, b_desc, d_A, d_B, d_C, M, N, K));
     }
     CUDA_CHECK(cudaEventRecord(stop));
@@ -333,6 +343,7 @@ int main(int argc, char** argv) {
     CUDA_CHECK(cudaMemcpy(h_C.data(), d_C, bytes_C, cudaMemcpyDeviceToHost));
     double checksum = 0.0;
     for (float v : h_C) {
+        NVTX_RANGE("verify");
         checksum += static_cast<double>(v);
     }
     VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));

@@ -6,6 +6,7 @@
 
 #include "cluster_group_common.cuh"
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                        \
     do {                                                                        \
@@ -40,6 +41,7 @@ __global__ void baseline_atomic_kernel(const float* __restrict__ in,
 }
 
 int main() {
+    NVTX_RANGE("main");
     CUDA_CHECK(cudaSetDevice(0));
 
     std::vector<float> h_input(kTotalElements);
@@ -75,6 +77,7 @@ int main() {
 
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < kIterations; ++i) {
+        NVTX_RANGE("compute_kernel:baseline_atomic_kernel");
         CUDA_CHECK(cudaMemsetAsync(d_sum, 0, result_bytes));
         CUDA_CHECK(cudaMemsetAsync(d_sq, 0, result_bytes));
         baseline_atomic_kernel<<<grid, block>>>(d_input, d_sum, d_sq, chunk_elems, kTotalElements);
@@ -107,6 +110,7 @@ int main() {
         float diff = 0.0f;
         const std::size_t limit = std::min(a.size(), b.size());
         for (std::size_t i = 0; i < limit; ++i) {
+            NVTX_RANGE("verify");
             diff = std::max(diff, std::abs(a[i] - b[i]));
         }
         return diff;
@@ -118,6 +122,7 @@ int main() {
 
     double checksum = 0.0;
     for (int i = 0; i < chunks; ++i) {
+        NVTX_RANGE("verify");
         checksum += static_cast<double>(h_sum[i]) + static_cast<double>(h_squares[i]);
     }
     checksum /= static_cast<double>(chunks);

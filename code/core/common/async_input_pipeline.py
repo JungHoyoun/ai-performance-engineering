@@ -94,8 +94,10 @@ class AsyncInputPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
             return next(self.loader_iter)
 
     def _launch_h2d(self, batch_cpu: torch.Tensor) -> torch.Tensor:
+        label = "transfer_async:h2d" if (self.copy_stream is not None or self.cfg.non_blocking) else "transfer_sync:h2d"
         if self.copy_stream is None:
-            return batch_cpu.to(self.device, non_blocking=self.cfg.non_blocking)
+            with self._nvtx_range(label):
+                return batch_cpu.to(self.device, non_blocking=self.cfg.non_blocking)
         if not self._prefetch_events:
             self._prefetch_events = [
                 torch.cuda.Event(enable_timing=False, blocking=False),
@@ -104,7 +106,7 @@ class AsyncInputPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self._prefetch_event_index = 0
         event = self._prefetch_events[self._prefetch_event_index]
         self._prefetch_event_index = (self._prefetch_event_index + 1) % len(self._prefetch_events)
-        with torch.cuda.stream(self.copy_stream):
+        with torch.cuda.stream(self.copy_stream), self._nvtx_range(label):
             batch_gpu = batch_cpu.to(self.device, non_blocking=self.cfg.non_blocking)
             event.record(self.copy_stream)
             self._prefetch_event = event

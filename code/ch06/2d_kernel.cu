@@ -5,6 +5,7 @@
 
 #include <cuda_runtime.h>
 #include <iostream>
+#include "../core/common/nvtx_utils.cuh"
 
 //-------------------------------------------------------
 // Kernel: my2DKernel running on the device (GPU)
@@ -25,6 +26,7 @@ __global__ void my2DKernel(float* input, int width, int height) {
 }
 
 int main() {
+    NVTX_RANGE("main");
     // Image dimensions
     const int width = 1024;
     const int height = 1024;
@@ -34,6 +36,7 @@ int main() {
     float* h_image = nullptr;
     cudaMallocHost(&h_image, N * sizeof(float));
     for (int i = 0; i < N; ++i) {
+        NVTX_RANGE("setup");
         h_image[i] = 1.0f; // e.g., initialize all pixels to 1.0f
     }
     

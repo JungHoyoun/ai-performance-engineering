@@ -15,9 +15,11 @@
 
 #include "../core/common/headers/tma_helpers.cuh"
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #if CUDART_VERSION < 13000
 int main() {
+    NVTX_RANGE("main");
     std::printf("SKIP: requires CUDA 13.0+ for TMA bulk tensor\nTIME_MS: 0.0\n");
     return 0;
 }
@@ -252,6 +254,7 @@ int main() {
     std::vector<float> h_k(seq_len * d_head);
     std::vector<float> h_v(seq_len * d_head);
     for (int i = 0; i < seq_len * d_head; ++i) {
+        NVTX_RANGE("transfer_sync");
         h_q[i] = (static_cast<float>((i % 13) - 6)) * 0.01f;
         h_k[i] = (static_cast<float>((i % 17) - 8)) * 0.01f;
         h_v[i] = (static_cast<float>((i % 19) - 9)) * 0.01f;
@@ -300,6 +303,7 @@ int main() {
 
     check_cuda(cudaEventRecord(start, stream), "record start");
     for (int i = 0; i < ITERS; ++i) {
+        NVTX_RANGE("compute_kernel");
         flash_attn_tma_kernel<TILE_KV, D_HEAD><<<grid, block, 0, stream>>>(
             k_desc, v_desc, d_q, d_o, seq_len, d_head);
     }
@@ -318,6 +322,7 @@ int main() {
     check_cuda(cudaMemcpy(h_o.data(), d_o, bytes, cudaMemcpyDeviceToHost), "copy o");
     double checksum = 0.0;
     for (float v : h_o) {
+        NVTX_RANGE("verify");
         checksum += static_cast<double>(v);
     }
     VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));

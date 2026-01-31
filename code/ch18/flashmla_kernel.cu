@@ -4,6 +4,7 @@
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <cstdio>
+#include "../core/common/nvtx_utils.cuh"
 
 __global__ void flashmla_decode(const half* __restrict__ q,
                                 const half* __restrict__ k_cache,
@@ -39,6 +40,7 @@ __global__ void flashmla_decode(const half* __restrict__ q,
 }
 
 int main() {
+    NVTX_RANGE("main");
   printf("FlashMLA decode sketch\n");
   return 0;
 }

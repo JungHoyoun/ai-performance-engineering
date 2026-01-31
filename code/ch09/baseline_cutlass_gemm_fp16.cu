@@ -15,6 +15,7 @@
 #include <iostream>
 #include <random>
 #include <vector>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                         \
   do {                                                                           \
@@ -82,6 +83,7 @@ __global__ void tiled_fp16_gemm_kernel(const __half* __restrict__ A,
 }
 
 int main() {
+    NVTX_RANGE("main");
     // Match optimized version's matrix sizes
     constexpr int M = 2048;
     constexpr int N = 2048;
@@ -108,12 +110,15 @@ int main() {
     std::mt19937 gen(42);
     std::uniform_real_distribution<float> dis(-0.5f, 0.5f);
     for (size_t i = 0; i < elements_A * kBatchCount; ++i) {
+        NVTX_RANGE("setup");
         h_A[i] = __float2half(dis(gen));
     }
     for (size_t i = 0; i < elements_B * kBatchCount; ++i) {
+        NVTX_RANGE("setup");
         h_B[i] = __float2half(dis(gen));
     }
     for (size_t i = 0; i < elements_C * kBatchCount; ++i) {
+        NVTX_RANGE("setup");
         h_C[i] = __float2half(0.0f);
     }
 
@@ -142,6 +147,7 @@ int main() {
 
     // Warmup
     for (int batch = 0; batch < kBatchCount; ++batch) {
+        NVTX_RANGE("compute_kernel");
         const size_t offset_A = batch * elements_A;
         const size_t offset_B = batch * elements_B;
         const size_t offset_C = batch * elements_C;
@@ -157,7 +163,9 @@ int main() {
     // Timed section: Kernel execution only
     CUDA_CHECK(cudaEventRecord(start, stream));
     for (int iter = 0; iter < kIterations; ++iter) {
+        NVTX_RANGE("batch");
         for (int batch = 0; batch < kBatchCount; ++batch) {
+            NVTX_RANGE("compute_kernel");
             const size_t offset_A = batch * elements_A;
             const size_t offset_B = batch * elements_B;
             const size_t offset_C = batch * elements_C;

@@ -8,6 +8,7 @@
 
 #include "../core/common/headers/cuda_helpers.cuh"
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 constexpr int WIDTH = 4096;
 constexpr int TILE_DIM = 32;
@@ -39,17 +40,22 @@ __global__ void transpose_naive(const float* __restrict__ idata, float* __restri
 
 float checksum(const std::vector<float>& data) {
   double acc = 0.0;
-  for (float v : data) acc += static_cast<double>(v);
+  for (float v : data) {
+      NVTX_RANGE("verify");
+      acc += static_cast<double>(v);
+  }
   return static_cast<float>(acc / static_cast<double>(data.size()));
 }
 
 int main() {
+    NVTX_RANGE("main");
   const size_t bytes = static_cast<size_t>(WIDTH) * WIDTH * sizeof(float);
 
   std::vector<float> h_in(static_cast<size_t>(WIDTH) * WIDTH);
   std::vector<float> h_out(static_cast<size_t>(WIDTH) * WIDTH, 0.0f);
 
   for (size_t i = 0; i < h_in.size(); ++i) {
+      NVTX_RANGE("setup");
     h_in[i] = static_cast<float>((i % 1024) - 512) / 128.0f;
   }
 
@@ -72,6 +78,7 @@ int main() {
 
   CUDA_CHECK(cudaEventRecord(start));
   for (int i = 0; i < REPEAT; ++i) {
+      NVTX_RANGE("compute_kernel:transpose_naive");
     transpose_naive<<<grid, block>>>(d_in, d_out, WIDTH);
   }
   CUDA_CHECK_LAST_ERROR();

@@ -12,6 +12,7 @@
 #include <cstdio>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                       \
     do {                                                                       \
@@ -38,6 +39,7 @@ __global__ void copyVectorized(const float4* __restrict__ in,
 }
 
 int main() {
+    NVTX_RANGE("main");
     printf("Optimized: float4 (16-byte) Vectorized Copy\n");
     printf("============================================\n");
     
@@ -56,7 +58,10 @@ int main() {
     
     // Initialize
     float* h_data = new float[NUM_FLOATS];
-    for (int i = 0; i < NUM_FLOATS; ++i) h_data[i] = (float)i;
+    for (int i = 0; i < NUM_FLOATS; ++i) {
+        NVTX_RANGE("setup");
+        h_data[i] = (float)i;
+    }
     CUDA_CHECK(cudaMemcpy(d_in, h_data, bytes, cudaMemcpyHostToDevice));
     
     // Setup timing
@@ -69,6 +74,7 @@ int main() {
     
     // Warmup
     for (int i = 0; i < 5; ++i) {
+        NVTX_RANGE("warmup");
         copyVectorized<<<grid, block>>>(
             reinterpret_cast<float4*>(d_in),
             reinterpret_cast<float4*>(d_out),
@@ -81,6 +87,7 @@ int main() {
     const int iterations = 20;
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("compute_kernel:copyVectorized");
         copyVectorized<<<grid, block>>>(
             reinterpret_cast<float4*>(d_in),
             reinterpret_cast<float4*>(d_out),

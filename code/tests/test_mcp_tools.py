@@ -23,6 +23,8 @@ BENCH_FILE = REPO_ROOT / "benchmark_test_results.json"
 PROFILE_FIXTURE_DIR = ARTIFACT_RUNS_DIR / "mcp-fixtures" / "profiles" / "bench" / "ch04"
 NSYS_SAMPLE = PROFILE_FIXTURE_DIR / "baseline_nccl_baseline.nsys-summary.csv"
 NCU_SAMPLE = PROFILE_FIXTURE_DIR / "baseline_nvlink_baseline.ncu-rep"
+NSYS_REP_FIXTURE = PROFILE_FIXTURE_DIR / "baseline_fixture.nsys-rep"
+NCU_REP_FIXTURE = PROFILE_FIXTURE_DIR / "baseline_fixture.ncu-rep"
 
 
 @dataclass(frozen=True)
@@ -458,7 +460,51 @@ def test_slow_tools_opt_in_execution(server: mcp_server.MCPServer, case: ToolCas
         tool_result = payload["result"]
         if tool_result.get("returncode", 1) == 0 and tool_result.get("results_json"):
             assert "triage" in tool_result
+    if case.name == "aisp_profile_nsys":
+        tool_result = payload["result"]
+        if tool_result.get("success"):
+            assert "nsys_metrics" in tool_result
+            assert isinstance(tool_result["nsys_metrics"], dict)
+    if case.name == "aisp_profile_ncu":
+        tool_result = payload["result"]
+        if tool_result.get("success"):
+            assert "ncu_metrics" in tool_result
+            assert isinstance(tool_result["ncu_metrics"], dict)
+    if case.name == "aisp_profile_hta":
+        tool_result = payload["result"]
+        if tool_result.get("success"):
+            assert "nsys_metrics" in tool_result
+            assert isinstance(tool_result["nsys_metrics"], dict)
+    if case.name == "aisp_profile_torch":
+        tool_result = payload["result"]
+        if tool_result.get("success"):
+            assert "torch_metrics" in tool_result
             assert "report" in tool_result
+    if case.name == "aisp_compare_nsys":
+        tool_result = payload["result"]
+        if NSYS_REP_FIXTURE.exists():
+            assert tool_result.get("metrics")
+            assert len(tool_result["metrics"]) > 0
+        ncu_comparison = tool_result.get("ncu_comparison")
+        if NCU_REP_FIXTURE.exists():
+            assert ncu_comparison
+            assert not ncu_comparison.get("error")
+            assert ncu_comparison.get("kernel_comparison") or ncu_comparison.get("metrics")
+            if ncu_comparison.get("kernel_comparison") is not None:
+                assert len(ncu_comparison["kernel_comparison"]) > 0
+    if case.name == "aisp_compare_ncu":
+        tool_result = payload["result"]
+        if NCU_REP_FIXTURE.exists():
+            assert not tool_result.get("error")
+            assert tool_result.get("kernel_comparison") or tool_result.get("metrics")
+            if tool_result.get("kernel_comparison") is not None:
+                assert len(tool_result["kernel_comparison"]) > 0
+        nsys_comparison = tool_result.get("nsys_comparison")
+        if NSYS_REP_FIXTURE.exists():
+            assert nsys_comparison
+            assert not nsys_comparison.get("error")
+            assert nsys_comparison.get("metrics")
+            assert len(nsys_comparison["metrics"]) > 0
 
 
 def test_benchmark_export_runs_inprocess(server: mcp_server.MCPServer, tmp_path: Path):

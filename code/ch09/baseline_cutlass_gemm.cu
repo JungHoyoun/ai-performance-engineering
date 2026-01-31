@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                         \
   do {                                                                           \
@@ -55,6 +56,7 @@ __global__ void simple_gemm_kernel(const float* __restrict__ A,
 }
 
 int main() {
+    NVTX_RANGE("main");
     constexpr int M = 1024;
     constexpr int N = 1024;
     constexpr int K = 1024;
@@ -78,9 +80,11 @@ int main() {
     std::mt19937 gen(42);
     std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
     for (size_t i = 0; i < elements_A * kBatchCount; ++i) {
+        NVTX_RANGE("setup");
         h_A[i] = dis(gen);
     }
     for (size_t i = 0; i < elements_B * kBatchCount; ++i) {
+        NVTX_RANGE("setup");
         h_B[i] = dis(gen);
     }
 
@@ -111,7 +115,9 @@ int main() {
 
     CUDA_CHECK(cudaEventRecord(start, stream));
     for (int iter = 0; iter < kIterations; ++iter) {
+        NVTX_RANGE("batch");
         for (int batch = 0; batch < kBatchCount; ++batch) {
+            NVTX_RANGE("compute_kernel:simple_gemm_kernel");
             const size_t a_off = static_cast<size_t>(batch) * elements_A;
             const size_t b_off = static_cast<size_t>(batch) * elements_B;
             const size_t c_off = static_cast<size_t>(batch) * elements_C;
@@ -142,6 +148,7 @@ int main() {
 #ifdef VERIFY
     double checksum = 0.0;
     for (size_t i = 0; i < elements_C; ++i) {
+        NVTX_RANGE("verify");
         checksum += std::abs(static_cast<double>(h_C0[i]));
     }
     VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));

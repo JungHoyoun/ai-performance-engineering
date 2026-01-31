@@ -29,25 +29,20 @@ class BaselineTensorCoresStreamsBenchmark(VerificationPayloadMixin, BaseBenchmar
         super().__init__()
         self.device = resolve_device()
         self.label = "baseline_tensor_cores_streams"
-        # Use matrix dimensions that work well with tensor cores
-        # Each chunk will be reshaped into a matrix for GEMM
-        self.num_elements = 24_000_000  # Total elements
         self.num_segments = 16
-        # Matrix dimensions: reshape each chunk to MxK and KxN for GEMM
-        # Each chunk ~1.5M elements -> reshape to ~1224x1224 matrices
-        self.matrix_dim = 1224  # Good size for tensor cores
-        self.stream = None
-        self.host_input = None
-        self.host_output = None
-        self.host_in_chunks = None
-        self.host_out_chunks = None
-        self.device_A_chunks = None
-        self.device_B_chunks = None
-        self.device_C_chunks = None
+        self.matrix_dim = 1024
+        self.num_elements = self.num_segments * self.matrix_dim * self.matrix_dim
+        self.stream: torch.cuda.Stream | None = None
         self.dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-        # Workload metadata: GEMM operations
+        self.host_A: torch.Tensor | None = None
+        self.host_B: torch.Tensor | None = None
+        self.host_output: torch.Tensor | None = None
+        self.device_A: torch.Tensor | None = None
+        self.device_B: torch.Tensor | None = None
+        self.device_C: torch.Tensor | None = None
+        self.device_output_rows: torch.Tensor | None = None
         element_size = float(torch.empty((), dtype=self.dtype).element_size())
-        bytes_transferred = float(self.num_elements * element_size * 3)  # A, B, C matrices
+        bytes_transferred = float(self.num_elements * element_size * 3)
         self.register_workload_metadata(bytes_per_iteration=bytes_transferred)
 
     def setup(self) -> None:
@@ -56,61 +51,43 @@ class BaselineTensorCoresStreamsBenchmark(VerificationPayloadMixin, BaseBenchmar
             torch.cuda.manual_seed_all(42)
         
         self.stream = torch.cuda.Stream()
-        
-        # Create input data on host (FP32 for verification)
-        self.host_input = torch.randn(
-            self.num_elements, device="cpu", dtype=torch.float32, pin_memory=True
+
+        self.host_A = torch.randn(
+            self.num_segments,
+            self.matrix_dim,
+            self.matrix_dim,
+            device="cpu",
+            dtype=torch.float32,
+            pin_memory=True,
         )
-        self.host_output = torch.empty_like(self.host_input, pin_memory=True)
-        
-        # Split into chunks
-        self.host_in_chunks = list(torch.chunk(self.host_input, self.num_segments))
-        self.host_out_chunks = list(torch.chunk(self.host_output, self.num_segments))
-        
-        # Prepare device buffers for GEMM: reshape each chunk to matrices
-        # Strategy: Use chunk as one dimension, create square matrix for GEMM
-        # C = A @ B where A is (chunk_size, K) and B is (K, chunk_size) -> C is (chunk_size, chunk_size)
-        # Then extract diagonal or first row to match original chunk size
-        self.device_A_chunks = []
-        self.device_B_chunks = []
-        self.device_C_chunks = []
-        self.chunk_sizes = []  # Store original chunk sizes for output reshaping
-        
-        for chunk in self.host_in_chunks:
-            chunk_size = chunk.numel()
-            self.chunk_sizes.append(chunk_size)
-            
-            if chunk_size == 0:
-                self.device_A_chunks.append(torch.empty(0, 0, dtype=self.dtype, device=self.device))
-                self.device_B_chunks.append(torch.empty(0, 0, dtype=self.dtype, device=self.device))
-                self.device_C_chunks.append(torch.empty(0, 0, dtype=self.dtype, device=self.device))
-                continue
-            
-            # Create matrices: A is (M, K), B is (K, N) where M=chunk_size, N=chunk_size
-            # Use K = min(256, chunk_size) for reasonable GEMM size
-            K = min(256, chunk_size)
-            M = chunk_size
-            N = chunk_size
-            
-            # Pad chunk if needed to create A matrix
-            if chunk_size < K:
-                chunk_padded = torch.cat([chunk, torch.zeros(K - chunk_size, dtype=chunk.dtype)])
-            else:
-                chunk_padded = chunk
-            
-            # Create A: (M, K) - repeat chunk data to fill matrix
-            A_flat = chunk_padded[:K].repeat((M // K) + 1)[:M * K]
-            A = A_flat.reshape(M, K).to(self.dtype)
-            
-            # Create B: (K, N) - use chunk data transposed pattern
-            B_flat = chunk_padded[:K].repeat((N // K) + 1)[:K * N]
-            B = B_flat.reshape(K, N).to(self.dtype)
-            
-            self.device_A_chunks.append(A.to(self.device))
-            self.device_B_chunks.append(B.to(self.device))
-            # C will be (M, N) = (chunk_size, chunk_size)
-            self.device_C_chunks.append(torch.empty(M, N, dtype=self.dtype, device=self.device))
-        
+        self.host_B = torch.randn(
+            self.num_segments,
+            self.matrix_dim,
+            self.matrix_dim,
+            device="cpu",
+            dtype=torch.float32,
+            pin_memory=True,
+        )
+        self.host_output = torch.empty(
+            (self.num_segments, self.matrix_dim),
+            device="cpu",
+            dtype=torch.float32,
+            pin_memory=True,
+        )
+
+        self.device_A = self.host_A.to(device=self.device, dtype=self.dtype, non_blocking=True)
+        self.device_B = self.host_B.to(device=self.device, dtype=self.dtype, non_blocking=True)
+        self.device_C = torch.empty(
+            (self.num_segments, self.matrix_dim, self.matrix_dim),
+            device=self.device,
+            dtype=self.dtype,
+        )
+        self.device_output_rows = torch.empty(
+            (self.num_segments, self.matrix_dim),
+            device=self.device,
+            dtype=self.dtype,
+        )
+
         torch.cuda.synchronize()
 
     def benchmark_fn(self) -> None:
@@ -118,60 +95,51 @@ class BaselineTensorCoresStreamsBenchmark(VerificationPayloadMixin, BaseBenchmar
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
         with nvtx_range(self.label, enable=enable_nvtx):
-            assert self.device_A_chunks is not None
-            assert self.device_B_chunks is not None
-            assert self.device_C_chunks is not None
-            
-            for A, B, C in zip(self.device_A_chunks, self.device_B_chunks, self.device_C_chunks):
-                with torch.cuda.stream(self.stream):
-                    # Tensor core GEMM operation
-                    torch.matmul(A, B, out=C)
-                # Synchronize after each chunk - prevents overlap
-                self.stream.synchronize()
-        
-        # Copy results back to host output chunks after all GEMM operations
+            assert self.device_A is not None
+            assert self.device_B is not None
+            assert self.device_C is not None
+            assert self.device_output_rows is not None
+
+            with torch.no_grad():
+                for idx in range(self.num_segments):
+                    with torch.cuda.stream(self.stream):
+                        torch.matmul(self.device_A[idx], self.device_B[idx], out=self.device_C[idx])
+                        self.device_output_rows[idx].copy_(self.device_C[idx, 0], non_blocking=True)
+                    self.stream.synchronize()
+
         torch.cuda.synchronize()
-        for idx, (C, h_out, orig_size) in enumerate(zip(self.device_C_chunks, self.host_out_chunks, self.chunk_sizes)):
-            if C.numel() > 0 and h_out.numel() > 0 and orig_size > 0:
-                # C is (chunk_size, chunk_size), extract first row to match original chunk size
-                if C.shape[1] >= orig_size:
-                    C_row = C[0, :orig_size].float()
-                else:
-                    # If C is smaller, pad with zeros
-                    C_row = torch.cat([C[0, :].float(), torch.zeros(orig_size - C.shape[1], dtype=torch.float32)])
-                h_out.copy_(C_row, non_blocking=False)
-        
-        if (
-            self.host_input is None
-            or self.host_output is None
-            or self.host_in_chunks is None
-            or self.host_out_chunks is None
-        ):
+        assert self.host_output is not None
+        self.host_output.copy_(self.device_output_rows, non_blocking=False)
+
+        if self.host_A is None or self.host_B is None or self.host_output is None:
             raise RuntimeError("benchmark_fn() must run after setup() initializes buffers")
 
     def capture_verification_payload(self) -> None:
+        assert self.host_A is not None
+        assert self.host_B is not None
+        assert self.host_output is not None
         self._set_verification_payload(
-            inputs={"host_input": self.host_input},
+            inputs={"host_A": self.host_A, "host_B": self.host_B},
             output=self.host_output.detach().clone(),
-            batch_size=self.host_input.numel(),
+            batch_size=self.host_output.numel(),
             parameter_count=0,
             precision_flags={
                 "fp16": self.dtype == torch.float16,
                 "bf16": self.dtype == torch.bfloat16,
                 "tf32": torch.backends.cuda.matmul.allow_tf32,
             },
-            output_tolerance=(1e-2, 1e-2),  # Looser tolerance for FP16/BF16
+            output_tolerance=(1e-2, 1e-2),
         )
 
     def teardown(self) -> None:
         self.stream = None
-        self.host_input = None
+        self.host_A = None
+        self.host_B = None
         self.host_output = None
-        self.host_in_chunks = None
-        self.host_out_chunks = None
-        self.device_A_chunks = None
-        self.device_B_chunks = None
-        self.device_C_chunks = None
+        self.device_A = None
+        self.device_B = None
+        self.device_C = None
+        self.device_output_rows = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
@@ -185,10 +153,8 @@ class BaselineTensorCoresStreamsBenchmark(VerificationPayloadMixin, BaseBenchmar
         )
 
     def validate_result(self) -> str | None:
-        if self.host_output is None or self.host_input is None:
+        if self.host_output is None or self.host_A is None or self.host_B is None:
             return "Buffers not initialized"
-        if self.host_output.shape != self.host_input.shape:
-            return "Shape mismatch"
         if not torch.isfinite(self.host_output).all():
             return "Output contains non-finite values"
         return None
@@ -200,6 +166,7 @@ class BaselineTensorCoresStreamsBenchmark(VerificationPayloadMixin, BaseBenchmar
         return {
             f"{self.label}.elements": float(self.num_elements),
             f"{self.label}.num_segments": float(self.num_segments),
+            f"{self.label}.matrix_dim": float(self.matrix_dim),
             f"{self.label}.bytes_transferred": bytes_transferred,
             f"{self.label}.num_streams": 1.0,
             f"{self.label}.expected_overlap_pct": 0.0,

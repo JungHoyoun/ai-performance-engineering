@@ -12,6 +12,7 @@ import tempfile
 from pathlib import Path
 
 import torch
+from core.profiling.nvtx_helper import standardize_nvtx_label
 from torch.utils.cpp_extension import load
 
 
@@ -35,7 +36,7 @@ def main():
     ext = build_extension()
     a = torch.randn(1024, device="cuda")
     b = torch.randn(1024, device="cuda")
-    torch.cuda.nvtx.range_push("lineinfo_demo")
+    torch.cuda.nvtx.range_push(standardize_nvtx_label("step:lineinfo_demo"))
     out = ext.forward(a, b)
     torch.cuda.nvtx.range_pop()
     torch.cuda.synchronize()

@@ -14,7 +14,7 @@ Examples:
   perf_triage_bundle.sh --output-root ./artifacts/runs
   perf_triage_bundle.sh --output-root ./artifacts/runs --tag baseline -- \
     python ch01/baseline_matmul.py --batch-size 32
-  perf_triage_bundle.sh --output-root ./artifacts --nsys --duration 90 -- \
+  perf_triage_bundle.sh --output-root ./artifacts/runs --nsys --duration 90 -- \
     python your_script.py --arg foo
 
 Behavior:

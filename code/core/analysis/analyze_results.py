@@ -52,7 +52,7 @@ def discover_all_result_directories(code_root: Path) -> List[Path]:
     patterns = [
         "test_results_*",
         "profiles_*",
-        "profile_runs/harness/*",
+        "artifacts/runs/*",
     ]
     
     all_dirs = []

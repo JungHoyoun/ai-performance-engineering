@@ -35,6 +35,7 @@
 #include <vector>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
@@ -283,6 +284,7 @@ __global__ void tma_neighbor_copy_kernel(const float* __restrict__ src,
 float checksum(const std::vector<float>& data) {
     double sum = 0.0;
     for (float v : data) {
+        NVTX_RANGE("verify");
         sum += static_cast<double>(v);
     }
     return static_cast<float>(sum / static_cast<double>(data.size()));
@@ -308,6 +310,7 @@ void benchmark_tma_2d(cudaDeviceProp& prop) {
     // Initialize
     std::vector<float> h_matrix(M * N);
     for (int i = 0; i < M * N; ++i) {
+        NVTX_RANGE("setup");
         h_matrix[i] = static_cast<float>(i % 1000) / 1000.0f;
     }
     CUDA_CHECK(cudaMemcpy(d_mat_src, h_matrix.data(), matrix_bytes, cudaMemcpyHostToDevice));
@@ -329,6 +332,7 @@ void benchmark_tma_2d(cudaDeviceProp& prop) {
     constexpr int kIterations2D = 20;
     CUDA_CHECK(cudaEventRecord(start2d));
     for (int iter = 0; iter < kIterations2D; ++iter) {
+        NVTX_RANGE("compute_kernel:tma_2d_copy_kernel");
         tma_2d_copy_kernel<<<grid2d, block2d>>>(d_mat_src, d_mat_dst, M, N);
     }
     CUDA_CHECK(cudaEventRecord(stop2d));
@@ -363,6 +367,7 @@ void benchmark_tma_2d(cudaDeviceProp& prop) {
 }
 
 int main() {
+    NVTX_RANGE("main");
     cudaDeviceProp prop{};
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     if (prop.major < 9) {
@@ -381,6 +386,7 @@ int main() {
 
     std::vector<float> h_input(kElements);
     for (int i = 0; i < kElements; ++i) {
+        NVTX_RANGE("setup");
         h_input[i] = static_cast<float>((i % 1024) - 512) / 128.0f;
     }
     CUDA_CHECK(cudaMemcpy(d_src, h_input.data(), bytes, cudaMemcpyHostToDevice));
@@ -402,6 +408,7 @@ int main() {
     constexpr int kIterations = 20;
     CUDA_CHECK(cudaEventRecord(start));
     for (int iter = 0; iter < kIterations; ++iter) {
+        NVTX_RANGE("compute_kernel:tma_neighbor_copy_kernel:smem");
         tma_neighbor_copy_kernel<<<grid, kThreadsPerBlock, shared_bytes>>>(
             d_src, d_dst, kElements, total_tiles);
         CUDA_CHECK(cudaGetLastError());
@@ -420,6 +427,7 @@ int main() {
     if (kValidateOutput) {
         std::vector<float> h_reference(kElements);
         for (int i = 0; i < kElements; ++i) {
+            NVTX_RANGE("verify");
             const int near_idx = (i + 1 < kElements) ? (i + 1) : (kElements - 1);
             const int far_idx = (i + kLookahead < kElements) ? (i + kLookahead) : (kElements - 1);
             h_reference[i] = combine_values(h_input[i], h_input[near_idx], h_input[far_idx]);
@@ -427,6 +435,7 @@ int main() {
 
         float max_error = 0.0f;
         for (int i = 0; i < kElements; ++i) {
+            NVTX_RANGE("verify");
             max_error = std::max(max_error, std::abs(h_reference[i] - h_output[i]));
         }
         std::printf("Output checksum: %.6f (max error %.6f)\n", checksum(h_output), max_error);

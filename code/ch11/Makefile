@@ -4,7 +4,8 @@
 include ../core/common/cuda_arch.mk
 
 NVCC_ALLOW_UNSUPPORTED = --allow-unsupported-compiler
-NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) $(NVCC_ALLOW_UNSUPPORTED)
+NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) $(NVCC_ALLOW_UNSUPPORTED) $(CUDA_NVTX_CFLAGS)
+NVCC_LDFLAGS = $(CUDA_NVTX_LDFLAGS)
 SUFFIX = $(TARGET_SUFFIX)
 
 # Auto-detect all .cu files and derive targets (no manual list maintenance)
@@ -24,17 +25,17 @@ all: $(TARGETS)
 	@echo "✓ Built $(words $(BASE_TARGETS)) CUDA examples"
 
 # Pattern rule for building targets with architecture suffix
-%$(SUFFIX): %.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $<
+%$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LDFLAGS)
 
 # Special rules for dual-pipeline executables (use dedicated drivers)
 baseline_warp_specialized_two_pipelines_multistream$(SUFFIX): \
 	baseline_warp_specialized_two_pipelines_driver.cu baseline_warp_specialized_two_pipelines_common.cuh
-	$(NVCC) $(NVCC_FLAGS) -o $@ baseline_warp_specialized_two_pipelines_driver.cu
+	$(NVCC) $(NVCC_FLAGS) -o $@ baseline_warp_specialized_two_pipelines_driver.cu $(CUDA_NVTX_LDFLAGS)
 
 optimized_warp_specialized_two_pipelines_multistream$(SUFFIX): \
 	optimized_warp_specialized_two_pipelines_driver.cu warp_specialized_two_pipelines_multistream_impl.cuh
-	$(NVCC) $(NVCC_FLAGS) -o $@ $<
+	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
 # Architecture-specific targets
 b200: ARCH=sm_100

@@ -16,6 +16,7 @@
 #include <iostream>
 #include <random>
 #include <cmath>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                         \
   do {                                                                           \
@@ -130,10 +131,13 @@ __global__ void tiled_fp4_gemm_kernel(const PackedFP4* __restrict__ A,
 void quantize_to_fp4(const float* input, PackedFP4* output, float* scales,
                      int rows, int cols) {
     for (int r = 0; r < rows; ++r) {
+        NVTX_RANGE("iteration");
         for (int block_start = 0; block_start < cols; block_start += BLOCK_SIZE_SCALE) {
+            NVTX_RANGE("iteration");
             // Find max absolute value in block
             float max_abs = 0.0f;
             for (int i = 0; i < BLOCK_SIZE_SCALE && block_start + i < cols; ++i) {
+                NVTX_RANGE("iteration");
                 max_abs = std::max(max_abs, std::abs(input[r * cols + block_start + i]));
             }
             
@@ -143,6 +147,7 @@ void quantize_to_fp4(const float* input, PackedFP4* output, float* scales,
             
             // Quantize pairs of values
             for (int i = 0; i < BLOCK_SIZE_SCALE; i += 2) {
+                NVTX_RANGE("iteration");
                 if (block_start + i + 1 < cols) {
                     float v0 = input[r * cols + block_start + i];
                     float v1 = input[r * cols + block_start + i + 1];
@@ -154,6 +159,7 @@ void quantize_to_fp4(const float* input, PackedFP4* output, float* scales,
 }
 
 int main() {
+    NVTX_RANGE("main");
     // Matrix dimensions - must be divisible by BLOCK_SIZE_SCALE
     constexpr int M = 4096;
     constexpr int N = 4096;
@@ -183,14 +189,17 @@ int main() {
     std::mt19937 gen(42);
     std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
     for (size_t i = 0; i < M * K * kBatchCount; ++i) {
+        NVTX_RANGE("setup");
         h_A_fp32[i] = dis(gen);
     }
     for (size_t i = 0; i < K * N * kBatchCount; ++i) {
+        NVTX_RANGE("setup");
         h_B_fp32[i] = dis(gen);
     }
     
     // Quantize to block-scaled FP4
     for (int batch = 0; batch < kBatchCount; ++batch) {
+        NVTX_RANGE("batch");
         quantize_to_fp4(h_A_fp32 + batch * M * K, 
                         h_A + batch * (M * K / 2),
                         h_A_scales + batch * (M * K / BLOCK_SIZE_SCALE),
@@ -202,6 +211,7 @@ int main() {
     }
     
     for (size_t i = 0; i < elements_C * kBatchCount; ++i) {
+        NVTX_RANGE("setup");
         h_C[i] = __float2half(0.0f);
     }
 
@@ -236,6 +246,7 @@ int main() {
 
     // Warmup
     for (int batch = 0; batch < kBatchCount; ++batch) {
+        NVTX_RANGE("compute_kernel");
         const size_t offset_A = batch * (M * K / 2);
         const size_t offset_B = batch * (K * N / 2);
         const size_t offset_C = batch * elements_C;
@@ -256,7 +267,9 @@ int main() {
     // Timed section: Kernel execution only
     CUDA_CHECK(cudaEventRecord(start, stream));
     for (int iter = 0; iter < kIterations; ++iter) {
+        NVTX_RANGE("batch");
         for (int batch = 0; batch < kBatchCount; ++batch) {
+            NVTX_RANGE("compute_kernel");
             const size_t offset_A = batch * (M * K / 2);
             const size_t offset_B = batch * (K * N / 2);
             const size_t offset_C = batch * elements_C;

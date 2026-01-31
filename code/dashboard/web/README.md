@@ -20,7 +20,7 @@ npm install
 
 1. Start the Python backend server (in another terminal):
 ```bash
-python -m dashboard.api.server --port 6970
+python -m dashboard.api.server serve --port 6970
 ```
 
 2. Start the Next.js development server:
@@ -84,4 +84,3 @@ Uses Tailwind CSS with custom design tokens matching the original dashboard aest
 - Gradient backgrounds with subtle animation
 - Accent colors: Cyan (`#00f5d4`), Purple (`#9d4edd`), Pink (`#f72585`)
 - JetBrains Mono for code, Inter for UI text
-

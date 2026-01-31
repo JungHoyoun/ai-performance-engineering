@@ -3,6 +3,7 @@
 #include <torch/extension.h>
 
 #include "loop_unrolling_common.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 namespace ch08 {
 

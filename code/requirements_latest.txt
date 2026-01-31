@@ -63,6 +63,11 @@ typer-slim[standard]==0.12.0  # Required by typer 0.12.0 and typer-cli 0.12.0
 click==8.1.7  # Pin to Typer-compatible Click to avoid CLI help/runtime errors
 rich==13.7.0
 
+# Dashboard API server
+fastapi==0.121.3
+uvicorn==0.38.0
+httpx==0.28.1
+
 # Model development helpers
 transformers==4.56.0
 datasets==2.21.0

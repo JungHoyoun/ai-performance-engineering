@@ -1,102 +1,77 @@
 'use client';
 
-import {
-  PieChart,
-  Pie,
-  Cell,
-  ResponsiveContainer,
-  Legend,
-  Tooltip,
-} from 'recharts';
-import type { CSSProperties } from 'react';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { getStatusColor } from '@/lib/utils';
 
 interface StatusChartProps {
-  summary: {
-    total: number;
+  counts: {
     succeeded: number;
     failed: number;
     skipped: number;
   };
+  height?: number;
 }
 
-export function StatusChart({ summary }: StatusChartProps) {
-  const chartStroke = 'var(--bg-card, #0c0c14)';
-  const tooltipTextStyle: CSSProperties = {
-    color: 'rgba(255, 255, 255, 0.9)',
-    fontSize: 12,
-  };
-
-  const chartData = [
-    { name: 'Succeeded', value: summary.succeeded, color: getStatusColor('succeeded') },
-    { name: 'Failed', value: summary.failed, color: getStatusColor('failed') },
-    { name: 'Skipped', value: summary.skipped, color: getStatusColor('skipped') },
-  ].filter((d) => d.value > 0);
+export function StatusChart({ counts, height = 240 }: StatusChartProps) {
+  const total = counts.succeeded + counts.failed + counts.skipped;
+  const data = [
+    { name: 'Succeeded', value: counts.succeeded, status: 'succeeded' },
+    { name: 'Failed', value: counts.failed, status: 'failed' },
+    { name: 'Skipped', value: counts.skipped, status: 'skipped' },
+  ].filter((entry) => entry.value > 0);
 
   return (
     <div className="card">
       <div className="card-header">
-        <h3 className="text-lg font-semibold text-white">📊 Status Distribution</h3>
+        <h3 className="text-lg font-semibold text-white">Status Distribution</h3>
+        <span className="badge badge-info">{total} total</span>
       </div>
       <div className="card-body">
-        <ResponsiveContainer width="100%" height={250}>
-          <PieChart>
-            <Pie
-              data={chartData}
-              cx="50%"
-              cy="50%"
-              innerRadius={60}
-              outerRadius={90}
-              paddingAngle={2}
-              dataKey="value"
-              stroke={chartStroke}
-              strokeWidth={2}
-            >
-              {chartData.map((entry, index) => (
-                <Cell
-                  key={`cell-${index}`}
-                  fill={entry.color}
-                  stroke={chartStroke}
-                  strokeWidth={2}
-                />
-              ))}
-            </Pie>
-            <Tooltip
-              contentStyle={{
-                backgroundColor: 'rgba(16, 16, 24, 0.95)',
-                border: '1px solid rgba(255,255,255,0.1)',
-                borderRadius: '8px',
-                color: 'rgba(255, 255, 255, 0.92)',
-              }}
-              labelStyle={tooltipTextStyle}
-              itemStyle={tooltipTextStyle}
-              formatter={(value: number, name: string) => [
-                `${value} (${summary.total > 0 ? ((value / summary.total) * 100).toFixed(1) : '0'}%)`,
-                name,
-              ]}
-            />
-            <Legend
-              verticalAlign="bottom"
-              formatter={(value) => <span className="text-white/70 text-sm">{value}</span>}
-            />
-          </PieChart>
-        </ResponsiveContainer>
-
-        {/* Summary stats below chart */}
-          <div className="grid grid-cols-3 gap-4 mt-4 pt-4 border-t border-white/5">
-            <div className="text-center">
-              <p className="text-2xl font-bold text-accent-success">{summary.succeeded}</p>
-              <p className="text-xs text-white/50">Passed</p>
-            </div>
-            <div className="text-center">
-              <p className="text-2xl font-bold text-accent-danger">{summary.failed}</p>
-              <p className="text-xs text-white/50">Failed</p>
-            </div>
-            <div className="text-center">
-              <p className="text-2xl font-bold text-accent-warning">{summary.skipped}</p>
-              <p className="text-xs text-white/50">Skipped</p>
-            </div>
+        {total === 0 ? (
+          <div className="flex flex-col items-center justify-center py-10 text-white/50 text-sm">
+            <span>No benchmark results yet.</span>
+            <span className="text-xs text-white/30 mt-2">
+              Run benchmarks to populate pass/fail status.
+            </span>
           </div>
+        ) : (
+          <ResponsiveContainer width="100%" height={height}>
+            <PieChart>
+              <Pie
+                data={data}
+                dataKey="value"
+                nameKey="name"
+                innerRadius={50}
+                outerRadius={80}
+                paddingAngle={4}
+              >
+                {data.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={getStatusColor(entry.status)} />
+                ))}
+              </Pie>
+              <Tooltip
+                content={({ active, payload }) => {
+                  if (!active || !payload || payload.length === 0) return null;
+                  const item = payload[0].payload as any;
+                  const percent = total ? ((item.value / total) * 100).toFixed(1) : '0.0';
+                  return (
+                    <div className="rounded-lg border border-white/10 bg-black/80 px-3 py-2 text-xs text-white/80">
+                      <div className="font-semibold text-white mb-1">{item.name}</div>
+                      <div className="flex justify-between gap-4">
+                        <span>Count</span>
+                        <span className="text-white">{item.value}</span>
+                      </div>
+                      <div className="flex justify-between gap-4">
+                        <span>Share</span>
+                        <span className="text-white">{percent}%</span>
+                      </div>
+                    </div>
+                  );
+                }}
+              />
+            </PieChart>
+          </ResponsiveContainer>
+        )}
       </div>
     </div>
   );

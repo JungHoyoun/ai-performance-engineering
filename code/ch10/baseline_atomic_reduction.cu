@@ -21,6 +21,7 @@
 #include <numeric>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                       \
     do {                                                                       \
@@ -140,6 +141,7 @@ __global__ void pass2_final_reduction(
 //============================================================================
 
 int main() {
+    NVTX_RANGE("main");
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     
@@ -173,6 +175,7 @@ int main() {
     
     // Warmup
     for (int i = 0; i < 5; ++i) {
+        NVTX_RANGE("warmup");
         pass1_block_reduction<<<num_blocks, BLOCK_SIZE>>>(d_input, d_partial, N);
         pass2_final_reduction<<<num_groups, BLOCK_SIZE>>>(d_partial, d_output, num_blocks, GROUPS_PER_OUTPUT);
     }
@@ -182,6 +185,7 @@ int main() {
     const int iterations = 50;
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("compute_kernel:pass1_block_reduction");
         // TWO KERNEL LAUNCHES per iteration
         pass1_block_reduction<<<num_blocks, BLOCK_SIZE>>>(d_input, d_partial, N);
         pass2_final_reduction<<<num_groups, BLOCK_SIZE>>>(d_partial, d_output, num_blocks, GROUPS_PER_OUTPUT);

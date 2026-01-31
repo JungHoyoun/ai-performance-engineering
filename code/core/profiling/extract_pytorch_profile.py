@@ -130,8 +130,8 @@ def main(argv: List[str]) -> int:
     parser.add_argument("patterns", nargs="+", help="Glob(s) matching profiler output directories")
     parser.add_argument(
         "--output-prefix",
-        default="output/pytorch_profile",
-        help="Prefix for generated CSV files (default: output/pytorch_profile)",
+        default="artifacts/runs/analysis/pytorch_profile",
+        help="Prefix for generated CSV files (default: artifacts/runs/analysis/pytorch_profile)",
     )
     args = parser.parse_args(argv)
 

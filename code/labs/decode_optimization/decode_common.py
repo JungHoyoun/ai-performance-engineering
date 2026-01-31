@@ -15,6 +15,7 @@ from typing import Dict, Optional, Tuple
 from contextlib import nullcontext
 
 import torch
+from core.profiling.nvtx_helper import standardize_nvtx_label
 import torch.nn as nn
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -560,7 +561,7 @@ class DecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
         with self._get_fp8_context():
             if nvtx:
-                nvtx.range_push("prefill_decode_0")
+                nvtx.range_push(standardize_nvtx_label("compute_math:prefill_decode_0"))
             self._run_prefill_decode(self.gpu_prompts[0], prefill_stream)
             if nvtx:
                 nvtx.range_pop()
@@ -571,7 +572,7 @@ class DecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 prefill_stream.wait_event(event1)
 
             if nvtx:
-                nvtx.range_push("prefill_decode_1")
+                nvtx.range_push(standardize_nvtx_label("compute_math:prefill_decode_1"))
             self._run_prefill_decode(self.gpu_prompts[1], prefill_stream)
             if nvtx:
                 nvtx.range_pop()
@@ -650,7 +651,7 @@ class DecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
         prefill_start.record(prefill_stream)
         self._copy_prompts_to_device()
         if nvtx:
-            nvtx.range_push("prefill")
+            nvtx.range_push(standardize_nvtx_label("compute_math:prefill"))
 
         # Single FP8 context for entire forward pass to avoid workspace churn
         with self._get_fp8_context():
@@ -670,7 +671,7 @@ class DecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
             if nvtx:
                 nvtx.range_pop()  # prefill
-                nvtx.range_push("decode")
+                nvtx.range_push(standardize_nvtx_label("compute_math:decode"))
 
             # Decode
             decode_start.record(timing_stream)

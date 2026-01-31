@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                       \
     do {                                                                       \
@@ -61,6 +62,7 @@ __global__ void compute_segment(
 //============================================================================
 
 int main() {
+    NVTX_RANGE("main");
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     
@@ -85,12 +87,16 @@ int main() {
     
     // Initialize
     std::vector<float> h_input(N);
-    for (int i = 0; i < N; ++i) h_input[i] = 0.5f;
+    for (int i = 0; i < N; ++i) {
+        NVTX_RANGE("setup");
+        h_input[i] = 0.5f;
+    }
     CUDA_CHECK(cudaMemcpy(d_input, h_input.data(), N * sizeof(float), cudaMemcpyHostToDevice));
     
     // Create streams
     cudaStream_t streams[NUM_STREAMS];
     for (int i = 0; i < NUM_STREAMS; ++i) {
+        NVTX_RANGE("iteration");
         CUDA_CHECK(cudaStreamCreate(&streams[i]));
     }
     
@@ -106,7 +112,9 @@ int main() {
     
     // Warmup
     for (int iter = 0; iter < warmup; ++iter) {
+        NVTX_RANGE("warmup");
         for (int seg = 0; seg < NUM_SEGMENTS; ++seg) {
+            NVTX_RANGE("warmup");
             int offset = seg * SEGMENT_SIZE;
             int stream_idx = seg % NUM_STREAMS;
             compute_segment<<<grid, block, 0, streams[stream_idx]>>>(
@@ -118,7 +126,9 @@ int main() {
     // Benchmark - parallel execution on multiple streams
     CUDA_CHECK(cudaEventRecord(start));
     for (int iter = 0; iter < iterations; ++iter) {
+        NVTX_RANGE("compute_kernel");
         for (int seg = 0; seg < NUM_SEGMENTS; ++seg) {
+            NVTX_RANGE("compute_kernel:compute_segment");
             int offset = seg * SEGMENT_SIZE;
             int stream_idx = seg % NUM_STREAMS;
             compute_segment<<<grid, block, 0, streams[stream_idx]>>>(
@@ -142,6 +152,7 @@ int main() {
     CUDA_CHECK(cudaMemcpy(h_output.data(), d_output, N * sizeof(float), cudaMemcpyDeviceToHost));
     double checksum = 0.0;
     for (float v : h_output) {
+        NVTX_RANGE("verify");
         checksum += static_cast<double>(v);
     }
     VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
@@ -149,6 +160,7 @@ int main() {
     
     // Cleanup
     for (int i = 0; i < NUM_STREAMS; ++i) {
+        NVTX_RANGE("cleanup");
         CUDA_CHECK(cudaStreamDestroy(streams[i]));
     }
     CUDA_CHECK(cudaEventDestroy(start));

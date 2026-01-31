@@ -63,7 +63,6 @@ from pathlib import Path
 from enum import Enum
 from types import SimpleNamespace
 from typing import List, Optional
-from datetime import datetime
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -636,12 +635,57 @@ if typer and profile_app is not None:
     @profile_app.command("ncu", help="Run Nsight Compute capture")
     def profile_ncu(
         ctx: typer.Context,
-        script: Optional[Path] = typer.Argument(None, help="Script to profile"),
-        kernel: Optional[str] = typer.Option(None, "--kernel", help="Specific kernel filter"),
+        script: Optional[Path] = typer.Argument(None, help="Python script to profile (optional when using --command)"),
+        command: Optional[str] = typer.Option(None, "--command", "-c", help='Command to profile (quote it), e.g., "python train.py --batch 8"'),
+        script_args: List[str] = typer.Option([], "--arg", "-a", help="Arguments forwarded to the script", show_default=False),
+        kernel: Optional[str] = typer.Option(None, "--kernel", help="Specific kernel filter (regex)"),
+        kernel_filter: Optional[str] = typer.Option(None, "--kernel-filter", help="Specific kernel filter (regex)"),
         output_name: Optional[str] = typer.Option(None, "--output-name", "-o", help="Output name"),
+        output_dir: Optional[Path] = typer.Option(None, "--output-dir", help="Base artifacts directory (default: artifacts/runs)"),
+        workload_type: str = typer.Option(
+            "memory_bound",
+            "--workload-type",
+            help="Workload metrics: memory_bound, compute_bound, tensor_core (used when --metric-set=full)",
+            show_default=True,
+        ),
+        metric_set: str = typer.Option(
+            "full",
+            "--metric-set",
+            help="NCU set: full, speed-of-light (minimal), roofline, minimal",
+            show_default=True,
+        ),
+        replay_mode: str = typer.Option(
+            "application",
+            "--replay-mode",
+            help="NCU replay mode: application (all launches) or kernel (one instance per kernel)",
+            show_default=True,
+        ),
+        launch_skip: Optional[int] = typer.Option(None, "--launch-skip", help="Kernel launches to skip before profiling"),
+        launch_count: Optional[int] = typer.Option(None, "--launch-count", help="Kernel launches to profile"),
+        pm_sampling_interval: Optional[int] = typer.Option(None, "--pm-sampling-interval", help="Nsight Compute pm-sampling-interval (cycles)"),
+        force_lineinfo: bool = typer.Option(True, "--force-lineinfo/--no-force-lineinfo", help="Force -lineinfo for source mapping"),
+        timeout_seconds: Optional[int] = typer.Option(None, "--timeout", help="Optional timeout in seconds"),
     ) -> None:
         from cli.commands import profiling
-        _run(profiling.ncu, ctx, script=str(script) if script else None, kernel=kernel)
+        _run(
+            profiling.ncu,
+            ctx,
+            script=str(script) if script else None,
+            command=command,
+            script_args=script_args,
+            kernel=kernel,
+            kernel_filter=kernel_filter,
+            output_name=output_name,
+            output_dir=str(output_dir) if output_dir else None,
+            workload_type=workload_type,
+            metric_set=metric_set,
+            replay_mode=replay_mode,
+            launch_skip=launch_skip,
+            launch_count=launch_count,
+            pm_sampling_interval=pm_sampling_interval,
+            force_lineinfo=force_lineinfo,
+            timeout_seconds=timeout_seconds,
+        )
 
     @profile_app.command("torch", help="Run torch.profiler capture (Chrome trace + summary)")
     def profile_torch_profiler(

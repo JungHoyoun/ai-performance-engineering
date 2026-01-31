@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <limits>
+#include "../core/common/nvtx_utils.cuh"
 
 namespace ch13 {
 
@@ -65,6 +66,7 @@ void bandwidth_add_mul(
     const uint32_t stride_u32 = static_cast<uint32_t>(stride);
 
     for (int64_t pass = 0; pass < passes; ++pass) {
+        NVTX_RANGE("compute_kernel:bandwidth_add_mul_kernel");
         bandwidth_add_mul_kernel<<<blocks, kThreads, 0, stream>>>(
             a.data_ptr<float>(),
             b.data_ptr<float>(),

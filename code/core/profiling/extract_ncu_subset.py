@@ -58,7 +58,7 @@ def main(args: Iterable[str]) -> int:
     try:
         pattern = next(iter(args))
     except StopIteration:
-        print("usage: python core/profiling/extract_ncu_subset.py 'output/reports/*.csv'", file=sys.stderr)
+        print("usage: python core/profiling/extract_ncu_subset.py 'artifacts/runs/analysis/reports/*.csv'", file=sys.stderr)
         return 2
 
     rows = collect(pattern)
@@ -66,7 +66,7 @@ def main(args: Iterable[str]) -> int:
         print("No metrics found—did you pass the Nsight Compute CSV files?", file=sys.stderr)
         return 1
 
-    output_dir = pathlib.Path("output")
+    output_dir = pathlib.Path("artifacts") / "runs" / "analysis"
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / "metrics_summary.csv"
     fieldnames = ["tag", "kernel", "section", "metric", "value"]

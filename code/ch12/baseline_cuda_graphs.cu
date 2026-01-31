@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "cuda_graphs_workload.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
@@ -41,6 +42,7 @@ __global__ void stage_kernel(float* data,
 }
 
 int main() {
+    NVTX_RANGE("main");
   int device = 0;
   CUDA_CHECK(cudaGetDevice(&device));
   cudaDeviceProp prop;
@@ -57,6 +59,7 @@ int main() {
 
   std::vector<float> host(N);
   for (int i = 0; i < N; ++i) {
+      NVTX_RANGE("setup");
     host[i] = sinf(0.001f * static_cast<float>(i));
   }
 
@@ -72,6 +75,7 @@ int main() {
 
   auto launch_pipeline = [&](cudaStream_t s) {
     for (const StageSpec& spec : kStageSpecs) {
+        NVTX_RANGE("warmup");
       stage_kernel<<<grid, block, 0, s>>>(device_ptr, N, spec.scale, spec.bias, spec.frequency);
     }
   };
@@ -86,6 +90,7 @@ int main() {
 
   CUDA_CHECK(cudaEventRecord(start));
   for (int iter = 0; iter < ITER; ++iter) {
+      NVTX_RANGE("iteration");
     launch_pipeline(stream);
   }
   CUDA_CHECK(cudaEventRecord(stop));
@@ -102,6 +107,7 @@ int main() {
   CUDA_CHECK(cudaMemcpy(host.data(), device_ptr, bytes, cudaMemcpyDeviceToHost));
   double checksum = 0.0;
   for (float v : host) {
+      NVTX_RANGE("verify");
     checksum += static_cast<double>(v);
   }
   std::printf("Baseline checksum: %.6e\n", checksum);

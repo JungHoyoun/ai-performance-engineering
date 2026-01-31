@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                       \
     do {                                                                       \
@@ -70,6 +71,7 @@ __global__ void baseline_vector_add_scalar(
 //============================================================================
 
 int main() {
+    NVTX_RANGE("main");
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     
@@ -114,6 +116,7 @@ int main() {
     
     // Warmup
     for (int i = 0; i < warmup; ++i) {
+        NVTX_RANGE("warmup");
         baseline_vector_add_scalar<<<grid, block>>>(d_a, d_b, d_c, N);
     }
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -121,6 +124,7 @@ int main() {
     // Benchmark
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("compute_kernel:baseline_vector_add_scalar");
         baseline_vector_add_scalar<<<grid, block>>>(d_a, d_b, d_c, N);
     }
     CUDA_CHECK(cudaEventRecord(stop));

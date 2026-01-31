@@ -7,6 +7,7 @@
 
 #include "../core/common/headers/cuda_helpers.cuh"
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 // CUDA 13 + Blackwell: 32-byte aligned type for 256-bit loads
 struct alignas(32) Float8 {
@@ -32,6 +33,7 @@ __global__ void hbm_copy(Float8* dst, const Float8* src, size_t n) {
 }
 
 int main() {
+    NVTX_RANGE("main");
     const size_t size_bytes = 256 * 1024 * 1024;  // 256 MB
     const size_t n_vec8 = size_bytes / sizeof(Float8);
     
@@ -47,6 +49,7 @@ int main() {
     const int iterations = 100;
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; i++) {
+        NVTX_RANGE("compute_kernel:hbm_copy");
         hbm_copy<<<256, 256>>>(d_dst, d_src, n_vec8);
         CUDA_CHECK_LAST_ERROR();
     }

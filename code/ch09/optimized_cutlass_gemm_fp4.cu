@@ -19,6 +19,7 @@
 #include <random>
 #include <cmath>
 #include <vector>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                         \
   do {                                                                           \
@@ -53,12 +54,15 @@ void quantize_to_nvfp4(const float* input, uint8_t* output_packed,
     const int num_scale_cols = cols / FP4_BLOCK_SIZE;
     
     for (int r = 0; r < rows; ++r) {
+        NVTX_RANGE("iteration");
         for (int block = 0; block < num_scale_cols; ++block) {
+            NVTX_RANGE("iteration");
             const int block_start = block * FP4_BLOCK_SIZE;
             
             // Find max absolute value in this block
             float max_abs = 0.0f;
             for (int i = 0; i < FP4_BLOCK_SIZE; ++i) {
+                NVTX_RANGE("iteration");
                 max_abs = std::max(max_abs, std::abs(input[r * cols + block_start + i]));
             }
             
@@ -70,6 +74,7 @@ void quantize_to_nvfp4(const float* input, uint8_t* output_packed,
             
             // Quantize values in this block to FP4 (packed 2 per byte)
             for (int i = 0; i < FP4_BLOCK_SIZE; i += 2) {
+                NVTX_RANGE("iteration");
                 float v0 = input[r * cols + block_start + i];
                 float v1 = input[r * cols + block_start + i + 1];
                 
@@ -86,6 +91,7 @@ void quantize_to_nvfp4(const float* input, uint8_t* output_packed,
 }
 
 int main() {
+    NVTX_RANGE("main");
     // Check GPU architecture for NVFP4 support
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
@@ -139,12 +145,19 @@ int main() {
     // Initialize with random values
     std::mt19937 gen(42);
     std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
-    for (auto& v : h_A_fp32) v = dis(gen);
-    for (auto& v : h_B_fp32) v = dis(gen);
+    for (auto& v : h_A_fp32) {
+        NVTX_RANGE("setup");
+        v = dis(gen);
+    }
+    for (auto& v : h_B_fp32) {
+        NVTX_RANGE("setup");
+        v = dis(gen);
+    }
     
     // Quantize to NVFP4 with block scaling
     std::cout << "Quantizing matrices to NVFP4..." << std::endl;
     for (int batch = 0; batch < kBatchCount; ++batch) {
+        NVTX_RANGE("batch");
         quantize_to_nvfp4(h_A_fp32.data() + batch * M * K,
                           h_A_packed.data() + batch * elements_A_packed,
                           h_A_scales.data() + batch * num_scales_A,
@@ -261,6 +274,7 @@ int main() {
 
     // Warmup
     for (int batch = 0; batch < kBatchCount; ++batch) {
+        NVTX_RANGE("compute_math:ltmatmul");
         const size_t offset_A = batch * elements_A_packed;
         const size_t offset_B = batch * elements_B_packed;
         const size_t offset_C = batch * elements_C;
@@ -284,7 +298,9 @@ int main() {
     // Timed section
     CUDA_CHECK(cudaEventRecord(start, stream));
     for (int iter = 0; iter < kIterations; ++iter) {
+        NVTX_RANGE("batch");
         for (int batch = 0; batch < kBatchCount; ++batch) {
+            NVTX_RANGE("compute_math:ltmatmul");
             const size_t offset_A = batch * elements_A_packed;
             const size_t offset_B = batch * elements_B_packed;
             const size_t offset_C = batch * elements_C;

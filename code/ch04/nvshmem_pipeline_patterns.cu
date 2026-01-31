@@ -16,6 +16,7 @@
 #ifdef USE_NVSHMEM
 #include <nvshmem.h>
 #include <nvshmemx.h>
+#include "../core/common/nvtx_utils.cuh"
 #endif
 
 #define CUDA_CHECK(call)                                                     \
@@ -57,6 +58,7 @@ void lock_free_queue_demo(int my_pe, int n_pes) {
 
     if (my_pe == producer) {
         for (int i = 0; i < items; i++) {
+            NVTX_RANGE("iteration");
             int slot = nvshmem_int_atomic_fetch_inc(tail, consumer);
             slot %= capacity;
             float value = 1000.0f + i;
@@ -71,6 +73,7 @@ void lock_free_queue_demo(int my_pe, int n_pes) {
     if (my_pe == consumer) {
         int consumed = 0;
         while (consumed < items) {
+            NVTX_RANGE("iteration");
             int tail_value = *tail;
             if (tail_value <= consumed) {
                 tail_value = nvshmem_int_g(tail, consumer);
@@ -119,6 +122,7 @@ void double_buffer_pipeline_demo(int my_pe, int n_pes) {
 
     if (my_pe == stage1) {
         for (int i = 0; i < buffers; i++) {
+            NVTX_RANGE("setup");
             flags[i] = 0;
         }
     }
@@ -132,6 +136,7 @@ void double_buffer_pipeline_demo(int my_pe, int n_pes) {
         dim3 blocks((chunk_elems + threads.x - 1) / threads.x);
 
         for (int chunk = 0; chunk < chunks; chunk++) {
+            NVTX_RANGE("compute_kernel:fill_chunk");
             int buf = chunk % buffers;
             nvshmem_int_wait_until(flags + buf, NVSHMEM_CMP_EQ, 0);
             fill_chunk<<<blocks, threads>>>(local_chunk, chunk_elems, 100.0f * chunk);
@@ -149,6 +154,7 @@ void double_buffer_pipeline_demo(int my_pe, int n_pes) {
     if (my_pe == stage1) {
         int received = 0;
         while (received < chunks) {
+            NVTX_RANGE("iteration");
             int buf = received % buffers;
             nvshmem_int_wait_until(flags + buf, NVSHMEM_CMP_EQ, 1);
             float first = buffer[buf * chunk_elems];
@@ -180,6 +186,7 @@ void double_buffer_pipeline_demo(int my_pe, int) {
 #endif
 
 int main() {
+    NVTX_RANGE("main");
 #ifdef USE_NVSHMEM
     nvshmem_init();
     int my_pe = nvshmem_my_pe();

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "cuda_graphs_workload.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
@@ -41,6 +42,7 @@ __global__ void stage_kernel(float* data,
 }
 
 int main() {
+    NVTX_RANGE("main");
   int device = 0;
   CUDA_CHECK(cudaGetDevice(&device));
   cudaDeviceProp prop;
@@ -64,6 +66,7 @@ int main() {
 
   std::vector<float> host(N);
   for (int i = 0; i < N; ++i) {
+      NVTX_RANGE("setup");
     host[i] = sinf(0.001f * static_cast<float>(i));
   }
 
@@ -81,7 +84,9 @@ int main() {
   cudaGraph_t graph;
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
   for (int iter = 0; iter < CAPTURE_ITERS; ++iter) {
+      NVTX_RANGE("compute_kernel");
     for (const StageSpec& spec : kStageSpecs) {
+        NVTX_RANGE("compute_kernel:stage_kernel");
       stage_kernel<<<grid, block, 0, stream>>>(device_ptr, N, spec.scale, spec.bias, spec.frequency);
     }
   }
@@ -101,6 +106,7 @@ int main() {
 
   CUDA_CHECK(cudaEventRecord(start));
   for (int replay = 0; replay < REPLAYS; ++replay) {
+      NVTX_RANGE("compute_graph:launch");
     CUDA_CHECK(cudaGraphLaunch(exec, stream));
   }
   CUDA_CHECK(cudaEventRecord(stop));
@@ -117,6 +123,7 @@ int main() {
   CUDA_CHECK(cudaMemcpy(host.data(), device_ptr, bytes, cudaMemcpyDeviceToHost));
   double checksum = 0.0;
   for (float v : host) {
+      NVTX_RANGE("verify");
     checksum += static_cast<double>(v);
   }
   std::printf("Optimized checksum: %.6e\n", checksum);

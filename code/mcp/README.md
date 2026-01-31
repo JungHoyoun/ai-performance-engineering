@@ -48,6 +48,14 @@ Then poll `aisp_job_status` until complete and read:
 4. Analyze benchmark results: `aisp_benchmark_triage` using the returned `results_json`
 5. Compare profiles: `aisp_profile_compare`, `aisp_compare_nsys`, `aisp_compare_ncu`
 
+Profiling tools return JSON metrics in their result payloads:
+- `aisp_profile_nsys` -> `nsys_metrics`
+- `aisp_profile_ncu` -> `ncu_metrics`
+- `aisp_profile_torch` -> `torch_metrics` (plus `report` alias)
+- `aisp_profile_hta` -> `nsys_metrics`
+
+Compare tools always attach `nsys_comparison` and `ncu_comparison` when profiles are captured; use these metrics to explain regressions and speedups.
+
 ### Client
 
 ```python

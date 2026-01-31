@@ -3,6 +3,7 @@
 
 #include <cuda_runtime.h>
 #include <cstdio>
+#include "../core/common/nvtx_utils.cuh"
 
 __global__ void kernel(float* data, int n) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -12,6 +13,7 @@ __global__ void kernel(float* data, int n) {
 }
 
 int main() {
+    NVTX_RANGE("main");
   constexpr int N = 1 << 20;
   size_t bytes = N * sizeof(float);
 
@@ -19,6 +21,7 @@ int main() {
   cudaMallocManaged(&data, bytes);
 
   for (int i = 0; i < N; ++i) {
+      NVTX_RANGE("iteration");
     data[i] = static_cast<float>(i);
   }
 

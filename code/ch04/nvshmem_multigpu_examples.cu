@@ -46,6 +46,7 @@
 #ifdef USE_NVSHMEM
 #include <nvshmem.h>
 #include <nvshmemx.h>
+#include "../core/common/nvtx_utils.cuh"
 #else
 // Define dummy types for educational purposes
 #define nvshmem_init()
@@ -102,6 +103,7 @@ void demonstrate_put_get(int my_pe, int n_pes) {
     // Initialize local data
     float *h_local = (float *)malloc(N * sizeof(float));
     for (int i = 0; i < N; i++) {
+        NVTX_RANGE("setup");
         h_local[i] = my_pe * 1000.0f + i;
     }
     CUDA_CHECK(cudaMemcpy(d_local, h_local, N * sizeof(float), cudaMemcpyHostToDevice));
@@ -209,6 +211,7 @@ void demonstrate_collectives(int my_pe, int n_pes) {
     // Initialize with PE-specific values
     float *h_data = (float *)malloc(N * sizeof(float));
     for (int i = 0; i < N; i++) {
+        NVTX_RANGE("setup");
         h_data[i] = (float)my_pe;
     }
     CUDA_CHECK(cudaMemcpy(d_data, h_data, N * sizeof(float), cudaMemcpyHostToDevice));
@@ -307,6 +310,7 @@ void demonstrate_butterfly_pattern(int my_pe, int n_pes) {
 // ============================================================================
 
 int main(int argc, char **argv) {
+    NVTX_RANGE("main");
     #ifdef USE_NVSHMEM
     // Initialize NVSHMEM
     nvshmem_init();

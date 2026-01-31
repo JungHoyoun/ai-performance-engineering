@@ -43,6 +43,7 @@ except ImportError:
 import torch
 import torch.distributed as dist
 import torch.cuda.nvtx as nvtx
+from core.profiling.nvtx_helper import standardize_nvtx_label
 import os
 import time
 from typing import Optional
@@ -172,7 +173,7 @@ def benchmark_traditional_p2p(tensor: torch.Tensor, peer_rank: int, iterations: 
     torch.cuda.synchronize(device)
     start.record()
     
-    with nvtx.range("traditional_p2p"):
+    with nvtx.range(standardize_nvtx_label("transfer_sync:traditional_p2p")):
         for _ in range(iterations):
             if rank == 0:
                 tensor_copy = tensor.clone()
@@ -197,7 +198,7 @@ def benchmark_symmetric_memory(tensor: torch.Tensor, iterations: int = 100):
     try:
         # Allocate symmetric memory buffer
         # All GPUs in the group can directly address this memory
-        with nvtx.range("symmetric_memory_allocation"):
+        with nvtx.range(standardize_nvtx_label("setup:symmetric_memory_allocation")):
             sym_mem = maybe_create_symmetric_memory_handle(
                 tensor,
                 group=dist.group.WORLD,
@@ -231,7 +232,7 @@ def benchmark_symmetric_memory(tensor: torch.Tensor, iterations: int = 100):
     torch.cuda.synchronize(device)
     start.record()
     
-    with nvtx.range("symmetric_memory_access"):
+    with nvtx.range(standardize_nvtx_label("transfer_sync:symmetric_memory_access")):
         for _ in range(iterations):
             if rank == 0:
                 sym_mem.buffer[:] = tensor

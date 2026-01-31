@@ -5,6 +5,7 @@
 #include <chrono>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 // Fused implementation: single kernel (higher arithmetic intensity)
 __global__ void fusedL2Norm(const float *a, const float *b, float *out, int N) {
@@ -33,6 +34,7 @@ void fusedL2NormWrapper(const float* a, const float* b, float* out, int N) {
 }
 
 int main() {
+    NVTX_RANGE("main");
     const int N = 1 << 20;  // 1M elements
     const size_t bytes = N * sizeof(float);
     
@@ -41,6 +43,7 @@ int main() {
     float* h_out = (float*)malloc(bytes);
     
     for (int i = 0; i < N; ++i) {
+        NVTX_RANGE("setup");
         h_a[i] = static_cast<float>(i % 100) / 100.0f;
         h_b[i] = static_cast<float>((i + 50) % 100) / 100.0f;
     }
@@ -63,6 +66,7 @@ int main() {
     const int iterations = 100;
     cudaEventRecord(start);
     for (int i = 0; i < iterations; i++) {
+        NVTX_RANGE("iteration");
         fusedL2NormWrapper(d_a, d_b, d_out, N);
     }
     cudaEventRecord(stop);
@@ -78,6 +82,7 @@ int main() {
     cudaMemcpy(h_out, d_out, bytes, cudaMemcpyDeviceToHost);
     double checksum = 0.0;
     for (int i = 0; i < N; ++i) {
+        NVTX_RANGE("verify");
         checksum += static_cast<double>(h_out[i]);
     }
     VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));

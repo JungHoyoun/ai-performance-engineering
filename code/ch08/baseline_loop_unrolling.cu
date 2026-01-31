@@ -5,10 +5,12 @@
 #include <vector>
 
 #include "loop_unrolling_common.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 using namespace ch08;
 
 int main() {
+    NVTX_RANGE("main");
     const int rows = 1 << 15;  // 32K rows
     const size_t input_elements = static_cast<size_t>(rows) * kElementsPerRow;
     const size_t input_bytes = input_elements * sizeof(float);
@@ -20,9 +22,11 @@ int main() {
     std::vector<float> h_output(rows);
 
     for (size_t i = 0; i < input_elements; ++i) {
+        NVTX_RANGE("setup");
         h_inputs[i] = static_cast<float>((i % 1024) - 512) / 512.0f;
     }
     for (int i = 0; i < kWeightPeriod; ++i) {
+        NVTX_RANGE("setup");
         h_weights[i] = 0.5f + 0.1f * static_cast<float>(i);
     }
 
@@ -43,6 +47,7 @@ int main() {
     const int iterations = 100;
     cudaEventRecord(start);
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("iteration");
         launch_loop_unrolling_baseline(d_inputs, d_weights, d_output, rows, nullptr);
     }
     cudaEventRecord(stop);

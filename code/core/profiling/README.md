@@ -206,7 +206,7 @@ Run Holistic Trace Analysis:
 ```python
 from core.profiling import HTAAnalyzer
 
-analyzer = HTAAnalyzer(output_dir="./hta_output")
+analyzer = HTAAnalyzer(output_dir="artifacts/runs/analysis/hta")
 
 # Analyze existing trace
 report = analyzer.analyze_trace("trace.json")
@@ -324,7 +324,7 @@ The profiling data integrates with the dashboard automatically:
 
 ```bash
 # Start dashboard with profiling data
-python -m dashboard.api.server --port 6970
+python -m dashboard.api.server serve --port 6970
 ```
 
 Access profiling visualizations at:
@@ -358,4 +358,3 @@ core/profiling/
 
 - PyTorch >= 2.0 (for torch.profiler and torch.compile)
 - Optional: `hta` package for full HTA support (`pip install HolisticTraceAnalysis`)
-

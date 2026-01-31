@@ -2,6 +2,7 @@
 #include <cuda_runtime.h>
 #include <cstdio>
 #include <vector>
+#include "../core/common/nvtx_utils.cuh"
 
 namespace {
 constexpr size_t KV_BYTES = 2ull << 20; // 2 MiB chunk keeps run times manageable
@@ -18,6 +19,7 @@ void run_baseline(int iterations) {
     std::vector<float> host_in(iterations * elems_per_chunk);
     std::vector<float> host_out(iterations * elems_per_chunk);
     for (size_t i = 0; i < host_in.size(); ++i) {
+        NVTX_RANGE("setup");
         host_in[i] = static_cast<float>((i % 17) * 0.5f);
     }
 
@@ -30,6 +32,7 @@ void run_baseline(int iterations) {
 
     cudaEventRecord(start);
     for (int it = 0; it < iterations; ++it) {
+        NVTX_RANGE("transfer_sync:h2d");
         const float* src = host_in.data() + it * elems_per_chunk;
         float* dst = host_out.data() + it * elems_per_chunk;
         cudaMemcpy(device_slot, src, KV_BYTES, cudaMemcpyHostToDevice);
@@ -50,6 +53,7 @@ void run_baseline(int iterations) {
 }  // namespace
 
 int main() {
+    NVTX_RANGE("main");
     run_baseline(16);
     return 0;
 }

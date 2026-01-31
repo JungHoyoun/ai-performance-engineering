@@ -6,6 +6,7 @@
 
 #include "../core/common/headers/cuda_helpers.cuh"
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 constexpr int N = 1024;
 constexpr int kIterations = 20;
@@ -24,6 +25,7 @@ __global__ void naive_matmul(const float* A, const float* B, float* C, int n) {
 }
 
 int main() {
+    NVTX_RANGE("main");
   const size_t elements = static_cast<size_t>(N) * N;
   const size_t bytes = elements * sizeof(float);
 
@@ -33,6 +35,7 @@ int main() {
   CUDA_CHECK(cudaMallocHost(&h_C, bytes));
 
   for (size_t i = 0; i < elements; ++i) {
+      NVTX_RANGE("setup");
     h_A[i] = 1.0f;
     h_B[i] = 1.0f;
   }
@@ -57,6 +60,7 @@ int main() {
 
   CUDA_CHECK(cudaEventRecord(start));
   for (int iter = 0; iter < kIterations; ++iter) {
+      NVTX_RANGE("compute_kernel:naive_matmul");
     naive_matmul<<<grid, block>>>(d_A, d_B, d_C, N);
     CUDA_CHECK_LAST_ERROR();
   }

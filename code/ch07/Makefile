@@ -2,7 +2,7 @@
 
 include ../core/common/cuda_arch.mk
 
-NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS)
+NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) $(CUDA_NVTX_CFLAGS)
 SUFFIX = $(TARGET_SUFFIX)
 
 CUDA_SOURCES = $(wildcard *.cu)
@@ -46,14 +46,14 @@ all: $(TARGETS)
 	@echo "✓ Targeting $(ARCH_NAME)"
 	@echo "✓ Built $(words $(BASE_TARGETS)) CUDA examples"
 
-$(TARGETS): %$(SUFFIX): %.cu
+$(TARGETS): %$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
 	@echo "Compiling $@..."
-	$(NVCC) $(NVCC_FLAGS) -o $@ $< -lcuda
+	$(NVCC) $(NVCC_FLAGS) -o $@ $< -lcuda $(CUDA_NVTX_LDFLAGS)
 
 # Verify binaries build with -DVERIFY=1 for harness checksum parsing
-$(VERIFY_TARGETS): %_verify$(SUFFIX): %.cu
+$(VERIFY_TARGETS): %_verify$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
 	@echo "Compiling verify binary $@..."
-	$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -o $@ $< -lcuda
+	$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -o $@ $< -lcuda $(CUDA_NVTX_LDFLAGS)
 
 compare: clean
 	@echo "========================================"

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstdio>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                       \
   do {                                                                         \
@@ -58,11 +59,15 @@ __global__ void kernel_no_lb(float* input, float* output, int n) {
 }
 
 int main() {
+    NVTX_RANGE("main");
     const int N = 1024 * 64;  // smaller run for quick CI validation
     float *h_in, *h_out;
     CUDA_CHECK(cudaMallocHost(&h_in, N * sizeof(float)));
     CUDA_CHECK(cudaMallocHost(&h_out, N * sizeof(float)));
-    for (int i = 0; i < N; ++i) h_in[i] = float(i % 257) * 0.25f;
+    for (int i = 0; i < N; ++i) {
+        NVTX_RANGE("verify");
+        h_in[i] = float(i % 257) * 0.25f;
+    }
 
     float *d_in = nullptr, *d_out = nullptr;
     CUDA_CHECK(cudaMalloc(&d_in, kChunkElements * sizeof(float)));
@@ -75,6 +80,7 @@ int main() {
     cudaEventRecord(start);
     int processed = 0;
     while (processed < N) {
+        NVTX_RANGE("transfer_sync:h2d");
         const int chunk = std::min(kChunkElements, N - processed);
         const size_t bytes = size_t(chunk) * sizeof(float);
         CUDA_CHECK(cudaMemcpy(d_in, h_in + processed, bytes, cudaMemcpyHostToDevice));

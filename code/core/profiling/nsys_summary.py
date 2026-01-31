@@ -3,8 +3,8 @@
 Utility to summarise Nsight Systems reports across the Blackwell codebase.
 
 Example:
-    python core/profiling/nsys_summary.py --glob "output/*.nsys-rep" \
-        --kernel-regex "attn|mma" --top-k 8 --output results/nsys_summary.txt
+    python core/profiling/nsys_summary.py --glob "artifacts/runs/**/*.nsys-rep" \
+        --kernel-regex "attn|mma" --top-k 8 --output artifacts/runs/analysis/nsys_summary.txt
 """
 
 from __future__ import annotations
@@ -96,7 +96,7 @@ def main() -> int:
         "--glob",
         default=None,
         help="Glob pattern (relative to CWD) to locate reports "
-        "(e.g. 'output/*.nsys-rep').",
+        "(e.g. 'artifacts/runs/**/*.nsys-rep').",
     )
     parser.add_argument(
         "--kernel-regex",

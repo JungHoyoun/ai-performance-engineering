@@ -45,8 +45,18 @@ cd "$APP_DIR"
 
 echo "[config] Backend: ${BACKEND_HOST}:${BACKEND_PORT}"
 
+# If npm isn't in PATH, try loading nvm (if installed) before failing.
+if ! command -v npm >/dev/null 2>&1; then
+  NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+  if [ -s "${NVM_DIR}/nvm.sh" ]; then
+    # shellcheck disable=SC1090
+    . "${NVM_DIR}/nvm.sh"
+  fi
+fi
+
 if ! command -v npm >/dev/null 2>&1; then
   echo "[error] npm not found. Please install Node.js 18+ (includes npm) and re-run." >&2
+  echo "        Or run: ./setup-dashboard.sh" >&2
   echo "        Example (Ubuntu): sudo apt-get update && sudo apt-get install -y nodejs npm" >&2
   exit 1
 fi
@@ -80,7 +90,7 @@ PY
   else
     echo "[backend] Starting Python server on :${BACKEND_PORT} ..."
     echo "[backend] Log: $BACKEND_LOG_FILE"
-    (cd "$ROOT_DIR" && python -m dashboard.api.server --port "${BACKEND_PORT}") >"$BACKEND_LOG_FILE" 2>&1 &
+    (cd "$ROOT_DIR" && python -m dashboard.api.server serve --port "${BACKEND_PORT}") >"$BACKEND_LOG_FILE" 2>&1 &
     BACKEND_PID=$!
     echo "[backend] PID: $BACKEND_PID"
     sleep 2

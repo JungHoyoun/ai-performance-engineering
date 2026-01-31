@@ -6,9 +6,10 @@ import { Cpu, Thermometer, Zap, HardDrive } from 'lucide-react';
 
 interface GpuCardProps {
   gpu: GpuInfo;
+  lastUpdated?: string | null;
 }
 
-export function GpuCard({ gpu }: GpuCardProps) {
+export function GpuCard({ gpu, lastUpdated }: GpuCardProps) {
   const memoryBytesTotal = typeof gpu.memory_total === 'number' ? gpu.memory_total * 1e6 : 0; // API returns MB
   const memoryBytesUsed = typeof gpu.memory_used === 'number' ? gpu.memory_used * 1e6 : 0;
   const memoryPercent =
@@ -17,6 +18,15 @@ export function GpuCard({ gpu }: GpuCardProps) {
   const powerLimit = gpu.power_limit;
   const powerPercent =
     powerDraw && powerLimit ? Math.min(100, (powerDraw / powerLimit) * 100) : null;
+  const utilization = gpu.utilization ?? 0;
+  let liveStamp: string | null = null;
+  if (lastUpdated) {
+    try {
+      liveStamp = new Date(lastUpdated).toLocaleTimeString();
+    } catch {
+      liveStamp = null;
+    }
+  }
 
   return (
     <div className="card">
@@ -28,10 +38,16 @@ export function GpuCard({ gpu }: GpuCardProps) {
               <div>
                 <h3 className="font-semibold text-white">{gpu.name}</h3>
                 <p className="text-xs text-white/50">
-                  CUDA {gpu.cuda_version || '—'} • CC {gpu.compute_capability || '—'}
+                  CUDA Runtime {gpu.cuda_version || '—'} | Driver {gpu.driver_version || '—'} | CC {gpu.compute_capability || '—'}
                 </p>
               </div>
             </div>
+            {gpu.live && (
+              <div className="flex items-center gap-2 text-xs text-accent-success">
+                <span className="w-2 h-2 rounded-full bg-accent-success animate-pulse" />
+                <span>Live{liveStamp ? ` • ${liveStamp}` : ''}</span>
+              </div>
+            )}
           </div>
       <div className="card-body space-y-4">
         {/* Memory */}
@@ -60,18 +76,18 @@ export function GpuCard({ gpu }: GpuCardProps) {
               <Cpu className="w-4 h-4" />
               <span>Utilization</span>
             </div>
-            <span className="text-sm font-medium text-white">{gpu.utilization}%</span>
+            <span className="text-sm font-medium text-white">{utilization}%</span>
           </div>
           <div className="h-2 bg-white/10 rounded-full overflow-hidden">
             <div
               className="h-full bg-gradient-to-r from-accent-success to-accent-primary rounded-full transition-all duration-500"
-              style={{ width: `${gpu.utilization}%` }}
+              style={{ width: `${utilization}%` }}
             />
           </div>
         </div>
 
         {/* Temperature & Power */}
-        <div className="grid grid-cols-2 gap-4 pt-2 border-t border-white/5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-white/5">
           <div className="flex items-center gap-2">
             <Thermometer className="w-4 h-4 text-accent-warning" />
             <div>

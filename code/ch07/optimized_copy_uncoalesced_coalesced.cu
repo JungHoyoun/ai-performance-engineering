@@ -8,6 +8,7 @@
 
 #include "../core/common/headers/cuda_helpers.cuh"
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 constexpr int N = 1 << 23;
 constexpr int REPEAT = 40;
@@ -41,7 +42,10 @@ __global__ void coalesced_stream(const float4* __restrict__ src,
 
 float checksum(const std::vector<float>& data) {
   double acc = 0.0;
-  for (float v : data) acc += static_cast<double>(v);
+  for (float v : data) {
+      NVTX_RANGE("verify");
+      acc += static_cast<double>(v);
+  }
   return static_cast<float>(acc / static_cast<double>(data.size()));
 }
 
@@ -54,11 +58,13 @@ float max_abs_diff(const std::vector<float>& a, const std::vector<float>& b) {
 }
 
 int main() {
+    NVTX_RANGE("main");
   static_assert(N % 4 == 0, "Vectorized copy requires divisible-by-4 length");
   const int n_vec4 = N / 4;
 
   std::vector<float> h_src(N), h_dst(N, 0.0f);
   for (int i = 0; i < N; ++i) {
+      NVTX_RANGE("setup");
     h_src[i] = static_cast<float>((i % 4096) - 2048) / 512.0f;
   }
 
@@ -83,6 +89,7 @@ int main() {
 
   CUDA_CHECK(cudaEventRecord(start));
   for (int iter = 0; iter < REPEAT; ++iter) {
+      NVTX_RANGE("compute_kernel:coalesced_stream");
     coalesced_stream<<<grid, block>>>(
         reinterpret_cast<const float4*>(d_src),
         reinterpret_cast<float4*>(d_dst),

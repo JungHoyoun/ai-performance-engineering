@@ -14,6 +14,7 @@ from types import ModuleType
 from typing import Callable, Dict, Iterable, List, Optional
 
 import torch
+from core.profiling.nvtx_helper import standardize_nvtx_label
 from arch_config import ArchitectureConfig
 from torch.profiler import ProfilerActivity, profile
 
@@ -154,7 +155,8 @@ def _apply_blackwell_tuning() -> None:
 @contextlib.contextmanager
 def _nvtx_range(label: str, enabled: bool):
     """Emit both NVTX and record_function ranges for cross-profiler linking."""
-    rf_cm = torch.autograd.profiler.record_function(label) if enabled else contextlib.nullcontext()
+    range_label = standardize_nvtx_label(label) if enabled else label
+    rf_cm = torch.autograd.profiler.record_function(range_label) if enabled else contextlib.nullcontext()
     nvtx_push = getattr(torch.cuda.nvtx, "range_push", None)
     nvtx_pop = getattr(torch.cuda.nvtx, "range_pop", None)
     has_nvtx = enabled and torch.cuda.is_available() and nvtx_push and nvtx_pop
@@ -165,7 +167,7 @@ def _nvtx_range(label: str, enabled: bool):
                 torch.cuda.synchronize()
             except Exception:
                 pass
-            nvtx_push(label)
+            nvtx_push(range_label)
         with rf_cm:
             yield
     finally:

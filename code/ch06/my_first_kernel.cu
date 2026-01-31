@@ -3,6 +3,7 @@
 
 #include <cuda_runtime.h>
 #include <cstdio>
+#include "../core/common/nvtx_utils.cuh"
 
 __global__ void double_values(float* data, int n) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -12,12 +13,14 @@ __global__ void double_values(float* data, int n) {
 }
 
 int main() {
+    NVTX_RANGE("main");
   constexpr int N = 1'000'000;
   size_t bytes = N * sizeof(float);
 
   float* h_data;
   cudaMallocHost(&h_data, bytes);
   for (int i = 0; i < N; ++i) {
+      NVTX_RANGE("setup");
     h_data[i] = 1.0f;
   }
 

@@ -36,6 +36,7 @@
 #include <cstring>
 #include <chrono>
 #include <vector>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
@@ -137,6 +138,7 @@ double benchmark_unified_memory_zerocopy(size_t size_mb) {
     // Initialize on CPU
     auto cpu_start = std::chrono::high_resolution_clock::now();
     for (size_t i = 0; i < size / sizeof(float); i++) {
+        NVTX_RANGE("setup");
         unified_data[i] = (float)i * 0.5f;
     }
     auto cpu_end = std::chrono::high_resolution_clock::now();
@@ -196,6 +198,7 @@ void benchmark_coherent_access(size_t size_mb) {
     
     // Initialize on CPU
     for (size_t i = 0; i < n_elements; i++) {
+        NVTX_RANGE("setup");
         data[i] = (float)i;
     }
     
@@ -214,6 +217,7 @@ void benchmark_coherent_access(size_t size_mb) {
     // CPU can immediately read (coherent access)
     float sum = 0.0f;
     for (size_t i = 0; i < std::min(n_elements, size_t(1000)); i++) {
+        NVTX_RANGE("iteration");
         sum += data[i];
     }
     
@@ -263,8 +267,10 @@ void benchmark_optimizer_offloading(size_t params_mb) {
     // 4. Transfer updated parameters back to GPU
     
     for (int i = 0; i < 100; i++) {
+        NVTX_RANGE("iteration");
         // Simulate optimizer update on CPU
         for (size_t j = 0; j < std::min(size_t(10000), optimizer_size / sizeof(float)); j++) {
+            NVTX_RANGE("iteration");
             cpu_momentum[j] = cpu_momentum[j] * 0.9f + (float)i * 0.001f;
         }
     }
@@ -300,6 +306,7 @@ void compare_traditional_vs_unified(size_t size_mb) {
     
     // Initialize
     for (size_t i = 0; i < size / sizeof(float); i++) {
+        NVTX_RANGE("setup");
         h_data[i] = (float)i;
     }
     
@@ -318,6 +325,7 @@ void compare_traditional_vs_unified(size_t size_mb) {
     CUDA_CHECK(cudaMallocManaged(&unified_data, size));
     
     for (size_t i = 0; i < size / sizeof(float); i++) {
+        NVTX_RANGE("prefetch");
         unified_data[i] = (float)i;
     }
     
@@ -362,6 +370,7 @@ void compare_traditional_vs_unified(size_t size_mb) {
 // ============================================================================
 
 int main() {
+    NVTX_RANGE("main");
     printf("=== GB200/GB300 Grace-Blackwell CPU-GPU Coherency Demo ===\n\n");
     
     // Detect system

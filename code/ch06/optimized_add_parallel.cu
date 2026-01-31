@@ -3,6 +3,7 @@
 
 #include <cuda_runtime.h>
 #include <cstdio>
+#include "../core/common/nvtx_utils.cuh"
 
 constexpr int N = 1'000'000;
 
@@ -14,12 +15,14 @@ __global__ void addParallel(const float* A, const float* B, float* C, int n) {
 }
 
 int main() {
+    NVTX_RANGE("main");
   float *h_A, *h_B, *h_C;
   cudaMallocHost(&h_A, N * sizeof(float));
   cudaMallocHost(&h_B, N * sizeof(float));
   cudaMallocHost(&h_C, N * sizeof(float));
 
   for (int i = 0; i < N; ++i) {
+      NVTX_RANGE("setup");
     h_A[i] = static_cast<float>(i);
     h_B[i] = static_cast<float>(2 * i);
   }

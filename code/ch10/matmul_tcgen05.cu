@@ -15,6 +15,7 @@
 
 // SM100-specific headers (must come after cute/tensor.hpp)
 #include <cute/atom/mma_traits_sm100.hpp>       // SM100 MMA traits (includes UMMA layouts)
+#include "../core/common/nvtx_utils.cuh"
 
 using namespace cute;
 

@@ -24,6 +24,7 @@
 #include <numeric>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                       \
     do {                                                                       \
@@ -116,6 +117,7 @@ __global__ void single_pass_atomic_reduction(
 //============================================================================
 
 int main() {
+    NVTX_RANGE("main");
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     
@@ -148,6 +150,7 @@ int main() {
     
     // Warmup
     for (int i = 0; i < 5; ++i) {
+        NVTX_RANGE("warmup");
         CUDA_CHECK(cudaMemset(d_output, 0, num_groups * sizeof(float)));
         single_pass_atomic_reduction<<<num_blocks, BLOCK_SIZE>>>(
             d_input, d_output, N, GROUPS_PER_OUTPUT);
@@ -158,6 +161,7 @@ int main() {
     const int iterations = 50;
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("compute_kernel:single_pass_atomic_reduction");
         CUDA_CHECK(cudaMemset(d_output, 0, num_groups * sizeof(float)));
         // SINGLE KERNEL LAUNCH per iteration
         single_pass_atomic_reduction<<<num_blocks, BLOCK_SIZE>>>(

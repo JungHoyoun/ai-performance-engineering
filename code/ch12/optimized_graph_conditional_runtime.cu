@@ -24,6 +24,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
@@ -95,6 +96,7 @@ __global__ void set_condition_from_value_kernel(
 #if CUDA_VERSION >= 12040
 
 int main() {
+    NVTX_RANGE("main");
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     
@@ -130,6 +132,7 @@ int main() {
     // Initialize data
     std::vector<float> h_data(N);
     for (int i = 0; i < N; ++i) {
+        NVTX_RANGE("setup");
         h_data[i] = 1.0f + (i % 100) * 0.01f;
     }
     CUDA_CHECK(cudaMemcpy(d_data, h_data.data(), bytes, cudaMemcpyHostToDevice));
@@ -294,6 +297,7 @@ int main() {
     
     // Warmup
     for (int i = 0; i < WARMUP; ++i) {
+        NVTX_RANGE("compute_graph:launch");
         CUDA_CHECK(cudaGraphLaunch(graph_exec, stream));
     }
     CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -306,6 +310,7 @@ int main() {
     CUDA_CHECK(cudaEventRecord(start, stream));
     
     for (int i = 0; i < ITERS; ++i) {
+        NVTX_RANGE("compute_graph:launch");
         // Single graph launch - NO host sync needed!
         // Condition evaluation and branching all happen on device
         CUDA_CHECK(cudaGraphLaunch(graph_exec, stream));

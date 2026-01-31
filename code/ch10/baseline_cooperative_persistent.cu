@@ -10,6 +10,7 @@
 
 #include "../core/common/headers/cuda_helpers.cuh"
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 constexpr int ELEMENTS = 1 << 24;          // 16M elements (~64 MB)
 constexpr int ITERATIONS = 40;
@@ -54,15 +55,22 @@ __global__ void exp_kernel(float* data, int n) {
 
 double checksum(const std::vector<float>& data) {
   double acc = 0.0;
-  for (float v : data) acc += static_cast<double>(v);
+  for (float v : data) {
+      NVTX_RANGE("verify");
+      acc += static_cast<double>(v);
+  }
   return acc / static_cast<double>(data.size());
 }
 
 int main() {
+    NVTX_RANGE("main");
   std::vector<float> h_data(ELEMENTS);
   std::mt19937 rng(1337);
   std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
-  for (auto& v : h_data) v = dist(rng);
+  for (auto& v : h_data) {
+      NVTX_RANGE("setup");
+      v = dist(rng);
+  }
 
   float* d_data = nullptr;
   const size_t bytes = static_cast<size_t>(ELEMENTS) * sizeof(float);
@@ -87,6 +95,7 @@ int main() {
 
   CUDA_CHECK(cudaEventRecord(start));
   for (int iter = 0; iter < ITERATIONS; ++iter) {
+      NVTX_RANGE("compute_kernel:scale_kernel");
     scale_kernel<<<grid, block>>>(d_data, ELEMENTS, 1.001f);
     bias_kernel<<<grid, block>>>(d_data, ELEMENTS, 0.05f);
     activation_kernel<<<grid, block>>>(d_data, ELEMENTS);

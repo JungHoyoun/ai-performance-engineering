@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call) do { \
     cudaError_t err = (call); \
@@ -82,6 +83,7 @@ __global__ void fp8_scale_32byte(
 }
 
 int main() {
+    NVTX_RANGE("main");
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     
@@ -120,6 +122,7 @@ int main() {
         dim3 grid((n + BLOCK_SIZE - 1) / BLOCK_SIZE);
         
         for (int i = 0; i < warmup; ++i) {
+            NVTX_RANGE("warmup");
             fp8_scale_8byte<<<grid, block>>>(
                 (fp8x8*)d_input, (fp8x8*)d_output, scale, n);
         }
@@ -127,6 +130,7 @@ int main() {
         
         CUDA_CHECK(cudaEventRecord(start));
         for (int i = 0; i < iterations; ++i) {
+            NVTX_RANGE("compute_kernel:fp8_scale_8byte");
             fp8_scale_8byte<<<grid, block>>>(
                 (fp8x8*)d_input, (fp8x8*)d_output, scale, n);
         }
@@ -151,6 +155,7 @@ int main() {
         dim3 grid((n + BLOCK_SIZE - 1) / BLOCK_SIZE);
         
         for (int i = 0; i < warmup; ++i) {
+            NVTX_RANGE("warmup");
             fp8_scale_32byte<<<grid, block>>>(
                 (fp8x32*)d_input, (fp8x32*)d_output, scale, n);
         }
@@ -158,6 +163,7 @@ int main() {
         
         CUDA_CHECK(cudaEventRecord(start));
         for (int i = 0; i < iterations; ++i) {
+            NVTX_RANGE("compute_kernel:fp8_scale_32byte");
             fp8_scale_32byte<<<grid, block>>>(
                 (fp8x32*)d_input, (fp8x32*)d_output, scale, n);
         }

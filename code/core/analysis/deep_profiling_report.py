@@ -12,9 +12,9 @@ out as missing:
 Typical usage:
 
     python core/analysis/deep_profiling_report.py \\
-        --ncu-csv output/double_buffered_pipeline_512.csv \\
-        --nsys-report ch10/pipeline_async_verified.nsys-rep \\
-        --output-json output/double_buffered_pipeline_analysis.json
+        --ncu-csv artifacts/runs/analysis/double_buffered_pipeline_512.csv \\
+        --nsys-report artifacts/runs/<run_id>/profiles/bench/ch10/pipeline_async_verified.nsys-rep \\
+        --output-json artifacts/runs/analysis/double_buffered_pipeline_analysis.json
 
 The script understands the CSV format produced by either:
 * `ncu --set roofline --csv ...`

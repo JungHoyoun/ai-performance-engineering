@@ -16,6 +16,7 @@
 #include <cute/arch/tmem_allocator_sm100.hpp>
 #include <cute/atom/copy_traits_sm90_tma.hpp>
 #include <cute/atom/mma_traits_sm100.hpp>
+#include "../core/common/nvtx_utils.cuh"
 
 using namespace cute;
 

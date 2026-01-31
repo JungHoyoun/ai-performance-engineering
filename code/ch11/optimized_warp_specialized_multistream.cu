@@ -4,7 +4,9 @@
 #include <vector>
 #include <numeric>
 #include <chrono>
+#include <cstdint>
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 namespace {
 constexpr int TILE = 32;
@@ -62,7 +64,9 @@ __global__ void simple_warp_specialized_kernel(const float* __restrict__ A,
 
 void run_optimized() {
     constexpr int batches = 4096;
-    constexpr int num_streams = 8;
+    // Increased from 8 to 16 streams for better overlap on modern GPUs
+    // More streams allow better pipelining of H2D/compute/D2H operations
+    constexpr int num_streams = 16;
     const size_t bytes = TILE_ELEMS * sizeof(float);
 
     // Use pinned host memory so H2D/D2H can overlap with compute.
@@ -72,10 +76,15 @@ void run_optimized() {
     cudaMallocHost(&h_A, static_cast<size_t>(batches) * TILE_ELEMS * sizeof(float));
     cudaMallocHost(&h_B, static_cast<size_t>(batches) * TILE_ELEMS * sizeof(float));
     cudaMallocHost(&h_C, static_cast<size_t>(batches) * TILE_ELEMS * sizeof(float));
-    for (int i = 0; i < batches * TILE_ELEMS; ++i) {
-        h_A[i] = static_cast<float>(i);
-        h_B[i] = static_cast<float>(i + 1);
-        h_C[i] = 0.0f;
+    
+    // Initialize host data.
+    {
+        NVTX_RANGE("setup:host_init");
+        for (int i = 0; i < batches * TILE_ELEMS; ++i) {
+            h_A[i] = static_cast<float>(i);
+            h_B[i] = static_cast<float>(i + 1);
+            h_C[i] = 0.0f;
+        }
     }
 
     cudaStream_t streams[num_streams];
@@ -83,39 +92,80 @@ void run_optimized() {
         cudaStreamCreateWithFlags(&streams[i], cudaStreamNonBlocking);
     }
 
+    // Pre-allocate device memory pools per stream to avoid allocation overhead.
+    float* dA_pool[num_streams];
+    float* dB_pool[num_streams];
+    float* dC_pool[num_streams];
+    for (int i = 0; i < num_streams; ++i) {
+        cudaMalloc(&dA_pool[i], bytes);
+        cudaMalloc(&dB_pool[i], bytes);
+        cudaMalloc(&dC_pool[i], bytes);
+    }
+
     cudaDeviceSynchronize();
     const auto start = std::chrono::high_resolution_clock::now();
 
+    // Launch batches across streams for maximum overlap
+    // Operations on the same stream are serialized automatically by CUDA,
+    // so reusing buffers is safe - each batch waits for previous batch on that stream
     for (int b = 0; b < batches; ++b) {
-        cudaStream_t st = streams[b % num_streams];
-        float *dA = nullptr, *dB = nullptr, *dC = nullptr;
-        cudaMallocAsync(&dA, bytes, st);
-        cudaMallocAsync(&dB, bytes, st);
-        cudaMallocAsync(&dC, bytes, st);
+        const int stream_idx = b % num_streams;
+        cudaStream_t st = streams[stream_idx];
 
-        cudaMemcpyAsync(dA, h_A + static_cast<size_t>(b) * TILE_ELEMS, bytes, cudaMemcpyHostToDevice, st);
-        cudaMemcpyAsync(dB, h_B + static_cast<size_t>(b) * TILE_ELEMS, bytes, cudaMemcpyHostToDevice, st);
+        char batch_label[32];
+        std::snprintf(batch_label, sizeof(batch_label), "batch:%d", b);
+        NVTX_RANGE(batch_label);
 
-        simple_warp_specialized_kernel<<<1, THREADS, 3 * bytes, st>>>(dA, dB, dC);
+        // Reuse pre-allocated device memory - CUDA serializes operations on same stream
+        float* dA = dA_pool[stream_idx];
+        float* dB = dB_pool[stream_idx];
+        float* dC = dC_pool[stream_idx];
 
-        cudaMemcpyAsync(h_C + static_cast<size_t>(b) * TILE_ELEMS, dC, bytes, cudaMemcpyDeviceToHost, st);
+        // Launch async operations - these overlap across different streams
+        // H2D transfers overlap with compute/kernels on other streams
+        {
+            NVTX_RANGE("transfer_async:h2d");
+            cudaMemcpyAsync(dA, h_A + static_cast<size_t>(b) * TILE_ELEMS, bytes, cudaMemcpyHostToDevice, st);
+            cudaMemcpyAsync(dB, h_B + static_cast<size_t>(b) * TILE_ELEMS, bytes, cudaMemcpyHostToDevice, st);
+        }
 
-        cudaFreeAsync(dA, st);
-        cudaFreeAsync(dB, st);
-        cudaFreeAsync(dC, st);
+        // Kernel execution overlaps with transfers/kernels on other streams
+        {
+            NVTX_RANGE("compute_kernel:warp_specialized");
+            simple_warp_specialized_kernel<<<1, THREADS, 3 * bytes, st>>>(dA, dB, dC);
+        }
+
+        // D2H transfer overlaps with other streams' operations
+        {
+            NVTX_RANGE("transfer_async:d2h");
+            cudaMemcpyAsync(h_C + static_cast<size_t>(b) * TILE_ELEMS, dC, bytes, cudaMemcpyDeviceToHost, st);
+        }
     }
 
+    // Wait for all streams to complete
     cudaDeviceSynchronize();
     const auto stop = std::chrono::high_resolution_clock::now();
     const double ms = std::chrono::duration<double, std::milli>(stop - start).count();
 
     double checksum = 0.0;
-    for (int i = 0; i < batches * TILE_ELEMS; ++i) checksum += h_C[i];
+    {
+        NVTX_RANGE("verify:checksum");
+        for (int i = 0; i < batches * TILE_ELEMS; ++i) {
+            checksum += h_C[i];
+        }
+    }
 
     const float verify_checksum = static_cast<float>(checksum);
     VERIFY_PRINT_CHECKSUM(verify_checksum);
     printf("TIME_MS: %.3f\n", ms);
-    for (int i = 0; i < num_streams; ++i) cudaStreamDestroy(streams[i]);
+    
+    // Cleanup
+    for (int i = 0; i < num_streams; ++i) {
+        cudaFree(dA_pool[i]);
+        cudaFree(dB_pool[i]);
+        cudaFree(dC_pool[i]);
+        cudaStreamDestroy(streams[i]);
+    }
     cudaFreeHost(h_A);
     cudaFreeHost(h_B);
     cudaFreeHost(h_C);
@@ -123,6 +173,7 @@ void run_optimized() {
 }  // namespace
 
 int main() {
+    NVTX_RANGE("step:main");
     run_optimized();
     return 0;
 }

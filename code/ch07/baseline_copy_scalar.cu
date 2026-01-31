@@ -12,6 +12,7 @@
 #include <cstdio>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                       \
     do {                                                                       \
@@ -37,6 +38,7 @@ __global__ void copyScalar(const float* __restrict__ in,
 }
 
 int main() {
+    NVTX_RANGE("main");
     printf("Baseline: Scalar (4-byte) Copy\n");
     printf("==============================\n");
     
@@ -55,7 +57,10 @@ int main() {
     
     // Initialize
     float* h_data = new float[NUM_FLOATS];
-    for (int i = 0; i < NUM_FLOATS; ++i) h_data[i] = (float)i;
+    for (int i = 0; i < NUM_FLOATS; ++i) {
+        NVTX_RANGE("setup");
+        h_data[i] = (float)i;
+    }
     CUDA_CHECK(cudaMemcpy(d_in, h_data, bytes, cudaMemcpyHostToDevice));
     
     // Setup timing
@@ -68,6 +73,7 @@ int main() {
     
     // Warmup
     for (int i = 0; i < 5; ++i) {
+        NVTX_RANGE("warmup");
         copyScalar<<<grid, block>>>(d_in, d_out, NUM_FLOATS);
     }
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -76,6 +82,7 @@ int main() {
     const int iterations = 20;
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("compute_kernel:copyScalar");
         copyScalar<<<grid, block>>>(d_in, d_out, NUM_FLOATS);
     }
     CUDA_CHECK(cudaEventRecord(stop));

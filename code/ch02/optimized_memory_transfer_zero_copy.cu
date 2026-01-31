@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <vector>
 #include <chrono>
+#include "../core/common/nvtx_utils.cuh"
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
     cudaError_t status = (call);                                             \
@@ -91,6 +92,7 @@ bool is_grace_blackwell() {
 }
 
 int main() {
+    NVTX_RANGE("main");
     // Detect architecture
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
@@ -127,6 +129,7 @@ int main() {
     
     // Initialize
     for (size_t i = 0; i < N; ++i) {
+        NVTX_RANGE("setup");
         h_input[i] = static_cast<float>(i % 1000) / 1000.0f;
     }
     
@@ -147,6 +150,7 @@ int main() {
     
     // Warmup
     for (int i = 0; i < WARMUP; ++i) {
+        NVTX_RANGE("warmup");
         CUDA_CHECK(cudaMemcpy(d_input, h_input, BYTES, cudaMemcpyHostToDevice));
         traditional_process_kernel<<<grid, block>>>(d_input, d_output, N);
         CUDA_CHECK(cudaMemcpy(h_output, d_output, BYTES, cudaMemcpyDeviceToHost));
@@ -156,6 +160,7 @@ int main() {
     // Benchmark
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < ITERS; ++i) {
+        NVTX_RANGE("transfer_sync:h2d");
         CUDA_CHECK(cudaMemcpy(d_input, h_input, BYTES, cudaMemcpyHostToDevice));
         traditional_process_kernel<<<grid, block>>>(d_input, d_output, N);
         CUDA_CHECK(cudaMemcpy(h_output, d_output, BYTES, cudaMemcpyDeviceToHost));
@@ -177,6 +182,7 @@ int main() {
     
     // Warmup
     for (int i = 0; i < WARMUP; ++i) {
+        NVTX_RANGE("warmup");
         zero_copy_process_kernel<<<grid, block>>>(h_input, d_output, N);
     }
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -184,6 +190,7 @@ int main() {
     // Benchmark
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < ITERS; ++i) {
+        NVTX_RANGE("compute_kernel:zero_copy_process_kernel");
         zero_copy_process_kernel<<<grid, block>>>(h_input, d_output, N);
     }
     CUDA_CHECK(cudaEventRecord(stop));
@@ -205,6 +212,7 @@ int main() {
     
     // Warmup
     for (int i = 0; i < WARMUP; ++i) {
+        NVTX_RANGE("warmup");
         bidirectional_zero_copy_kernel<<<grid, block>>>(h_input, h_output, N);
     }
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -212,6 +220,7 @@ int main() {
     // Benchmark
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < ITERS; ++i) {
+        NVTX_RANGE("compute_kernel:bidirectional_zero_copy_kernel");
         bidirectional_zero_copy_kernel<<<grid, block>>>(h_input, h_output, N);
     }
     CUDA_CHECK(cudaEventRecord(stop));
@@ -230,9 +239,11 @@ int main() {
     CUDA_CHECK(cudaMemcpy(h_output, d_output, BYTES, cudaMemcpyDeviceToHost));
     bool correct = true;
     for (size_t i = 0; i < std::min(N, size_t(1000)); ++i) {
+        NVTX_RANGE("verify");
         float val = h_input[i];
         float expected = 0.0f;
         for (int j = 0; j < 8; ++j) {
+            NVTX_RANGE("verify");
             expected += std::sqrt(val * val + float(j)) * 0.125f;
         }
         if (std::abs(h_output[i] - expected) > 1e-4) {

@@ -34,6 +34,7 @@
 #include <vector>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                       \
     do {                                                                       \
@@ -82,6 +83,7 @@ __global__ void optimized_vector_add_float4(
 //============================================================================
 
 int main() {
+    NVTX_RANGE("main");
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     
@@ -127,6 +129,7 @@ int main() {
     
     // Warmup
     for (int i = 0; i < warmup; ++i) {
+        NVTX_RANGE("warmup");
         optimized_vector_add_float4<<<grid, block>>>(
             reinterpret_cast<float4*>(d_a),
             reinterpret_cast<float4*>(d_b),
@@ -139,6 +142,7 @@ int main() {
     // Benchmark
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("compute_kernel:optimized_vector_add_float4");
         optimized_vector_add_float4<<<grid, block>>>(
             reinterpret_cast<float4*>(d_a),
             reinterpret_cast<float4*>(d_b),

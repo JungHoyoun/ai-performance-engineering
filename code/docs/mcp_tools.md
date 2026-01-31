@@ -58,6 +58,21 @@ All tools return a single MCP `text` content entry containing a JSON envelope wi
 - `result` + `result_preview` + `result_metadata`
 - `context_summary` + `guidance.next_steps`
 
+## Profiling Metrics Payloads
+
+Profiling tools return structured JSON metrics in their result payloads:
+- `aisp_profile_nsys` includes `result.nsys_metrics` (parsed Nsight Systems metrics)
+- `aisp_profile_ncu` includes `result.ncu_metrics` (parsed Nsight Compute metrics)
+- `aisp_profile_torch` includes `result.torch_metrics` (summary metrics; `result.report` is an alias)
+- `aisp_profile_hta` includes `result.nsys_metrics` alongside `analysis_summary`
+
+Compare tools also return metric diffs when profiles are present:
+- `aisp_compare_nsys` returns `result.nsys_comparison` and `result.ncu_comparison` when captured
+- `aisp_compare_ncu` returns `result.ncu_comparison` and `result.nsys_comparison` when captured
+- `aisp_profile_compare` always attaches both comparisons when captured
+
+Use these metric payloads to explain speedups/regressions and identify bottleneck shifts.
+
 ## Async Jobs
 
 Some tools can return an async job ticket (`job_id`) that you can poll via `aisp_job_status`. Job records are kept in-memory with bounded retention:

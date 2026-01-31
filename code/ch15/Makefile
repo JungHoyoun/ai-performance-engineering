@@ -2,7 +2,7 @@
 
 include ../core/common/cuda_arch.mk
 
-NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) -lineinfo
+NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) -lineinfo $(CUDA_NVTX_CFLAGS)
 SUFFIX = $(TARGET_SUFFIX)
 
 # Python-focused chapter - no CUDA compilation targets currently

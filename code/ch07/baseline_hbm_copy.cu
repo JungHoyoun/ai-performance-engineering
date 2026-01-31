@@ -6,6 +6,7 @@
 
 #include "../core/common/headers/cuda_helpers.cuh"
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 // Baseline: Scalar copy (very inefficient)
 __global__ void scalar_copy_kernel(float* dst, const float* src, size_t n) {
@@ -18,6 +19,7 @@ __global__ void scalar_copy_kernel(float* dst, const float* src, size_t n) {
 }
 
 int main() {
+    NVTX_RANGE("main");
     const size_t size_bytes = 256 * 1024 * 1024;  // 256 MB
     const size_t n_floats = size_bytes / sizeof(float);
     
@@ -38,6 +40,7 @@ int main() {
     const int iterations = 100;
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; i++) {
+        NVTX_RANGE("compute_kernel:scalar_copy_kernel");
         scalar_copy_kernel<<<64, 64>>>(d_dst, d_src, n_floats);
         CUDA_CHECK_LAST_ERROR();
     }

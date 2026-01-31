@@ -12,6 +12,7 @@
 
 #include "../core/common/headers/cuda_helpers.cuh"
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 namespace cg = cooperative_groups;
 
@@ -108,15 +109,22 @@ __global__ void persistent_pipeline(float* data, int elements, float scale, floa
 
 double checksum(const std::vector<float>& data) {
   double acc = 0.0;
-  for (float v : data) acc += static_cast<double>(v);
+  for (float v : data) {
+      NVTX_RANGE("verify");
+      acc += static_cast<double>(v);
+  }
   return acc / static_cast<double>(data.size());
 }
 
 int main() {
+    NVTX_RANGE("main");
   std::vector<float> h_data(ELEMENTS);
   std::mt19937 rng(1337);
   std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
-  for (auto& v : h_data) v = dist(rng);
+  for (auto& v : h_data) {
+      NVTX_RANGE("setup");
+      v = dist(rng);
+  }
 
   float* d_data = nullptr;
   const size_t bytes = static_cast<size_t>(ELEMENTS) * sizeof(float);
@@ -125,6 +133,7 @@ int main() {
 
   int max_blocks = 1;
   {
+      NVTX_RANGE("setup");
     cudaDeviceProp prop{};
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     max_blocks = prop.multiProcessorCount * 4;
@@ -149,6 +158,7 @@ int main() {
 
   CUDA_CHECK(cudaEventRecord(start));
   for (int iter = 0; iter < ITERATIONS; ++iter) {
+      NVTX_RANGE("compute_kernel:persistent_pipeline:smem");
     persistent_pipeline<<<grid, block, shared_bytes>>>(
         d_data, ELEMENTS, 1.001f, 0.05f);
   }

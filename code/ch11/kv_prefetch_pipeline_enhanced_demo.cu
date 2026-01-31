@@ -2,6 +2,7 @@
 #include <cuda_runtime.h>
 #include <cooperative_groups.h>
 #include <cstdio>
+#include "../core/common/nvtx_utils.cuh"
 
 namespace cg = cooperative_groups;
 
@@ -43,6 +44,7 @@ __global__ void kv_prefetch_overlap(const float* __restrict__ keys,
 }
 
 int main() {
+    NVTX_RANGE("main");
     const int seq = 64;
     const int head_dim = 128;
     const size_t elems = static_cast<size_t>(seq) * head_dim;

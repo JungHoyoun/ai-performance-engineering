@@ -31,6 +31,7 @@
 
 #if CUDART_VERSION >= 13000
 #include <cuda.h>
+#include "../core/common/nvtx_utils.cuh"
 #define TMA_CUDA13_AVAILABLE 1
 #else
 #define TMA_CUDA13_AVAILABLE 0
@@ -244,10 +245,12 @@ void print_usage(const char* argv0) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    NVTX_RANGE("main");
     std::printf("=== Blackwell TMA 2D Pipeline ===\n\n");
 
     bool baseline_only = false;
     for (int i = 1; i < argc; ++i) {
+        NVTX_RANGE("iteration");
         if (std::strcmp(argv[i], "--baseline-only") == 0) {
             baseline_only = true;
         } else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
@@ -285,6 +288,7 @@ int main(int argc, char** argv) {
 
     std::vector<float> h_in(static_cast<std::size_t>(M) * N);
     for (std::size_t idx = 0; idx < h_in.size(); ++idx) {
+        NVTX_RANGE("setup");
         h_in[idx] = static_cast<float>((idx % 113) + 1);
     }
 
@@ -316,6 +320,7 @@ int main(int argc, char** argv) {
     PipelineOption selected{0, 0, 0};
     if (enable_tma) {
         for (const auto& option : kOptions) {
+            NVTX_RANGE("tile");
             if (option.tile_n > static_cast<int>(limits.max_2d_box_width)) {
                 continue;
             }
@@ -432,6 +437,7 @@ int main(int argc, char** argv) {
     if (enable_tma) {
         cudaEventRecord(start);
         for (int i = 0; i < iterations; ++i) {
+            NVTX_RANGE("iteration");
             launch_tma();
         }
         cudaEventRecord(stop);
@@ -444,6 +450,7 @@ int main(int argc, char** argv) {
     float baseline_ms = 0;
     cudaEventRecord(start);
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("iteration");
         launch_baseline(baseline_option);
     }
     cudaEventRecord(stop);
@@ -491,6 +498,7 @@ int main(int argc, char** argv) {
     check_cuda(cudaMemcpy(h_verify.data(), d_out, bytes, cudaMemcpyDeviceToHost), "copy output verify");
     double checksum = 0.0;
     for (float v : h_verify) {
+        NVTX_RANGE("verify");
         checksum += static_cast<double>(v);
     }
     VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));

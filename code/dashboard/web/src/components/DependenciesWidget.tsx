@@ -1,15 +1,13 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { CheckCircle, AlertTriangle, Loader2, RefreshCw } from 'lucide-react';
-import { getDependencies, checkDependencyUpdates } from '@/lib/api';
+import { CheckCircle, AlertTriangle, Loader2 } from 'lucide-react';
+import { getDependencies } from '@/lib/api';
 
 export function DependenciesWidget() {
   const [deps, setDeps] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
-  const [updates, setUpdates] = useState<any>(null);
-  const [checking, setChecking] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -25,19 +23,6 @@ export function DependenciesWidget() {
     }
     load();
   }, []);
-
-  const handleCheckUpdates = async () => {
-    try {
-      setChecking(true);
-      const res = await checkDependencyUpdates();
-      setUpdates(res);
-      setError(false);
-    } catch {
-      setError(true);
-    } finally {
-      setChecking(false);
-    }
-  };
 
   if (loading) {
     return (
@@ -73,23 +58,6 @@ export function DependenciesWidget() {
           <span className="text-sm text-accent-success">All deps OK</span>
         </>
       )}
-      {updates && (
-        <span className="text-xs text-white/60">
-          Updates: {updates.missing?.length || 0} missing · {updates.outdated?.length || 0} outdated
-        </span>
-      )}
-      <button
-        onClick={handleCheckUpdates}
-        title="Check for dependency updates"
-        className="p-1 rounded hover:bg-white/10"
-      >
-        {checking ? (
-          <Loader2 className="w-3 h-3 animate-spin text-white/60" />
-        ) : (
-          <RefreshCw className="w-3 h-3 text-white/50" />
-        )}
-      </button>
     </div>
   );
 }
-

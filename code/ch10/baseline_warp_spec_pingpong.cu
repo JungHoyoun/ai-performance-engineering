@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                       \
     do {                                                                       \
@@ -160,6 +161,7 @@ __global__ void baseline_relu_kernel(
 //============================================================================
 
 int main() {
+    NVTX_RANGE("main");
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     
@@ -191,9 +193,18 @@ int main() {
     
     // Initialize
     std::vector<float> h_A(M * K), h_B(K * N), h_bias(N);
-    for (int i = 0; i < M * K; ++i) h_A[i] = (rand() % 100) / 100.0f;
-    for (int i = 0; i < K * N; ++i) h_B[i] = (rand() % 100) / 100.0f;
-    for (int i = 0; i < N; ++i) h_bias[i] = (rand() % 10) / 10.0f;
+    for (int i = 0; i < M * K; ++i) {
+        NVTX_RANGE("setup");
+        h_A[i] = (rand() % 100) / 100.0f;
+    }
+    for (int i = 0; i < K * N; ++i) {
+        NVTX_RANGE("setup");
+        h_B[i] = (rand() % 100) / 100.0f;
+    }
+    for (int i = 0; i < N; ++i) {
+        NVTX_RANGE("setup");
+        h_bias[i] = (rand() % 10) / 10.0f;
+    }
     
     CUDA_CHECK(cudaMemcpy(d_A, h_A.data(), bytes_A, cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_B, h_B.data(), bytes_B, cudaMemcpyHostToDevice));
@@ -214,6 +225,7 @@ int main() {
     
     // Warmup - 3 separate kernels with global memory round-trips
     for (int i = 0; i < warmup; ++i) {
+        NVTX_RANGE("warmup");
         baseline_gemm_kernel<<<gemm_grid, gemm_block>>>(d_A, d_B, d_C_temp, M, N, K);
         baseline_bias_kernel<<<elem_grid, elem_block>>>(d_C_temp, d_bias, d_C_biased, M, N);
         baseline_relu_kernel<<<elem_grid, elem_block>>>(d_C_biased, d_C, M, N);
@@ -223,6 +235,7 @@ int main() {
     // Benchmark
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("compute_kernel:baseline_gemm_kernel");
         baseline_gemm_kernel<<<gemm_grid, gemm_block>>>(d_A, d_B, d_C_temp, M, N, K);
         baseline_bias_kernel<<<elem_grid, elem_block>>>(d_C_temp, d_bias, d_C_biased, M, N);
         baseline_relu_kernel<<<elem_grid, elem_block>>>(d_C_biased, d_C, M, N);
@@ -247,6 +260,7 @@ int main() {
     CUDA_CHECK(cudaMemcpy(h_out.data(), d_C, bytes_C, cudaMemcpyDeviceToHost));
     double checksum = 0.0;
     for (float v : h_out) {
+        NVTX_RANGE("verify");
         checksum += static_cast<double>(v);
     }
     VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));

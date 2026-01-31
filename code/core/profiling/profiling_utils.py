@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import torch
 from torch.profiler import ProfilerActivity, profile
+from core.profiling.nvtx_helper import standardize_nvtx_label
 
 
 ProfileFn = Callable[[], Any]
@@ -112,7 +113,7 @@ def profile_with_nvtx(
         profile_with_nvtx(lambda: model(input), "forward_pass")
         # Then run: nsys profile -t cuda,nvtx python script.py
     """
-    torch.cuda.nvtx.range_push(name)
+    torch.cuda.nvtx.range_push(standardize_nvtx_label(name))
     try:
         func()
     finally:
@@ -159,7 +160,7 @@ class ProfilerContext:
     
     def __enter__(self) -> "ProfilerContext":
         if self.enable_nvtx:
-            torch.cuda.nvtx.range_push(self.name)
+            torch.cuda.nvtx.range_push(standardize_nvtx_label(self.name))
         self.profiler.__enter__()
         return self
     

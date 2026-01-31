@@ -8,6 +8,7 @@
 #include <cuda_runtime.h>
 #include <cstdio>
 #include <cstdlib>
+#include "../core/common/nvtx_utils.cuh"
 
 //------------------------------------------------------
 __global__ void myKernel(float* input, int N) {
@@ -18,11 +19,13 @@ __global__ void myKernel(float* input, int N) {
 }
 
 int main() {
+    NVTX_RANGE("main");
     const int N = 1'000'000;
 
     float* h_input = nullptr;
     cudaMallocHost(&h_input, N * sizeof(float));
     for (int i = 0; i < N; ++i) {
+        NVTX_RANGE("setup");
         h_input[i] = 1.0f;
     }
 
@@ -54,6 +57,7 @@ int main() {
     // Verify result
     bool success = true;
     for (int i = 0; i < N; ++i) {
+        NVTX_RANGE("verify");
         if (h_input[i] != 2.0f) {
             printf("Error at index %d: expected 2.0, got %f\n", i, h_input[i]);
             success = false;

@@ -287,7 +287,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-root",
         type=Path,
-        default=REPO_ROOT / "output",
+        default=REPO_ROOT / "artifacts" / "runs" / "profile_harness",
         help="Root directory for profiler outputs",
     )
     parser.add_argument(
@@ -422,7 +422,7 @@ def base_env(example: Example) -> Dict[str, str]:
     _prepend_unique("PATH", CUDA_BIN_DIRS)
     _prepend_unique("LD_LIBRARY_PATH", CUDA_LIB_DIRS)
 
-    tmp_dir = Path(env.get("TMPDIR", REPO_ROOT / "output" / "tmp"))
+    tmp_dir = Path(env.get("TMPDIR", REPO_ROOT / "artifacts" / "runs" / "tmp"))
     tmp_dir.mkdir(parents=True, exist_ok=True)
     env["TMPDIR"] = str(tmp_dir)
 
@@ -1136,8 +1136,8 @@ def summarize(results: List[RunResult], session_dir: Path) -> None:
     except Exception as exc:
         # Don't fail the whole run if metrics aggregation fails
         log_progress("session", str(session_dir), "metrics-aggregation-warning", str(exc))
-        latest_summary = REPO_ROOT / "profile_runs" / "harness" / "latest_summary.json"
-        latest_failures = REPO_ROOT / "profile_runs" / "harness" / "latest_failures.txt"
+        latest_summary = session_dir.parent / "latest_summary.json"
+        latest_failures = session_dir.parent / "latest_failures.txt"
         latest_summary.write_text(json.dumps(summary, indent=2))
         if failures:
             latest_failures.write_text(
@@ -1332,7 +1332,7 @@ def main() -> None:
 
     summarize(all_results, session_dir)
     failures = [r for r in all_results if not r.skipped and r.exit_code != 0]
-    failure_list = REPO_ROOT / "profile_runs" / "harness" / "latest_failures.txt"
+    failure_list = session_dir.parent / "latest_failures.txt"
     failure_list.parent.mkdir(parents=True, exist_ok=True)
     if failures:
             failure_list.write_text(

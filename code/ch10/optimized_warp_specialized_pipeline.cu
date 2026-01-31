@@ -7,6 +7,7 @@
 #include <numeric>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 namespace cg = cooperative_groups;
 
@@ -175,7 +176,10 @@ void run_optimized(int tiles) {
     cudaMemcpy(h_C.data(), d_C, bytes, cudaMemcpyDeviceToHost);
 
     double checksum = 0.0;
-    for (float v : h_C) checksum += v;
+    for (float v : h_C) {
+        NVTX_RANGE("verify");
+        checksum += v;
+    }
 
     printf("optimized_warp_specialized_pipeline: %d tiles, %.3f ms, checksum %.3f\n",
            tiles, ms, checksum / h_C.size());
@@ -193,6 +197,7 @@ void run_optimized(int tiles) {
 }  // namespace
 
 int main() {
+    NVTX_RANGE("main");
     run_optimized(512);
     return 0;
 }

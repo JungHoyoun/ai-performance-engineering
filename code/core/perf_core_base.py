@@ -485,7 +485,7 @@ class PerformanceCoreBase:
             result = subprocess.run(
                 [
                     "nvidia-smi",
-                    "--query-gpu=name,temperature.gpu,temperature.memory,power.draw,power.limit,memory.used,memory.total,utilization.gpu,utilization.memory,clocks.current.graphics,clocks.current.memory,fan.speed,persistence_mode,pstate",
+                    "--query-gpu=name,temperature.gpu,temperature.memory,power.draw,power.limit,memory.used,memory.total,utilization.gpu,utilization.memory,clocks.current.graphics,clocks.current.memory,fan.speed,persistence_mode,pstate,ecc.mode.current,driver_version",
                     "--format=csv,noheader,nounits",
                 ],
                 capture_output=True,
@@ -512,6 +512,24 @@ class PerformanceCoreBase:
                         ecc_mode = parts[14].strip() == "Enabled"
                 except (ValueError, IndexError):
                     pass
+                driver_version = None
+                try:
+                    if len(parts) > 15 and parts[15] and parts[15] != "[N/A]":
+                        driver_version = parts[15].strip()
+                except (ValueError, IndexError):
+                    pass
+                cuda_version = None
+                compute_capability = None
+                try:
+                    import torch
+
+                    cuda_version = torch.version.cuda
+                    if torch.cuda.is_available():
+                        device = torch.device("cuda")
+                        props = torch.cuda.get_device_properties(device)
+                        compute_capability = f"{props.major}.{props.minor}"
+                except Exception:
+                    pass
 
                 return {
                     "name": parts[0],
@@ -529,6 +547,9 @@ class PerformanceCoreBase:
                     "persistence_mode": parts[12].strip() == "Enabled" if len(parts) > 12 else None,
                     "pstate": parts[13].strip() if len(parts) > 13 else None,
                     "ecc_mode": ecc_mode,
+                    "driver_version": driver_version,
+                    "cuda_version": cuda_version,
+                    "compute_capability": compute_capability,
                     "live": True,
                 }
         except Exception:
@@ -549,6 +570,9 @@ class PerformanceCoreBase:
             "persistence_mode": None,
             "pstate": None,
             "ecc_mode": None,
+            "driver_version": None,
+            "cuda_version": None,
+            "compute_capability": None,
             "live": False,
             "error": "nvidia-smi failed or no GPU available",
         }

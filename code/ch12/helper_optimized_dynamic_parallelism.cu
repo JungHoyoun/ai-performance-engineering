@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "dynamic_segments_common.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                        \
     do {                                                                        \
@@ -43,6 +44,7 @@ __global__ void parent_launcher(float* data,
 }
 
 int main() {
+    NVTX_RANGE("main");
     constexpr int kElements = 1 << 22;
     constexpr int kGrid = 128;
     constexpr int kBlock = 128;
@@ -54,6 +56,7 @@ int main() {
 
     std::vector<float> h_data(kElements);
     for (int i = 0; i < kElements; ++i) {
+        NVTX_RANGE("setup");
         h_data[i] = std::cos(0.0013f * static_cast<float>(i));
     }
     const std::vector<Segment> segments = build_segments(kElements);
@@ -75,6 +78,7 @@ int main() {
 
     reset_input();
     for (int i = 0; i < kWarmup; ++i) {
+        NVTX_RANGE("warmup");
         parent_launcher<<<kGrid, kBlock>>>(d_data, d_segments, static_cast<int>(segments.size()));
         CUDA_CHECK(cudaGetLastError());
     }
@@ -86,6 +90,7 @@ int main() {
 
     CUDA_CHECK(cudaEventRecord(start));
     for (int iter = 0; iter < kIters; ++iter) {
+        NVTX_RANGE("compute_kernel:parent_launcher");
         reset_input();
         parent_launcher<<<kGrid, kBlock>>>(d_data, d_segments, static_cast<int>(segments.size()));
         CUDA_CHECK(cudaGetLastError());
@@ -100,6 +105,7 @@ int main() {
     CUDA_CHECK(cudaMemcpy(h_data.data(), d_data, h_data.size() * sizeof(float), cudaMemcpyDeviceToHost));
     double checksum = 0.0;
     for (float v : h_data) {
+        NVTX_RANGE("verify");
         checksum += static_cast<double>(v);
     }
     std::printf("Optimized checksum: %.6e\n", checksum);

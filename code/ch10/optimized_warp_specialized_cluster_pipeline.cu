@@ -15,6 +15,7 @@
 #include <cuda_runtime.h>
 #include <cstdio>
 #include <vector>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call) do { \
     cudaError_t err = (call); \
@@ -82,6 +83,7 @@ __global__ void tiled_gemm_shared_memory(
 //============================================================================
 
 int main() {
+    NVTX_RANGE("main");
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     
@@ -106,8 +108,14 @@ int main() {
     CUDA_CHECK(cudaMalloc(&d_C, bytes_C));
     
     std::vector<float> h_A(M * K), h_B(K * N);
-    for (int i = 0; i < M * K; ++i) h_A[i] = 0.01f;
-    for (int i = 0; i < K * N; ++i) h_B[i] = 0.01f;
+    for (int i = 0; i < M * K; ++i) {
+        NVTX_RANGE("setup");
+        h_A[i] = 0.01f;
+    }
+    for (int i = 0; i < K * N; ++i) {
+        NVTX_RANGE("setup");
+        h_B[i] = 0.01f;
+    }
     
     CUDA_CHECK(cudaMemcpy(d_A, h_A.data(), bytes_A, cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_B, h_B.data(), bytes_B, cudaMemcpyHostToDevice));
@@ -123,12 +131,14 @@ int main() {
     const int iterations = 20;
     
     for (int i = 0; i < warmup; ++i) {
+        NVTX_RANGE("warmup");
         tiled_gemm_shared_memory<<<grid, block>>>(d_A, d_B, d_C, M, N, K);
     }
     CUDA_CHECK(cudaDeviceSynchronize());
     
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("compute_kernel:tiled_gemm_shared_memory");
         tiled_gemm_shared_memory<<<grid, block>>>(d_A, d_B, d_C, M, N, K);
     }
     CUDA_CHECK(cudaEventRecord(stop));

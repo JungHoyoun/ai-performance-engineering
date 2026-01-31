@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <vector>
 #include <cmath>
+#include "../core/common/nvtx_utils.cuh"
 
 namespace cg = cooperative_groups;
 
@@ -98,6 +99,7 @@ static void check(cudaError_t err) {
 }
 
 int main() {
+    NVTX_RANGE("main");
     printf("Running two_stage_pipeline example\n");
 
     const int tiles = 8;
@@ -131,6 +133,7 @@ int main() {
 
     float max_error = 0.0f;
     for (float v : hC) {
+        NVTX_RANGE("cleanup");
         max_error = fmaxf(max_error, fabsf(v - 3.0f));
     }
     printf("Max error: %.6f\n", max_error);

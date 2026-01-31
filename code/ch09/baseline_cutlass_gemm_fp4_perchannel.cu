@@ -27,6 +27,7 @@
 #include "cute/tensor.hpp"
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 using namespace cute;
 
@@ -302,6 +303,7 @@ int run_cutlass(const Options& options) {
     GpuTimer timer;
     timer.start();
     for (int iter = 0; iter < options.iterations; ++iter) {
+        NVTX_RANGE("setup");
         CUTLASS_CHECK(gemm.initialize(arguments, workspace.get()));
         CUTLASS_CHECK(gemm.run());
     }
@@ -318,6 +320,7 @@ int run_cutlass(const Options& options) {
     std::mt19937 gen(42);
     std::uniform_real_distribution<float> scale_dis(0.75f, 1.25f);
     for (auto& v : h_scales) {
+        NVTX_RANGE("setup");
         v = scale_dis(gen);
     }
     float* d_scales = nullptr;
@@ -334,6 +337,7 @@ int run_cutlass(const Options& options) {
     double checksum = 0.0;
     const ElementD* h_out = block_D.host_data();
     for (size_t i = 0; i < elements; ++i) {
+        NVTX_RANGE("verify");
         checksum += std::abs(static_cast<float>(h_out[i]));
     }
     VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
@@ -345,6 +349,7 @@ int run_cutlass(const Options& options) {
 #endif  // CUTLASS_ARCH_MMA_SM100_SUPPORTED
 
 int main() {
+    NVTX_RANGE("main");
     if (__CUDACC_VER_MAJOR__ < 12 || (__CUDACC_VER_MAJOR__ == 12 && __CUDACC_VER_MINOR__ < 8)) {
         std::cerr << "SKIPPED: CUTLASS NVFP4 requires CUDA 12.8+." << std::endl;
         return 3;

@@ -4,6 +4,7 @@
 #include <c10/cuda/CUDAGuard.h>
 #include <cublas_v2.h>
 #include <torch/extension.h>
+#include "../core/common/nvtx_utils.cuh"
 
 namespace {
 

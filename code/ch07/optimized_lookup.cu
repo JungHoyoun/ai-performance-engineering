@@ -7,6 +7,7 @@
 
 #include "../core/common/headers/cuda_helpers.cuh"
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 // CUDA 13 + Blackwell: 32-byte aligned type for 256-bit loads
 struct alignas(32) Float8 {
@@ -36,6 +37,7 @@ __host__ int advance_lcg(int idx) {
 }
 
 int main() {
+    NVTX_RANGE("main");
   float *h_table, *h_out;
   int *h_indices;
   CUDA_CHECK(cudaMallocHost(&h_table, N * sizeof(float)));
@@ -43,15 +45,18 @@ int main() {
   CUDA_CHECK(cudaMallocHost(&h_indices, N * sizeof(int)));
 
   for (int i = 0; i < N; ++i) {
+      NVTX_RANGE("setup");
     h_table[i] = static_cast<float>(i);
     h_indices[i] = (i * 3) % N;
   }
 
   std::vector<float> precomputed(N);
   for (int i = 0; i < N; ++i) {
+      NVTX_RANGE("setup");
     int idx = h_indices[i];
     float acc = 0.0f;
     for (int step = 0; step < RANDOM_STEPS; ++step) {
+        NVTX_RANGE("setup");
       acc += h_table[idx];
       idx = advance_lcg(idx);
     }
@@ -73,6 +78,7 @@ int main() {
 
   CUDA_CHECK(cudaEventRecord(start));
   for (int iter = 0; iter < ITERATIONS; ++iter) {
+      NVTX_RANGE("compute_kernel:lookupOptimized");
     lookupOptimized<<<grid, block>>>(d_precomputed, d_out, N);
   }
   CUDA_CHECK(cudaEventRecord(stop));

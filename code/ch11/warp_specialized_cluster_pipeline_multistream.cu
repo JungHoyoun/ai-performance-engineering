@@ -10,6 +10,7 @@
 
 #include <cooperative_groups.h>
 #include <cuda/pipeline>
+#include "../core/common/nvtx_utils.cuh"
 
 namespace cg = cooperative_groups;
 
@@ -166,6 +167,7 @@ void launch_warp_specialized_cluster_pipeline_multistream(
 
     std::vector<cudaStream_t> streams(numStreams);
     for (auto& stream : streams) {
+        NVTX_RANGE("tile");
         CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
     }
 
@@ -180,6 +182,7 @@ void launch_warp_specialized_cluster_pipeline_multistream(
     attr[0].val.clusterDim.z = 1;
 
     for (int b = 0; b < numBatches; ++b) {
+        NVTX_RANGE("transfer");
         cudaStream_t st = streams[b % numStreams];
         float *dA = nullptr, *dB = nullptr, *dC = nullptr;
         const size_t bytes = static_cast<size_t>(batchLength) * sizeof(float);
@@ -224,6 +227,7 @@ void launch_warp_specialized_cluster_pipeline_multistream(
     }
 
     for (auto& stream : streams) {
+        NVTX_RANGE("batch");
         CUDA_CHECK(cudaStreamSynchronize(stream));
         CUDA_CHECK(cudaStreamDestroy(stream));
     }
@@ -239,6 +243,7 @@ struct Options {
 Options parse_options(int argc, char** argv) {
     Options opts;
     for (int i = 1; i < argc; ++i) {
+        NVTX_RANGE("verify");
         const std::string arg(argv[i]);
         auto parse_int = [&](int& dst) {
             if (i + 1 < argc) {
@@ -273,6 +278,7 @@ Options parse_options(int argc, char** argv) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    NVTX_RANGE("main");
     Options opts = parse_options(argc, argv);
 
     const int batchLength = opts.tiles_per_batch * TILE_ELEMS;
@@ -284,6 +290,7 @@ int main(int argc, char** argv) {
     CUDA_CHECK(cudaMallocHost(&hC, total_elems * sizeof(float)));
 
     for (size_t i = 0; i < total_elems; ++i) {
+        NVTX_RANGE("tile");
         hA[i] = static_cast<float>((i % TILE_SIZE) * 0.5f);
         hB[i] = static_cast<float>((i % TILE_SIZE) * 0.25f + 1.0f);
         hC[i] = 0.0f;
@@ -296,17 +303,22 @@ int main(int argc, char** argv) {
         double max_err = 0.0;
         std::vector<float> ref(batchLength);
         for (int b = 0; b < opts.batches; ++b) {
+            NVTX_RANGE("batch");
             const float* A_batch = hA + static_cast<size_t>(b) * batchLength;
             const float* B_batch = hB + static_cast<size_t>(b) * batchLength;
             float* C_batch = ref.data();
             for (int tile = 0; tile < opts.tiles_per_batch; ++tile) {
+                NVTX_RANGE("tile");
                 const float* A_tile = A_batch + static_cast<size_t>(tile) * TILE_ELEMS;
                 const float* B_tile = B_batch + static_cast<size_t>(tile) * TILE_ELEMS;
                 float* C_tile = C_batch + static_cast<size_t>(tile) * TILE_ELEMS;
                 for (int row = 0; row < TILE_SIZE; ++row) {
+                    NVTX_RANGE("tile");
                     for (int col = 0; col < TILE_SIZE; ++col) {
+                        NVTX_RANGE("tile");
                         float acc = 0.0f;
                         for (int k = 0; k < TILE_SIZE; ++k) {
+                            NVTX_RANGE("tile");
                             acc += A_tile[row * TILE_SIZE + k] * B_tile[k * TILE_SIZE + col];
                         }
                         C_tile[row * TILE_SIZE + col] = acc;
@@ -315,6 +327,7 @@ int main(int argc, char** argv) {
             }
             const float* gpu = hC + static_cast<size_t>(b) * batchLength;
             for (int i = 0; i < batchLength; ++i) {
+                NVTX_RANGE("cleanup");
                 max_err = std::max(max_err, static_cast<double>(std::abs(ref[i] - gpu[i])));
             }
         }

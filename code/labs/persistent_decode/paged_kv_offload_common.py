@@ -222,17 +222,19 @@ class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
                     src_v.to(self.device, dtype=self.runtime_dtype, non_blocking=self.cfg.use_pinned_stage)
                 )
 
+        label = "transfer_async:h2d" if (self.copy_stream is not None or self.cfg.use_pinned_stage) else "transfer_sync:h2d"
         if self.copy_stream is not None:
-            with torch.cuda.stream(self.copy_stream):
+            with torch.cuda.stream(self.copy_stream), self._nvtx_range(label):
                 _copy_planes()
                 if record_event is not None:
                     record_event.record()
             if wait_for_copy:
                 torch.cuda.current_stream().wait_stream(self.copy_stream)
         else:
-            _copy_planes()
-            if record_event is not None:
-                record_event.record()
+            with self._nvtx_range(label):
+                _copy_planes()
+                if record_event is not None:
+                    record_event.record()
 
     def setup(self) -> None:
         torch.manual_seed(42)

@@ -36,6 +36,7 @@ import torch.nn as nn
 
 # PyTorch profiler
 from torch.profiler import ProfilerActivity, profile, record_function
+from core.profiling.nvtx_helper import standardize_nvtx_label
 
 # NVTX for nsys profiling
 try:
@@ -129,7 +130,7 @@ class ProfiledBenchmark:
             compute_capability = "N/A"
 
         # Warmup
-        with nvtx.range(f"{self.name}_{precision}_warmup"):
+        with nvtx.range(standardize_nvtx_label(f"warmup:{self.name}_{precision}")):
             for _ in range(warmup_iters):
                 _ = func(*args)
                 if torch.cuda.is_available():
@@ -142,13 +143,13 @@ class ProfiledBenchmark:
 
         # Benchmark
         times: List[float] = []
-        with nvtx.range(f"{self.name}_{precision}_benchmark"):
+        with nvtx.range(standardize_nvtx_label(f"compute_math:{self.name}_{precision}")):
             for i in range(benchmark_iters):
                 if torch.cuda.is_available():
                     start_event = torch.cuda.Event(enable_timing=True)
                     end_event = torch.cuda.Event(enable_timing=True)
                     start_event.record()
-                    with nvtx.range(f"{self.name}_{precision}_iter_{i}"):
+                    with nvtx.range(standardize_nvtx_label(f"iteration:{self.name}_{precision}_{i}")):
                         _ = func(*args)
                     end_event.record()
                     torch.cuda.synchronize()

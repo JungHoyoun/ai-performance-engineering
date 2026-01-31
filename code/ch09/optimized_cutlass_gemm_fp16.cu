@@ -19,6 +19,7 @@
 
 #include <iostream>
 #include <random>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                         \
   do {                                                                           \
@@ -51,6 +52,7 @@
   } while (0)
 
 int main() {
+    NVTX_RANGE("main");
     // Larger matrices for better tensor core utilization
     constexpr int M = 2048;
     constexpr int N = 2048;
@@ -78,12 +80,15 @@ int main() {
     std::mt19937 gen(42);
     std::uniform_real_distribution<float> dis(-0.5f, 0.5f);
     for (size_t i = 0; i < elems_A * batch_count; ++i) {
+        NVTX_RANGE("batch");
         h_A[i] = __float2half(dis(gen));
     }
     for (size_t i = 0; i < elems_B * batch_count; ++i) {
+        NVTX_RANGE("batch");
         h_B[i] = __float2half(dis(gen));
     }
     for (size_t i = 0; i < elems_C * batch_count; ++i) {
+        NVTX_RANGE("batch");
         h_C[i] = __float2half(0.0f);
     }
 
@@ -181,6 +186,7 @@ int main() {
 
     // Warmup
     for (int i = 0; i < 5; ++i) {
+        NVTX_RANGE("warmup");
         CUBLASLT_CHECK(cublasLtMatmul(
             ltHandle,
             operationDesc,
@@ -204,6 +210,7 @@ int main() {
     // Benchmark
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; ++i) {
+        NVTX_RANGE("compute_math:ltmatmul");
         CUBLASLT_CHECK(cublasLtMatmul(
             ltHandle,
             operationDesc,

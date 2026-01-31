@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 #include <cstdio>
 #include <vector>
+#include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
@@ -43,6 +44,7 @@ __global__ void predicate_kernel(int* condition, float* data, int n, float thres
 }
 
 int main() {
+    NVTX_RANGE("main");
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     std::printf("Optimized Conditional Graphs (CUDA graph static path) on %s (SM %d.%d)\n", 
@@ -61,6 +63,7 @@ int main() {
     
     std::vector<float> h_data(N);
     for (int i = 0; i < N; ++i) {
+        NVTX_RANGE("setup");
         h_data[i] = 1.0f + (i % 100) * 0.01f;
     }
     CUDA_CHECK(cudaMemcpy(d_data, h_data.data(), bytes, cudaMemcpyHostToDevice));
@@ -93,6 +96,7 @@ int main() {
     
     CUDA_CHECK(cudaEventRecord(start, graph_stream));
     for (int i = 0; i < ITERS; ++i) {
+        NVTX_RANGE("compute_graph:launch");
         CUDA_CHECK(cudaGraphLaunch(graph_exec_static, graph_stream));
     }
     CUDA_CHECK(cudaEventRecord(stop, graph_stream));

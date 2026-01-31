@@ -1,8 +1,8 @@
 /**
  * ch10: True warp-specialized tcgen05 GEMM (producer/consumer warps).
  *
- * Warp 0 (producer) issues TMA loads, warp 1 (consumer) runs MMA. The two
- * warps run concurrently using full/empty barriers to hand off stages.
+ * Warp 0 (producer) issues TMA loads, warp 1 (consumer) runs MMA. The warps
+ * overlap via full/empty barriers to hand off stages.
  */
 
 #include <ATen/cuda/CUDAContext.h>
@@ -30,6 +30,10 @@ using TypeD = float;
 using Accumulator = float;
 
 constexpr int kStages = 4;
+constexpr int kWarpSize = 32;
+constexpr int kBlockThreads = 128;
+constexpr int kProducerWarpIdx = 0;
+constexpr int kConsumerWarpIdx = 1;
 
 template <class TypeA_, class TypeB_, class ASmemLayout, class BSmemLayout>
 struct WarpSpecializedSharedStorage {
@@ -56,7 +60,7 @@ template <class SharedStorageT,
           class ATensor, class BTensor, class CTensor, class DTensor,
           class MmaTiler_MNK, class TiledMMA,
           class TmaAtomA, class TmaAtomB>
-__global__ void __launch_bounds__(128, 1)
+__global__ void __launch_bounds__(kBlockThreads, 1)
 gemm_warp_specialized(ATensor mA, BTensor mB, CTensor mC, DTensor mD,
                       MmaTiler_MNK mma_tiler, TiledMMA tiled_mma,
                       int grid_m, int grid_n,
@@ -64,8 +68,8 @@ gemm_warp_specialized(ATensor mA, BTensor mB, CTensor mC, DTensor mD,
                       CUTE_GRID_CONSTANT TmaAtomB const tma_atom_B) {
   int warp_idx = threadIdx.x / 32;
   int lane_idx = threadIdx.x % 32;
-  bool is_consumer = (warp_idx == 1);
-  bool is_producer = (warp_idx == 0);
+  bool is_consumer = (warp_idx == kConsumerWarpIdx);
+  bool is_producer = (warp_idx == kProducerWarpIdx);
   bool is_lane0 = (lane_idx == 0);
 
   // Swizzled tile coord
@@ -97,7 +101,7 @@ gemm_warp_specialized(ATensor mA, BTensor mB, CTensor mC, DTensor mD,
   Tensor tCgD = cta_mma.partition_C(gD);
 
   cute::TMEM::Allocator1Sm tmem_allocator{};
-  if (is_consumer && is_lane0) {
+  if (is_producer && is_lane0) {
     tmem_allocator.allocate(
         decltype(tmem_allocator)::Sm100TmemCapacityColumns,
         &storage.tmem_base_ptr);
@@ -192,15 +196,16 @@ gemm_warp_specialized(ATensor mA, BTensor mB, CTensor mC, DTensor mD,
 
   tiled_mma.accumulate_ = UMMA::ScaleOut::Zero;
 
-  // Prologue: issue first kStages-1 TMA loads.
+  int full_phase[kStages] = {0};
+  int empty_phase[kStages] = {0};
+
+  // Prologue: issue first kStages-1 TMA loads (no reuse yet).
   if (is_producer && is_lane0) {
     for (int i = 0; i < min(kStages - 1, num_k_tiles); ++i) {
       issue_tma(i, i);
     }
   }
   __syncthreads();
-
-  int full_phase[kStages] = {0};
 
   // Mainloop: producer issues next TMA while consumer warps compute.
   for (int k = 0; k < num_k_tiles; ++k) {
@@ -209,13 +214,17 @@ gemm_warp_specialized(ATensor mA, BTensor mB, CTensor mC, DTensor mD,
     int next_s = next_k % kStages;
 
     if (next_k < num_k_tiles && is_producer && is_lane0) {
+      if (next_k >= kStages) {
+        cute::wait_barrier(storage.empty_barrier[next_s], empty_phase[next_s]);
+        empty_phase[next_s] ^= 1;
+      }
       issue_tma(next_s, next_k);
     }
 
-    cute::wait_barrier(storage.full_barrier[curr], full_phase[curr]);
-    full_phase[curr] ^= 1;
-
     if (is_consumer) {
+      cute::wait_barrier(storage.full_barrier[curr], full_phase[curr]);
+      full_phase[curr] ^= 1;
+
       auto& tCrA = (curr == 0) ? tCrA_0 : (curr == 1) ? tCrA_1 :
                    (curr == 2) ? tCrA_2 : tCrA_3;
       auto& tCrB = (curr == 0) ? tCrB_0 : (curr == 1) ? tCrB_1 :
@@ -258,7 +267,7 @@ gemm_warp_specialized(ATensor mA, BTensor mB, CTensor mC, DTensor mD,
   copy(tDrC, tDgD);
 
   __syncthreads();
-  if (is_consumer && is_lane0) {
+  if (is_producer && is_lane0) {
     tmem_allocator.release_allocation_lock();
     tmem_allocator.free(tmem_base, decltype(tmem_allocator)::Sm100TmemCapacityColumns);
   }
@@ -312,7 +321,7 @@ torch::Tensor run_warp_specialized_matmul(torch::Tensor a, torch::Tensor b) {
   int grid_m = (m + size(bM) - 1) / size(bM);
   int grid_n = (n + size(bN) - 1) / size(bN);
 
-  dim3 dimBlock(128);
+  dim3 dimBlock(kBlockThreads);
   dim3 dimGrid(grid_m, grid_n);
   int smem_bytes = sizeof(SharedStorageT);
 

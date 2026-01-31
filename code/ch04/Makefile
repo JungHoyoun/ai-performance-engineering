@@ -8,7 +8,7 @@ NVSHMEM_INCLUDE = -I/usr/include/nvshmem
 NVSHMEM_LIB = -L$(NVSHMEM_HOME) -lnvshmem_host $(NVSHMEM_HOME)/libnvshmem_device.a
 HAS_NVSHMEM := $(shell test -f $(NVSHMEM_HOME)/libnvshmem_host.so && echo yes || echo no)
 
-NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) -rdc=true
+NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) -rdc=true $(CUDA_NVTX_CFLAGS)
 SUFFIX = $(TARGET_SUFFIX)
 
 NVSHMEM_TARGETS = nvshmem_multigpu_examples nvshmem_advanced_multigpu nvshmem_multinode_example \
@@ -47,60 +47,60 @@ else
 	@echo "⚠ NVSHMEM not found - compiling in educational mode"
 endif
 
-nvshmem_multigpu_examples$(SUFFIX): nvshmem_multigpu_examples.cu
+nvshmem_multigpu_examples$(SUFFIX): nvshmem_multigpu_examples.cu $(CUDA_NVTX_DEPS)
 ifeq ($(HAS_NVSHMEM),yes)
-	$(NVCC) $(NVCC_FLAGS) -DUSE_NVSHMEM $(NVSHMEM_INCLUDE) $< $(NVSHMEM_LIB) -o $@
+	$(NVCC) $(NVCC_FLAGS) -DUSE_NVSHMEM $(NVSHMEM_INCLUDE) $< $(NVSHMEM_LIB) -o $@ $(CUDA_NVTX_LDFLAGS)
 	@echo "✓ Basic examples compiled with NVSHMEM support"
 	@echo "  Run: nvshmemrun -np 4 ./nvshmem_multigpu_examples$(SUFFIX)"
 else
-	$(NVCC) $(NVCC_FLAGS) $< -o $@
+	$(NVCC) $(NVCC_FLAGS) $< -o $@ $(CUDA_NVTX_LDFLAGS)
 	@echo "Compiled in educational mode (no NVSHMEM library)"
 endif
 
-nvshmem_multinode_example$(SUFFIX): nvshmem_multinode_example.cu
+nvshmem_multinode_example$(SUFFIX): nvshmem_multinode_example.cu $(CUDA_NVTX_DEPS)
 ifeq ($(HAS_NVSHMEM),yes)
-	$(NVCC) $(NVCC_FLAGS) -DUSE_NVSHMEM $(NVSHMEM_INCLUDE) $< $(NVSHMEM_LIB) -o $@
+	$(NVCC) $(NVCC_FLAGS) -DUSE_NVSHMEM $(NVSHMEM_INCLUDE) $< $(NVSHMEM_LIB) -o $@ $(CUDA_NVTX_LDFLAGS)
 	@echo "✓ Multi-node example compiled with NVSHMEM support"
 	@echo "  Run: nvshmemrun -np <world> ./nvshmem_multinode_example$(SUFFIX) --gpus-per-node 4"
 else
-	$(NVCC) $(NVCC_FLAGS) $< -o $@
+	$(NVCC) $(NVCC_FLAGS) $< -o $@ $(CUDA_NVTX_LDFLAGS)
 	@echo "Compiled in educational mode (no NVSHMEM library)"
 endif
 
-nvshmem_pipeline_patterns$(SUFFIX): nvshmem_pipeline_patterns.cu
+nvshmem_pipeline_patterns$(SUFFIX): nvshmem_pipeline_patterns.cu $(CUDA_NVTX_DEPS)
 ifeq ($(HAS_NVSHMEM),yes)
-	$(NVCC) $(NVCC_FLAGS) -DUSE_NVSHMEM $(NVSHMEM_INCLUDE) $< $(NVSHMEM_LIB) -o $@
+	$(NVCC) $(NVCC_FLAGS) -DUSE_NVSHMEM $(NVSHMEM_INCLUDE) $< $(NVSHMEM_LIB) -o $@ $(CUDA_NVTX_LDFLAGS)
 	@echo "✓ Pipeline patterns compiled with NVSHMEM support"
 	@echo "  Run: nvshmemrun -np 2 ./nvshmem_pipeline_patterns$(SUFFIX)"
 else
-	$(NVCC) $(NVCC_FLAGS) $< -o $@
+	$(NVCC) $(NVCC_FLAGS) $< -o $@ $(CUDA_NVTX_LDFLAGS)
 	@echo "Compiled in educational mode (no NVSHMEM library)"
 endif
 
-nvshmem_advanced_multigpu$(SUFFIX): nvshmem_advanced_multigpu.cu
+nvshmem_advanced_multigpu$(SUFFIX): nvshmem_advanced_multigpu.cu $(CUDA_NVTX_DEPS)
 ifeq ($(HAS_NVSHMEM),yes)
-	$(NVCC) $(NVCC_FLAGS) -DUSE_NVSHMEM $(NVSHMEM_INCLUDE) $< $(NVSHMEM_LIB) -o $@
+	$(NVCC) $(NVCC_FLAGS) -DUSE_NVSHMEM $(NVSHMEM_INCLUDE) $< $(NVSHMEM_LIB) -o $@ $(CUDA_NVTX_LDFLAGS)
 	@echo "✓ Advanced patterns compiled with NVSHMEM support"
 	@echo "  Run: nvshmemrun -np 4 ./nvshmem_advanced_multigpu$(SUFFIX)"
 else
-	$(NVCC) $(NVCC_FLAGS) $< -o $@
+	$(NVCC) $(NVCC_FLAGS) $< -o $@ $(CUDA_NVTX_LDFLAGS)
 	@echo "Compiled in educational mode (no NVSHMEM library)"
 endif
 
-nvshmem_tensor_parallel$(SUFFIX): nvshmem_tensor_parallel.cu
+nvshmem_tensor_parallel$(SUFFIX): nvshmem_tensor_parallel.cu $(CUDA_NVTX_DEPS)
 ifeq ($(HAS_NVSHMEM),yes)
-	$(NVCC) $(NVCC_FLAGS) -DUSE_NVSHMEM $(NVSHMEM_INCLUDE) $< $(NVSHMEM_LIB) -lcuda -o $@
+	$(NVCC) $(NVCC_FLAGS) -DUSE_NVSHMEM $(NVSHMEM_INCLUDE) $< $(NVSHMEM_LIB) -lcuda -o $@ $(CUDA_NVTX_LDFLAGS)
 	@echo "✓ Tensor parallel kernels compiled with NVSHMEM support"
 	@echo "  Run: nvshmemrun -np 4 ./nvshmem_tensor_parallel$(SUFFIX) --test all"
 else
-	$(NVCC) $(NVCC_FLAGS) $< -o $@
+	$(NVCC) $(NVCC_FLAGS) $< -o $@ $(CUDA_NVTX_LDFLAGS)
 	@echo "Compiled in educational mode (no NVSHMEM library)"
 	@echo "This version shows API patterns but won't execute communication"
 endif
 
-nvshmem_ibgda_microbench$(SUFFIX): nvshmem_ibgda_microbench.cu
+nvshmem_ibgda_microbench$(SUFFIX): nvshmem_ibgda_microbench.cu $(CUDA_NVTX_DEPS)
 ifeq ($(HAS_NVSHMEM),yes)
-	$(NVCC) $(NVCC_FLAGS) -DUSE_NVSHMEM $(NVSHMEM_INCLUDE) $< $(NVSHMEM_LIB) -o $@
+	$(NVCC) $(NVCC_FLAGS) -DUSE_NVSHMEM $(NVSHMEM_INCLUDE) $< $(NVSHMEM_LIB) -o $@ $(CUDA_NVTX_LDFLAGS)
 	@echo "✓ IBGDA microbenchmark compiled with NVSHMEM support"
 	@echo "  Run: nvshmemrun -np 2 ./nvshmem_ibgda_microbench$(SUFFIX) --mode=p --bytes=1024 --ctas=8 --iters=1000"
 else
@@ -108,9 +108,9 @@ else
 	@false
 endif
 
-nvshmem_ibgda_microbench_verify$(SUFFIX): nvshmem_ibgda_microbench.cu
+nvshmem_ibgda_microbench_verify$(SUFFIX): nvshmem_ibgda_microbench.cu $(CUDA_NVTX_DEPS)
 ifeq ($(HAS_NVSHMEM),yes)
-	$(NVCC) $(NVCC_FLAGS) -DUSE_NVSHMEM -DVERIFY=1 $(NVSHMEM_INCLUDE) $< $(NVSHMEM_LIB) -o $@
+	$(NVCC) $(NVCC_FLAGS) -DUSE_NVSHMEM -DVERIFY=1 $(NVSHMEM_INCLUDE) $< $(NVSHMEM_LIB) -o $@ $(CUDA_NVTX_LDFLAGS)
 	@echo "✓ IBGDA microbenchmark verify binary compiled"
 else
 	@echo "Skipping nvshmem_ibgda_microbench verify: NVSHMEM not found (set NVSHMEM_HOME then re-run make)"

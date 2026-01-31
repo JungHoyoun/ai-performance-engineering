@@ -17,6 +17,7 @@ from arch_config import ArchitectureConfig
 import torch.profiler as profiler
 from torch.profiler import profile, record_function, ProfilerActivity, schedule
 import torch.cuda.nvtx as nvtx
+from core.profiling.nvtx_helper import standardize_nvtx_label
 import torch
 import os
 import math
@@ -409,7 +410,7 @@ class SimpleTransformerModel:
         keys_for_attn = new_cache.keys.permute(1, 0, 2).unsqueeze(0)  # [1, H, S, D]
         values_for_attn = new_cache.values.permute(1, 0, 2).unsqueeze(0)
         query_for_attn = q.unsqueeze(2)  # [1, H, 1, D]
-        with nvtx.range("radix_attention_prefill") if torch.cuda.is_available() else nullcontext():
+        with nvtx.range(standardize_nvtx_label("compute_math:radix_attention_prefill")) if torch.cuda.is_available() else nullcontext():
             context = self._attention_kernel(query_for_attn, keys_for_attn, values_for_attn)
         context = context.reshape(1, self.hidden_dim)
         
@@ -433,7 +434,7 @@ class SimpleTransformerModel:
             keys = state.kv_cache.keys.permute(1, 0, 2).unsqueeze(0)
             values = state.kv_cache.values.permute(1, 0, 2).unsqueeze(0)
             query = state.kv_cache.keys[-1:].permute(1, 0, 2).unsqueeze(0)
-            with nvtx.range("radix_attention_decode") if torch.cuda.is_available() else nullcontext():
+            with nvtx.range(standardize_nvtx_label("compute_math:radix_attention_decode")) if torch.cuda.is_available() else nullcontext():
                 context = self._attention_kernel(query, keys, values)
             attn_out = context.reshape(1, self.hidden_dim)
             state.context = attn_out
@@ -597,7 +598,7 @@ def benchmark_prefix_caching():
         start_time = time.time()
     
     naive_responses = []
-    with nvtx.range("radix_naive_pass") if torch.cuda.is_available() else nullcontext():
+    with nvtx.range(standardize_nvtx_label("step:radix_naive_pass")) if torch.cuda.is_available() else nullcontext():
         for rep in range(passes):
             for i, prompt in enumerate(test_prompts):
                 print(f"Processing prompt {i+1}/{len(test_prompts)} (pass {rep+1}/{passes})")
@@ -636,7 +637,7 @@ def benchmark_prefix_caching():
         start_time = time.time()
     
     cached_responses = []
-    with nvtx.range("radix_cached_pass") if torch.cuda.is_available() else nullcontext():
+    with nvtx.range(standardize_nvtx_label("step:radix_cached_pass")) if torch.cuda.is_available() else nullcontext():
         for rep in range(passes):
             for i, prompt in enumerate(test_prompts):
                 print(f"Processing prompt {i+1}/{len(test_prompts)} with caching (pass {rep+1}/{passes})")

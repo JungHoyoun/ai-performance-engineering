@@ -21,9 +21,9 @@ all: $(TARGETS)
 	@echo "✓ Built $(words $(BASE_TARGETS)) CUDA examples"
 
 # Pattern rule for all CUDA files
-$(addsuffix $(SUFFIX), $(BASE_TARGETS)): %$(SUFFIX): %.cu
+$(addsuffix $(SUFFIX), $(BASE_TARGETS)): %$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
 	@echo "Building $@..."
-	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
+	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS) $(CUDA_NVTX_LDFLAGS)
 
 test: all
 	@echo "Testing all Chapter 6 examples..."

@@ -556,6 +556,48 @@ EOF
     echo "Installed aisp CLI wrapper at ${target}"
 }
 
+ensure_codex_cli() {
+    if command -v codex >/dev/null 2>&1; then
+        CODEX_BIN="$(command -v codex)"
+        export CODEX_BIN
+        echo "Codex CLI detected at ${CODEX_BIN}"
+        return 0
+    fi
+
+    if [ -z "${CODEX_INSTALL_CMD:-}" ]; then
+        echo "ERROR: codex CLI not found. Set CODEX_INSTALL_CMD to install it before MCP setup." >&2
+        exit 1
+    fi
+
+    echo "Installing Codex CLI..."
+    if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ] && [ "${CODEX_INSTALL_AS_USER:-1}" -eq 1 ]; then
+        sudo -H -u "${SUDO_USER}" bash -lc "${CODEX_INSTALL_CMD}"
+    else
+        bash -lc "${CODEX_INSTALL_CMD}"
+    fi
+
+    if command -v codex >/dev/null 2>&1; then
+        CODEX_BIN="$(command -v codex)"
+        export CODEX_BIN
+        echo "Codex CLI installed at ${CODEX_BIN}"
+        return 0
+    fi
+
+    if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+        local user_home
+        user_home="$(getent passwd "${SUDO_USER}" | cut -d: -f6)"
+        if [ -n "${user_home}" ] && [ -x "${user_home}/.local/bin/codex" ]; then
+            CODEX_BIN="${user_home}/.local/bin/codex"
+            export CODEX_BIN
+            echo "Codex CLI detected at ${CODEX_BIN}"
+            return 0
+        fi
+    fi
+
+    echo "ERROR: codex CLI not found after install. Ensure it is in PATH or set CODEX_BIN to its full path." >&2
+    exit 1
+}
+
 remove_conflicting_user_triton() {
     if [ -z "${SUDO_USER:-}" ] || [ "${SUDO_USER}" = "root" ]; then
         return 0
@@ -1536,6 +1578,8 @@ apt install -y \
     "linux-tools-${KERNEL_RELEASE}" \
     gdb \
     cmake \
+    rustc \
+    cargo \
     perf-tools-unstable \
     infiniband-diags \
     perftest \
@@ -1545,6 +1589,19 @@ apt install -y \
     libtcmalloc-minimal4 \
     ripgrep \
     sysstat
+
+echo ""
+echo "Installing Rust nightly toolchain (edition2024 support)..."
+if ! command -v rustup >/dev/null 2>&1; then
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    export PATH="${HOME}/.cargo/bin:${PATH}"
+fi
+if command -v rustup >/dev/null 2>&1; then
+    rustup toolchain install nightly
+    rustup default nightly
+else
+    echo "WARNING: rustup not available; edition2024 builds may fail."
+fi
 
 echo ""
 echo "Installing detect-secrets (system-wide)..."
@@ -1570,6 +1627,7 @@ pip_install --no-cache-dir --upgrade --ignore-installed \
     click==8.1.7 \
     pydantic==2.12.4 \
     pydantic-core==2.41.5 \
+    hypothesis==6.138.0 \
     typing-extensions==4.15.0 \
     typer==0.12.0 \
     typer-slim[standard]==0.12.0
@@ -3114,6 +3172,22 @@ else
     echo "NUMA binding script not present, skipping."
 fi
 
+# Test 6: Codex MCP configuration
+echo ""
+echo "Testing Codex MCP configuration..."
+if [ -f "$PROJECT_ROOT/scripts/setup_mcp.sh" ]; then
+    ensure_codex_cli
+    if [ -n "${CODEX_BIN:-}" ]; then
+        "$PROJECT_ROOT/scripts/setup_mcp.sh" --codex-bin "${CODEX_BIN}"
+    else
+        "$PROJECT_ROOT/scripts/setup_mcp.sh"
+    fi
+    echo "Codex MCP configuration working"
+else
+    echo "ERROR: MCP setup script not found at $PROJECT_ROOT/scripts/setup_mcp.sh"
+    exit 1
+fi
+
 echo ""
 echo "All critical tests passed! Setup is working correctly."
 
@@ -3515,7 +3589,25 @@ if ! pip_install --no-cache-dir --upgrade gpt-oss; then
     echo "ERROR: Failed to install gpt-oss package"
     exit 1
 fi
-TRITON_KERNELS_SPEC="${TRITON_KERNELS_SPEC:-triton-kernels==0.1.0}"
+TRITON_KERNELS_SRC_DIR="${TRITON_KERNELS_SRC_DIR:-${PROJECT_ROOT}/third_party/triton-kernels}"
+if [ -z "${TRITON_KERNELS_SPEC:-}" ]; then
+    if [ ! -d "${TRITON_KERNELS_SRC_DIR}" ]; then
+        if ! git clone --depth 1 https://github.com/openai/triton-kernels.git "${TRITON_KERNELS_SRC_DIR}"; then
+            echo "WARNING: Failed to clone https://github.com/openai/triton-kernels.git into ${TRITON_KERNELS_SRC_DIR}."
+        fi
+    fi
+    if [ -f "${TRITON_KERNELS_SRC_DIR}/pyproject.toml" ] || [ -f "${TRITON_KERNELS_SRC_DIR}/setup.py" ]; then
+        TRITON_KERNELS_SPEC="${TRITON_KERNELS_SRC_DIR}"
+    else
+        TRITON_KERNELS_SPEC="git+https://github.com/openai/triton-kernels.git"
+    fi
+fi
+if [[ "${TRITON_KERNELS_SPEC}" == git+https://github.com/openai/triton-kernels.git ]]; then
+    if ! git ls-remote https://github.com/openai/triton-kernels.git >/dev/null 2>&1; then
+        echo "WARNING: Cannot access https://github.com/openai/triton-kernels.git without credentials."
+        echo "         Provide TRITON_KERNELS_SPEC (wheel/URL) or clone into ${TRITON_KERNELS_SRC_DIR}."
+    fi
+fi
 if ! pip_install --no-cache-dir --upgrade --no-deps "${TRITON_KERNELS_SPEC}"; then
     echo "WARNING: Failed to install ${TRITON_KERNELS_SPEC}; gpt_oss chat may not work."
 fi

@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 #include <cstdio>
 #include <iostream>
+#include "../core/common/nvtx_utils.cuh"
 
 __global__ void exampleKernel(const float* input, float* output, int N) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -18,6 +19,7 @@ __global__ void exampleKernel(const float* input, float* output, int N) {
 }
 
 int main() {
+    NVTX_RANGE("main");
     const int N = 1 << 20;
     const size_t bytes = N * sizeof(float);
     
@@ -75,6 +77,7 @@ int main() {
     
     // Initialize input
     for (int i = 0; i < N; ++i) {
+        NVTX_RANGE("setup");
         h_input[i] = static_cast<float>(i % 1000);
     }
     
@@ -90,6 +93,7 @@ int main() {
     // Simple verification
     bool correct = true;
     for (int i = 0; i < 10; ++i) {
+        NVTX_RANGE("verify");
         float expected = sqrtf((h_input[i] * h_input[i] + h_input[i]) * 2.0f);
         if (fabs(h_output[i] - expected) > 1e-5) {
             correct = false;

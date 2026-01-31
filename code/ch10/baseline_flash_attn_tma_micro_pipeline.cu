@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "../core/common/headers/cuda_verify.cuh"
+#include "../core/common/nvtx_utils.cuh"
 
 #ifndef CHECK_CUDA
 #define CHECK_CUDA(call)                                                     \
@@ -129,6 +130,7 @@ bool device_available() {
 }
 
 int main() {
+    NVTX_RANGE("main");
     if (!device_available()) {
         std::printf("SKIP: No CUDA device found.\nTIME_MS=0.0\n");
         return 0;
@@ -151,6 +153,7 @@ int main() {
     std::vector<float> h_k(seq_len * d_head);
     std::vector<float> h_v(seq_len * d_head);
     for (int i = 0; i < seq_len * d_head; ++i) {
+        NVTX_RANGE("transfer_sync");
         h_q[i] = (static_cast<float>((i % 13) - 6)) * 0.01f;
         h_k[i] = (static_cast<float>((i % 17) - 8)) * 0.01f;
         h_v[i] = (static_cast<float>((i % 19) - 9)) * 0.01f;
@@ -180,6 +183,7 @@ int main() {
     constexpr int ITERS = 10;
     CHECK_CUDA(cudaEventRecord(start, stream));
     for (int i = 0; i < ITERS; ++i) {
+        NVTX_RANGE("compute_kernel:flash_attn_baseline_kernel:smem");
         flash_attn_baseline_kernel<<<grid, block, shmem_bytes, stream>>>(
             d_q, d_k, d_v, d_o, seq_len, d_head);
     }
@@ -199,6 +203,7 @@ int main() {
     CHECK_CUDA(cudaMemcpy(h_o.data(), d_o, bytes, cudaMemcpyDeviceToHost));
     double checksum = 0.0;
     for (float v : h_o) {
+        NVTX_RANGE("verify");
         checksum += static_cast<double>(v);
     }
     VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
