@@ -63,6 +63,7 @@ from core.utils.chapter_compare_template import (
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode, BenchmarkConfig
 from core.harness.progress import ProgressEvent, ProgressRecorder
 from core.benchmark.defaults import BenchmarkDefaults, set_defaults, get_defaults
+from core.benchmark.run_manifest import get_gpu_state
 from core.benchmark.run_manifest import reset_gpu_state, get_git_info
 from core.profiling.gpu_telemetry import format_gpu_telemetry, query_gpu_telemetry
 from core.profiling.profiler_config import (
@@ -832,6 +833,127 @@ def log_expectation_evaluation(
     if evaluation.regressed:
         regression_count = len(evaluation.regressions)
         logger.warning(f"      ⚠️ {regression_count} metric(s) regressed from expected values")
+
+
+def log_expectation_delta(
+    logger,
+    *,
+    example_key: str,
+    goal: str,
+    old_entry: Optional[ExpectationEntry],
+    new_entry: ExpectationEntry,
+    update_result: Optional[Any],
+    event_logger: Optional["BenchmarkEventLogger"] = None,
+    chapter: Optional[str] = None,
+) -> None:
+    """Log primary expectation delta for live monitoring during long runs."""
+    goal_norm = (goal or "speed").strip().lower()
+    new_score = new_entry.primary_improvement
+    old_score = old_entry.primary_improvement if old_entry else None
+    delta = None
+    delta_pct = None
+    if old_score is not None:
+        delta = new_score - old_score
+        if old_score != 0:
+            delta_pct = (delta / old_score) * 100
+    status = update_result.status if update_result else "unknown"
+    logger.info(
+        "    Expectations delta: example=%s goal=%s status=%s old_score=%s new_score=%.3f delta=%s delta_pct=%s",
+        example_key,
+        goal_norm,
+        status,
+        f"{old_score:.3f}" if old_score is not None else "none",
+        new_score,
+        f"{delta:.3f}" if delta is not None else "n/a",
+        f"{delta_pct:+.2f}%" if delta_pct is not None else "n/a",
+    )
+    if goal_norm == "memory":
+        logger.info(
+            "    Expectations metrics: baseline_memory_mb=%s optimized_memory_mb=%s memory_savings_ratio=%.3f",
+            f"{new_entry.baseline_memory_mb:.3f}" if new_entry.baseline_memory_mb is not None else "n/a",
+            f"{new_entry.best_optimized_memory_mb:.3f}" if new_entry.best_optimized_memory_mb is not None else "n/a",
+            new_score,
+        )
+    else:
+        logger.info(
+            "    Expectations metrics: baseline_time_ms=%.3f optimized_time_ms=%.3f speedup=%.3f",
+            new_entry.baseline_time_ms,
+            new_entry.best_optimized_time_ms,
+            new_score,
+        )
+    if event_logger:
+        event_logger.emit(
+            "expectation_update",
+            chapter=chapter,
+            example=example_key,
+            goal=goal_norm,
+            status=status,
+            old_score=old_score,
+            new_score=new_score,
+            delta=delta,
+            delta_pct=delta_pct,
+            baseline_time_ms=new_entry.baseline_time_ms,
+            optimized_time_ms=new_entry.best_optimized_time_ms,
+            baseline_memory_mb=new_entry.baseline_memory_mb,
+            optimized_memory_mb=new_entry.best_optimized_memory_mb,
+        )
+
+
+def _json_default(obj: Any) -> Any:
+    if isinstance(obj, Path):
+        return str(obj)
+    if isinstance(obj, (set, tuple)):
+        return list(obj)
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    if hasattr(obj, "__dict__"):
+        return dict(obj.__dict__)
+    return str(obj)
+
+
+class BenchmarkEventLogger:
+    """Append-only JSONL event logger for benchmark runs."""
+
+    def __init__(self, path: Path, run_id: str, logger: Any) -> None:
+        self.path = path
+        self.run_id = run_id
+        self.logger = logger
+        self.seq = 0
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._fh = open(self.path, "a", buffering=1, encoding="utf-8")
+
+    def emit(self, event_type: str, **payload: Any) -> None:
+        self.seq += 1
+        event = {
+            "timestamp": datetime.now().isoformat(),
+            "event_type": event_type,
+            "run_id": self.run_id,
+            "seq": self.seq,
+        }
+        event.update(payload)
+        line = json.dumps(event, default=_json_default)
+        self._fh.write(line + "\n")
+        self._fh.flush()
+        # Log a log-file friendly version for humans and dashboards.
+        self.logger.info("EVENT %s %s", event_type, json.dumps(payload, default=_json_default))
+
+    def close(self) -> None:
+        try:
+            self._fh.close()
+        except Exception:
+            pass
+
+
+def emit_event(
+    event_logger: Optional["BenchmarkEventLogger"],
+    logger: Any,
+    event_type: str,
+    **payload: Any,
+) -> None:
+    if event_logger:
+        event_logger.emit(event_type, **payload)
+        return
+    logger.info("EVENT %s %s", event_type, json.dumps(payload, default=_json_default))
 
 
 def reset_cuda_state():
@@ -1929,6 +2051,7 @@ def profile_cuda_executable(
     output_dir: Path,
     variant: str = "baseline",
     output_stem: Optional[str] = None,
+    timeout_seconds: Optional[int] = None,
 ) -> Optional[Path]:
     """Profile a CUDA executable using nsys.
     
@@ -1965,13 +2088,12 @@ def profile_cuda_executable(
     ]
     
     try:
-        # nsys profiling timeout: 120 seconds (matches benchmark_harness.nsys_timeout_seconds)
-        # nsys needs time to initialize, run executable, and collect profiling data
+        # nsys profiling timeout: align with BenchmarkConfig.nsys_timeout_seconds when provided
         result = subprocess.run(
             nsys_command,
             cwd=str(chapter_dir),
             capture_output=True,
-            timeout=120,  # Increased from 15s - nsys profiling needs more time
+            timeout=timeout_seconds or 120,  # Increased from 15s - nsys profiling needs more time
             check=False
         )
         
@@ -2580,7 +2702,7 @@ def _test_chapter_impl(
     enable_profiling: bool = False,
     profile_type: str = "none",
     profile_output_root: Optional[Path] = None,
-    timeout_multiplier: float = 1.0,
+    timeout_multiplier: float = 3.0,
     reproducible: bool = False,
     cold_start: bool = False,
     iterations: Optional[int] = None,
@@ -2595,6 +2717,8 @@ def _test_chapter_impl(
     ncu_metric_set: str = "auto",
     ncu_replay_mode: Optional[str] = None,
     pm_sampling_interval: Optional[int] = None,
+    nsys_timeout_seconds: Optional[int] = None,
+    ncu_timeout_seconds: Optional[int] = None,
     graph_capture_ratio_threshold: Optional[float] = None,
     graph_capture_memory_threshold_mb: Optional[float] = None,
     launch_via: str = "python",
@@ -2621,6 +2745,7 @@ def _test_chapter_impl(
     use_llm_cache: bool = True,
     llm_explain: bool = False,
     progress_recorder: Optional[ProgressRecorder] = None,
+    event_logger: Optional["BenchmarkEventLogger"] = None,
 ) -> Dict[str, Any]:
     """Test all benchmarks in a chapter and return results.
     
@@ -2654,6 +2779,27 @@ def _test_chapter_impl(
 
     chapter_id = chapter_slug(chapter_dir, repo_root)
     chapter_name = chapter_id.replace("/", "_")
+    emit_event(
+        event_logger,
+        logger,
+        "chapter_start",
+        chapter=chapter_name,
+        chapter_dir=str(chapter_dir),
+        profile_type=profile_type,
+        enable_profiling=enable_profiling,
+        only_examples=only_examples,
+        timeout_multiplier=timeout_multiplier,
+        nsys_timeout_seconds=nsys_timeout_seconds,
+        ncu_timeout_seconds=ncu_timeout_seconds,
+        ncu_metric_set=ncu_metric_set,
+        enforce_environment_validation=enforce_environment_validation,
+        allow_virtualization=allow_virtualization,
+        launch_via=launch_via,
+        nproc_per_node=nproc_per_node,
+        nnodes=nnodes,
+        rdzv_backend=rdzv_backend,
+        rdzv_endpoint=rdzv_endpoint,
+    )
 
     # Set up profiling output directory if profiling is enabled
     profiling_output_dir = None
@@ -2684,6 +2830,14 @@ def _test_chapter_impl(
         
         if profilers:
             logger.info(f"  Profiling enabled: {', '.join(profilers)} profiling files will be saved to {profiling_output_dir}")
+            emit_event(
+                event_logger,
+                logger,
+                "profiling_enabled",
+                chapter=chapter_name,
+                profilers=profilers,
+                profiling_output_dir=str(profiling_output_dir),
+            )
         else:
             logger.warning(f"  Profiling requested but no profilers available - skipping profiling")
             enable_profiling = False
@@ -2704,6 +2858,14 @@ def _test_chapter_impl(
     except ValueError:
         expectation_path = expectations_store.path
     logger.info(f"  Expectations key: {expectation_hardware_key} (file: {expectation_path})")
+    emit_event(
+        event_logger,
+        logger,
+        "expectations_context",
+        chapter=chapter_name,
+        hardware_key=expectation_hardware_key,
+        expectation_file=str(expectation_path),
+    )
     git_commit = None
     try:
         git_commit = get_git_info().get("commit")
@@ -2711,6 +2873,13 @@ def _test_chapter_impl(
         git_commit = None
     
     if not torch.cuda.is_available():
+        emit_event(
+            event_logger,
+            logger,
+            "chapter_skip",
+            chapter=chapter_name,
+            reason="CUDA not available",
+        )
         return {
             'chapter': chapter_name,
             'status': 'skipped',
@@ -2851,6 +3020,10 @@ def _test_chapter_impl(
         env_passthrough=env_passthrough or None,
         target_extra_args=target_extra_args or {},
     )
+    if nsys_timeout_seconds is not None:
+        config_kwargs["nsys_timeout_seconds"] = int(nsys_timeout_seconds)
+    if ncu_timeout_seconds is not None:
+        config_kwargs["ncu_timeout_seconds"] = int(ncu_timeout_seconds)
     if ncu_replay_mode is not None:
         config_kwargs["ncu_replay_mode"] = ncu_replay_mode
         config_kwargs["ncu_replay_mode_override"] = True
@@ -3093,10 +3266,29 @@ def _test_chapter_impl(
         for baseline_path, optimized_paths, example_name in python_pairs:
             logger.info(f"\n  Example: {example_name}")
             logger.info(f"    Baseline: {baseline_path.name}")
+            emit_event(
+                event_logger,
+                logger,
+                "example_start",
+                chapter=chapter_name,
+                example=example_name,
+                example_type="python",
+                baseline_file=baseline_path.name,
+                optimized_files=[p.name for p in optimized_paths],
+            )
         
             if example_name in informational_examples:
                 informational_skipped += 1
                 logger.info("    ℹ️ Informational systems demo - documented for reference, not benchmarked.")
+                emit_event(
+                    event_logger,
+                    logger,
+                    "example_skip",
+                    chapter=chapter_name,
+                    example=example_name,
+                    example_type="python",
+                    reason="informational_demo",
+                )
                 mark_progress(example_name)
                 continue
         
@@ -3130,6 +3322,15 @@ def _test_chapter_impl(
                 result_entry['skip_reason'] = skip_reason
                 benchmark_results.append(result_entry)
                 skipped_distributed += 1  # Count as skipped, not successful
+                emit_event(
+                    event_logger,
+                    logger,
+                    "example_skip",
+                    chapter=chapter_name,
+                    example=example_name,
+                    example_type="python",
+                    reason=skip_reason,
+                )
                 mark_progress(example_name)
                 continue
         
@@ -3150,36 +3351,66 @@ def _test_chapter_impl(
                     result_entry['skip_reason'] = skip_reason
                     benchmark_results.append(result_entry)
                     skipped_hw += 1
+                    emit_event(
+                        event_logger,
+                        logger,
+                        "example_skip",
+                        chapter=chapter_name,
+                        example=example_name,
+                        example_type="python",
+                        reason=skip_reason,
+                    )
                 else:
                     result_entry['error'] = 'Failed to load baseline'
                     benchmark_results.append(result_entry)
                     failed_error += 1
+                    emit_event(
+                        event_logger,
+                        logger,
+                        "example_error",
+                        chapter=chapter_name,
+                        example=example_name,
+                        example_type="python",
+                        error="Failed to load baseline",
+                    )
                 reset_cuda_state()  # Reset after failure or skip
                 if cold_start:
                     reset_gpu_state()
                 mark_progress(example_name)
                 continue
             
-            try:
-                # Use benchmark_with_manifest for reproducibility
-                run_id = f"{chapter_name}_{example_name}_baseline"
-                emit_progress(
-                    "baseline_timing",
-                    step=f"{chapter_name}:{example_name}",
-                    step_detail="baseline timing",
-                )
-                baseline_run, baseline_config = _run_with_config(
-                    baseline_benchmark,
+                try:
+                    # Use benchmark_with_manifest for reproducibility
+                    run_id = f"{chapter_name}_{example_name}_baseline"
+                    baseline_phase_start = time.perf_counter()
+                    emit_event(
+                        event_logger,
+                        logger,
+                        "phase_start",
+                        chapter=chapter_name,
+                        example=example_name,
+                        example_type="python",
+                        phase="baseline_timing",
+                        variant="baseline",
+                        target=baseline_path.name,
+                    )
+                    emit_progress(
+                        "baseline_timing",
+                        step=f"{chapter_name}:{example_name}",
+                        step_detail="baseline timing",
+                    )
+                    baseline_run, baseline_config = _run_with_config(
+                        baseline_benchmark,
                     run_id=run_id,
                     target_label=f"{chapter_name}:{example_name}",
                 )
                 baseline_result = baseline_run.result
                 baseline_errors = list(getattr(baseline_result, "errors", None) or [])
-                if baseline_errors:
-                    skip_reason = None
-                    for msg in baseline_errors:
-                        upper = msg.upper()
-                        if "SKIPPED" not in upper:
+                    if baseline_errors:
+                        skip_reason = None
+                        for msg in baseline_errors:
+                            upper = msg.upper()
+                            if "SKIPPED" not in upper:
                             continue
                         if "SKIPPED:" in msg:
                             skip_reason = msg.split("SKIPPED:", 1)[1].strip()
@@ -3189,20 +3420,64 @@ def _test_chapter_impl(
                         break
 
                     error_message = baseline_errors[0].strip() if baseline_errors else "Benchmark harness reported errors"
-                    if skip_reason:
-                        logger.warning(f"    WARNING: SKIPPED: {skip_reason}")
-                        result_entry["status"] = "skipped"
-                        result_entry["error"] = f"SKIPPED: {skip_reason}"
-                        result_entry["skip_reason"] = skip_reason
-                        benchmark_results.append(result_entry)
-                        skipped_hw += 1
-                    else:
-                        logger.error(f"    Baseline FAILED: {error_message}")
-                        result_entry["status"] = "failed_error"
-                        result_entry["error"] = error_message
-                        benchmark_results.append(result_entry)
-                        failed_error += 1
-                        maybe_reset_gpu_for_error(error_message, f"{chapter_name}:{example_name}:baseline")
+                        if skip_reason:
+                            logger.warning(f"    WARNING: SKIPPED: {skip_reason}")
+                            result_entry["status"] = "skipped"
+                            result_entry["error"] = f"SKIPPED: {skip_reason}"
+                            result_entry["skip_reason"] = skip_reason
+                            benchmark_results.append(result_entry)
+                            skipped_hw += 1
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "phase_end",
+                                chapter=chapter_name,
+                                example=example_name,
+                                example_type="python",
+                                phase="baseline_timing",
+                                variant="baseline",
+                                status="skipped",
+                                duration_s=time.perf_counter() - baseline_phase_start,
+                                error=skip_reason,
+                            )
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "example_skip",
+                                chapter=chapter_name,
+                            example=example_name,
+                            example_type="python",
+                            reason=skip_reason,
+                        )
+                        else:
+                            logger.error(f"    Baseline FAILED: {error_message}")
+                            result_entry["status"] = "failed_error"
+                            result_entry["error"] = error_message
+                            benchmark_results.append(result_entry)
+                            failed_error += 1
+                            maybe_reset_gpu_for_error(error_message, f"{chapter_name}:{example_name}:baseline")
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "phase_end",
+                                chapter=chapter_name,
+                                example=example_name,
+                                example_type="python",
+                                phase="baseline_timing",
+                                variant="baseline",
+                                status="failed",
+                                duration_s=time.perf_counter() - baseline_phase_start,
+                                error=error_message,
+                            )
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "example_error",
+                                chapter=chapter_name,
+                            example=example_name,
+                            example_type="python",
+                            error=error_message,
+                        )
 
                     reset_cuda_state()
                     if cold_start:
@@ -3280,6 +3555,38 @@ def _test_chapter_impl(
                     logger.warning(f"      ⚠️ torch.compile fallback: {compile_error}")
                 elif used_compile:
                     logger.info("      🚀 torch.compile enabled (reduce-overhead)")
+                emit_event(
+                    event_logger,
+                    logger,
+                    "phase_end",
+                    chapter=chapter_name,
+                    example=example_name,
+                    example_type="python",
+                    phase="baseline_timing",
+                    variant="baseline",
+                    status="succeeded",
+                    duration_s=time.perf_counter() - baseline_phase_start,
+                )
+                emit_event(
+                    event_logger,
+                    logger,
+                    "baseline_result",
+                    chapter=chapter_name,
+                    example=example_name,
+                    example_type="python",
+                    time_ms=baseline_time,
+                    median_ms=baseline_timing.median_ms if baseline_timing else None,
+                    min_ms=baseline_timing.min_ms if baseline_timing else None,
+                    max_ms=baseline_timing.max_ms if baseline_timing else None,
+                    std_ms=baseline_timing.std_ms if baseline_timing else None,
+                    percentiles=baseline_timing.percentiles if baseline_timing else None,
+                    p75_ms=result_entry.get("baseline_p75_ms"),
+                    p90_ms=result_entry.get("baseline_p90_ms"),
+                    throughput=serialized_throughput,
+                    memory_mb=baseline_memory.peak_mb if baseline_memory else None,
+                    gpu_metrics=baseline_gpu_metrics,
+                    custom_metrics=baseline_custom_metrics,
+                )
 
                 # Capture baseline verification artifacts from the timing run (no re-execution).
                 if verify_input or verify_output:
@@ -3288,6 +3595,15 @@ def _test_chapter_impl(
                         result_entry["error"] = "Verification system unavailable; cannot validate benchmark correctness"
                         benchmark_results.append(result_entry)
                         failed_error += 1
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "example_error",
+                            chapter=chapter_name,
+                            example=example_name,
+                            example_type="python",
+                            error=result_entry["error"],
+                        )
                         mark_progress(example_name)
                         reset_cuda_state()
                         if cold_start:
@@ -3306,6 +3622,15 @@ def _test_chapter_impl(
                         result_entry["error"] = f"Baseline verification artifacts missing: {exc}"
                         benchmark_results.append(result_entry)
                         failed_error += 1
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "example_error",
+                            chapter=chapter_name,
+                            example=example_name,
+                            example_type="python",
+                            error=result_entry["error"],
+                        )
                         mark_progress(example_name)
                         reset_cuda_state()
                         if cold_start:
@@ -3334,6 +3659,17 @@ def _test_chapter_impl(
                             step_detail="nsys profiling (baseline)",
                         )
                         logger.info(f"      nsys...")
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "profiler_start",
+                            chapter=chapter_name,
+                            example=example_name,
+                            example_type="python",
+                            variant="baseline",
+                            profiler="nsys",
+                            timeout_seconds=baseline_config.get_effective_timeout("nsys"),
+                        )
                         nsys_path = profile_python_benchmark(
                             baseline_benchmark,
                             baseline_path,
@@ -3351,10 +3687,49 @@ def _test_chapter_impl(
                             nsys_metrics = extract_from_nsys_report(nsys_path)
                             if nsys_metrics:
                                 baseline_metrics['nsys'] = nsys_metrics
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "profiler_end",
+                                chapter=chapter_name,
+                                example=example_name,
+                                example_type="python",
+                                variant="baseline",
+                                profiler="nsys",
+                                status="succeeded",
+                                output_path=str(nsys_path),
+                                metrics=nsys_metrics,
+                            )
                         else:
                             profiler_results.append("nsys✗")
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "profiler_end",
+                                chapter=chapter_name,
+                                example=example_name,
+                                example_type="python",
+                                variant="baseline",
+                                profiler="nsys",
+                                status="failed",
+                                output_path=None,
+                                metrics=None,
+                            )
                     else:
                         profiler_results.append("nsys-")
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "profiler_end",
+                            chapter=chapter_name,
+                            example=example_name,
+                            example_type="python",
+                            variant="baseline",
+                            profiler="nsys",
+                            status="skipped",
+                            output_path=None,
+                            metrics=None,
+                        )
                     
                     # ncu profiling
                     if check_ncu_available():
@@ -3364,6 +3739,17 @@ def _test_chapter_impl(
                             step_detail="ncu profiling (baseline)",
                         )
                         logger.info(f"ncu...")
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "profiler_start",
+                            chapter=chapter_name,
+                            example=example_name,
+                            example_type="python",
+                            variant="baseline",
+                            profiler="ncu",
+                            timeout_seconds=baseline_config.get_effective_timeout("ncu"),
+                        )
                         ncu_path = profile_python_benchmark_ncu(
                             baseline_benchmark,
                             baseline_path,
@@ -3381,10 +3767,49 @@ def _test_chapter_impl(
                             ncu_metrics = extract_from_ncu_report(ncu_path)
                             if ncu_metrics:
                                 baseline_metrics['ncu'] = ncu_metrics
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "profiler_end",
+                                chapter=chapter_name,
+                                example=example_name,
+                                example_type="python",
+                                variant="baseline",
+                                profiler="ncu",
+                                status="succeeded",
+                                output_path=str(ncu_path),
+                                metrics=ncu_metrics,
+                            )
                         else:
                             profiler_results.append("ncu✗")
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "profiler_end",
+                                chapter=chapter_name,
+                                example=example_name,
+                                example_type="python",
+                                variant="baseline",
+                                profiler="ncu",
+                                status="failed",
+                                output_path=None,
+                                metrics=None,
+                            )
                     else:
                         profiler_results.append("ncu-")
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "profiler_end",
+                            chapter=chapter_name,
+                            example=example_name,
+                            example_type="python",
+                            variant="baseline",
+                            profiler="ncu",
+                            status="skipped",
+                            output_path=None,
+                            metrics=None,
+                        )
                     
                     # PyTorch profiler
                     if TORCH_PROFILER_AVAILABLE:
@@ -3394,6 +3819,17 @@ def _test_chapter_impl(
                             step_detail="torch profiling (baseline)",
                         )
                         logger.info(f"PyTorch...")
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "profiler_start",
+                            chapter=chapter_name,
+                            example=example_name,
+                            example_type="python",
+                            variant="baseline",
+                            profiler="torch",
+                            timeout_seconds=baseline_config.get_effective_timeout("torch"),
+                        )
                         torch_path = profile_python_benchmark_torch(
                             baseline_benchmark,
                             baseline_path,
@@ -3410,10 +3846,49 @@ def _test_chapter_impl(
                             torch_metrics = extract_from_pytorch_trace(torch_path)
                             if torch_metrics:
                                 baseline_metrics['torch'] = torch_metrics
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "profiler_end",
+                                chapter=chapter_name,
+                                example=example_name,
+                                example_type="python",
+                                variant="baseline",
+                                profiler="torch",
+                                status="succeeded",
+                                output_path=str(torch_path),
+                                metrics=torch_metrics,
+                            )
                         else:
                             profiler_results.append("torch✗")
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "profiler_end",
+                                chapter=chapter_name,
+                                example=example_name,
+                                example_type="python",
+                                variant="baseline",
+                                profiler="torch",
+                                status="failed",
+                                output_path=None,
+                                metrics=None,
+                            )
                     else:
                         profiler_results.append("torch-")
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "profiler_end",
+                            chapter=chapter_name,
+                            example=example_name,
+                            example_type="python",
+                            variant="baseline",
+                            profiler="torch",
+                            status="skipped",
+                            output_path=None,
+                            metrics=None,
+                        )
                     
                     logger.info(f" ({', '.join(profiler_results)})")
                     
@@ -3422,6 +3897,16 @@ def _test_chapter_impl(
                         logger.info(f"      📈 Profiler Metrics:")
                         log_profiler_metrics_table(logger, baseline_metrics, indent="        ")
                         result_entry['baseline_profiler_metrics'] = baseline_metrics
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "profiler_summary",
+                            chapter=chapter_name,
+                            example=example_name,
+                            example_type="python",
+                            variant="baseline",
+                            metrics=baseline_metrics,
+                        )
             except Exception as e:
                 error_str = str(e)
                 skip_reason = check_hardware_limitation(error_str)
@@ -3432,10 +3917,56 @@ def _test_chapter_impl(
                     result_entry['skip_reason'] = skip_reason
                     logger.warning(f"    WARNING: SKIPPED: {skip_reason}")
                     skipped_hw += 1
+                    emit_event(
+                        event_logger,
+                        logger,
+                        "example_skip",
+                        chapter=chapter_name,
+                        example=example_name,
+                        example_type="python",
+                        reason=skip_reason,
+                    )
+                    if "baseline_phase_start" in locals():
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "phase_end",
+                            chapter=chapter_name,
+                            example=example_name,
+                            example_type="python",
+                            phase="baseline_timing",
+                            variant="baseline",
+                            status="skipped",
+                            duration_s=time.perf_counter() - baseline_phase_start,
+                            error=skip_reason,
+                        )
                 else:
                     result_entry['error'] = f'Baseline execution failed: {error_str}'
                     failed_error += 1
                     maybe_reset_gpu_for_error(error_str, f"{chapter_name}:{example_name}:baseline")
+                    emit_event(
+                        event_logger,
+                        logger,
+                        "example_error",
+                        chapter=chapter_name,
+                        example=example_name,
+                        example_type="python",
+                        error=result_entry['error'],
+                    )
+                    if "baseline_phase_start" in locals():
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "phase_end",
+                            chapter=chapter_name,
+                            example=example_name,
+                            example_type="python",
+                            phase="baseline_timing",
+                            variant="baseline",
+                            status="failed",
+                            duration_s=time.perf_counter() - baseline_phase_start,
+                            error=result_entry['error'],
+                        )
                 
                 benchmark_results.append(result_entry)
                 reset_cuda_state()  # Reset after failure
@@ -3463,6 +3994,17 @@ def _test_chapter_impl(
                         'status': 'skipped',
                         'error': skip_reason,
                     })
+                    emit_event(
+                        event_logger,
+                        logger,
+                        "optimization_skip",
+                        chapter=chapter_name,
+                        example=example_name,
+                        example_type="python",
+                        optimization_file=opt_name,
+                        technique=technique,
+                        reason=skip_reason,
+                    )
                     continue
                 
                 optimized_benchmark = load_benchmark(optimized_path)
@@ -3488,6 +4030,17 @@ def _test_chapter_impl(
                             'skip_reason': skip_reason,
                         })
                         skipped_hw += 1
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "optimization_skip",
+                            chapter=chapter_name,
+                            example=example_name,
+                            example_type="python",
+                            optimization_file=opt_name,
+                            technique=technique,
+                            reason=skip_reason,
+                        )
                     else:
                         logger.error(f"    Testing: {opt_name}... FAILED (load)")
                         result_entry['optimizations'].append({
@@ -3497,6 +4050,17 @@ def _test_chapter_impl(
                             'error': 'Failed to load',
                         })
                         failed_error += 1
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "optimization_error",
+                            chapter=chapter_name,
+                            example=example_name,
+                            example_type="python",
+                            optimization_file=opt_name,
+                            technique=technique,
+                            error="Failed to load",
+                        )
                     continue
                 
                 # NOTE: Verification now happens AFTER timing runs complete (see below)
@@ -3511,6 +4075,19 @@ def _test_chapter_impl(
                     
                     # Use benchmark_with_manifest for reproducibility
                     opt_run_id = f"{chapter_name}_{example_name}_optimized_{technique}"
+                    opt_phase_start = time.perf_counter()
+                    emit_event(
+                        event_logger,
+                        logger,
+                        "phase_start",
+                        chapter=chapter_name,
+                        example=example_name,
+                        example_type="python",
+                        phase="optimized_timing",
+                        variant="optimized",
+                        technique=technique,
+                        target=opt_name,
+                    )
                     emit_progress(
                         "optimized_timing",
                         step=f"{chapter_name}:{example_name}",
@@ -3547,6 +4124,31 @@ def _test_chapter_impl(
                                 "skip_reason": skip_reason,
                             })
                             skipped_hw += 1
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "phase_end",
+                                chapter=chapter_name,
+                                example=example_name,
+                                example_type="python",
+                                phase="optimized_timing",
+                                variant="optimized",
+                                technique=technique,
+                                status="skipped",
+                                duration_s=time.perf_counter() - opt_phase_start,
+                                error=skip_reason,
+                            )
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "optimization_skip",
+                                chapter=chapter_name,
+                                example=example_name,
+                                example_type="python",
+                                optimization_file=opt_name,
+                                technique=technique,
+                                reason=skip_reason,
+                            )
                         else:
                             logger.error(f"    Testing: {opt_name}... FAILED ({error_message})")
                             result_entry["optimizations"].append({
@@ -3557,6 +4159,31 @@ def _test_chapter_impl(
                             })
                             failed_error += 1
                             maybe_reset_gpu_for_error(error_message, f"{chapter_name}:{example_name}:{opt_name}")
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "phase_end",
+                                chapter=chapter_name,
+                                example=example_name,
+                                example_type="python",
+                                phase="optimized_timing",
+                                variant="optimized",
+                                technique=technique,
+                                status="failed",
+                                duration_s=time.perf_counter() - opt_phase_start,
+                                error=error_message,
+                            )
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "optimization_error",
+                                chapter=chapter_name,
+                                example=example_name,
+                                example_type="python",
+                                optimization_file=opt_name,
+                                technique=technique,
+                                error=error_message,
+                            )
 
                         reset_cuda_state()
                         if cold_start:
@@ -3584,6 +4211,19 @@ def _test_chapter_impl(
                     optimized_time = optimized_timing.mean_ms if optimized_timing else 0.0
                     # Speedup is always derived from timing values (schema v2 integrity)
                     speedup = baseline_time / optimized_time if optimized_time > 0 else 1.0
+                    emit_event(
+                        event_logger,
+                        logger,
+                        "phase_end",
+                        chapter=chapter_name,
+                        example=example_name,
+                        example_type="python",
+                        phase="optimized_timing",
+                        variant="optimized",
+                        technique=technique,
+                        status="succeeded",
+                        duration_s=time.perf_counter() - opt_phase_start,
+                    )
 
                     # Track scenario speedup separately in custom_metrics (not replacing timing speedup)
                     scenario_speedup = None
@@ -3797,6 +4437,18 @@ def _test_chapter_impl(
                                 step_detail=f"nsys profiling (optimized {technique})",
                             )
                             logger.info(f"      nsys...")
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "profiler_start",
+                                chapter=chapter_name,
+                                example=example_name,
+                                example_type="python",
+                                variant="optimized",
+                                profiler="nsys",
+                                technique=technique,
+                                timeout_seconds=optimized_config.get_effective_timeout("nsys"),
+                            )
                             nsys_path = profile_python_benchmark(
                                 optimized_benchmark,
                                 optimized_path,
@@ -3813,10 +4465,52 @@ def _test_chapter_impl(
                                 nsys_metrics = extract_from_nsys_report(nsys_path)
                                 if nsys_metrics:
                                     optimized_metrics['nsys'] = nsys_metrics
+                                emit_event(
+                                    event_logger,
+                                    logger,
+                                    "profiler_end",
+                                    chapter=chapter_name,
+                                    example=example_name,
+                                    example_type="python",
+                                    variant="optimized",
+                                    profiler="nsys",
+                                    technique=technique,
+                                    status="succeeded",
+                                    output_path=str(nsys_path),
+                                    metrics=nsys_metrics,
+                                )
                             else:
                                 profiler_results.append("nsys✗")
+                                emit_event(
+                                    event_logger,
+                                    logger,
+                                    "profiler_end",
+                                    chapter=chapter_name,
+                                    example=example_name,
+                                    example_type="python",
+                                    variant="optimized",
+                                    profiler="nsys",
+                                    technique=technique,
+                                    status="failed",
+                                    output_path=None,
+                                    metrics=None,
+                                )
                         else:
                             profiler_results.append("nsys-")
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "profiler_end",
+                                chapter=chapter_name,
+                                example=example_name,
+                                example_type="python",
+                                variant="optimized",
+                                profiler="nsys",
+                                technique=technique,
+                                status="skipped",
+                                output_path=None,
+                                metrics=None,
+                            )
                         
                         # ncu profiling
                         if check_ncu_available():
@@ -3826,6 +4520,18 @@ def _test_chapter_impl(
                                 step_detail=f"ncu profiling (optimized {technique})",
                             )
                             logger.info(f"ncu...")
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "profiler_start",
+                                chapter=chapter_name,
+                                example=example_name,
+                                example_type="python",
+                                variant="optimized",
+                                profiler="ncu",
+                                technique=technique,
+                                timeout_seconds=optimized_config.get_effective_timeout("ncu"),
+                            )
                             ncu_path = profile_python_benchmark_ncu(
                                 optimized_benchmark,
                                 optimized_path,
@@ -3842,10 +4548,52 @@ def _test_chapter_impl(
                                 ncu_metrics = extract_from_ncu_report(ncu_path)
                                 if ncu_metrics:
                                     optimized_metrics['ncu'] = ncu_metrics
+                                emit_event(
+                                    event_logger,
+                                    logger,
+                                    "profiler_end",
+                                    chapter=chapter_name,
+                                    example=example_name,
+                                    example_type="python",
+                                    variant="optimized",
+                                    profiler="ncu",
+                                    technique=technique,
+                                    status="succeeded",
+                                    output_path=str(ncu_path),
+                                    metrics=ncu_metrics,
+                                )
                             else:
                                 profiler_results.append("ncu✗")
+                                emit_event(
+                                    event_logger,
+                                    logger,
+                                    "profiler_end",
+                                    chapter=chapter_name,
+                                    example=example_name,
+                                    example_type="python",
+                                    variant="optimized",
+                                    profiler="ncu",
+                                    technique=technique,
+                                    status="failed",
+                                    output_path=None,
+                                    metrics=None,
+                                )
                         else:
                             profiler_results.append("ncu-")
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "profiler_end",
+                                chapter=chapter_name,
+                                example=example_name,
+                                example_type="python",
+                                variant="optimized",
+                                profiler="ncu",
+                                technique=technique,
+                                status="skipped",
+                                output_path=None,
+                                metrics=None,
+                            )
                         
                         # PyTorch profiler
                         if TORCH_PROFILER_AVAILABLE:
@@ -3855,6 +4603,18 @@ def _test_chapter_impl(
                                 step_detail=f"torch profiling (optimized {technique})",
                             )
                             logger.info(f"PyTorch...")
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "profiler_start",
+                                chapter=chapter_name,
+                                example=example_name,
+                                example_type="python",
+                                variant="optimized",
+                                profiler="torch",
+                                technique=technique,
+                                timeout_seconds=optimized_config.get_effective_timeout("torch"),
+                            )
                             torch_path = profile_python_benchmark_torch(
                                 optimized_benchmark,
                                 optimized_path,
@@ -3870,10 +4630,52 @@ def _test_chapter_impl(
                                 torch_metrics = extract_from_pytorch_trace(torch_path)
                                 if torch_metrics:
                                     optimized_metrics['torch'] = torch_metrics
+                                emit_event(
+                                    event_logger,
+                                    logger,
+                                    "profiler_end",
+                                    chapter=chapter_name,
+                                    example=example_name,
+                                    example_type="python",
+                                    variant="optimized",
+                                    profiler="torch",
+                                    technique=technique,
+                                    status="succeeded",
+                                    output_path=str(torch_path),
+                                    metrics=torch_metrics,
+                                )
                             else:
                                 profiler_results.append("torch✗")
+                                emit_event(
+                                    event_logger,
+                                    logger,
+                                    "profiler_end",
+                                    chapter=chapter_name,
+                                    example=example_name,
+                                    example_type="python",
+                                    variant="optimized",
+                                    profiler="torch",
+                                    technique=technique,
+                                    status="failed",
+                                    output_path=None,
+                                    metrics=None,
+                                )
                         else:
                             profiler_results.append("torch-")
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "profiler_end",
+                                chapter=chapter_name,
+                                example=example_name,
+                                example_type="python",
+                                variant="optimized",
+                                profiler="torch",
+                                technique=technique,
+                                status="skipped",
+                                output_path=None,
+                                metrics=None,
+                            )
                         
                         logger.info(f" ({', '.join(profiler_results)})")
                         if baseline_profile_paths:
@@ -3886,8 +4688,42 @@ def _test_chapter_impl(
                             logger.info(f"        📈 Profiler Metrics:")
                             log_profiler_metrics_table(logger, optimized_metrics, indent="          ")
                             opt_result['optimized_profiler_metrics'] = optimized_metrics
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "profiler_summary",
+                                chapter=chapter_name,
+                                example=example_name,
+                                example_type="python",
+                                variant="optimized",
+                                technique=technique,
+                                metrics=optimized_metrics,
+                            )
                     
                     result_entry['optimizations'].append(opt_result)
+                    emit_event(
+                        event_logger,
+                        logger,
+                        "optimization_result",
+                        chapter=chapter_name,
+                        example=example_name,
+                        example_type="python",
+                        optimization_file=opt_name,
+                        technique=technique,
+                        status=opt_result.get("status"),
+                        time_ms=opt_result.get("time_ms"),
+                        speedup=opt_result.get("speedup"),
+                        memory_mb=opt_result.get("memory_mb"),
+                        memory_savings_pct=opt_result.get("memory_savings_pct"),
+                        p75_ms=opt_result.get("p75_ms"),
+                        p90_ms=opt_result.get("p90_ms"),
+                        throughput=opt_result.get("throughput"),
+                        gpu_metrics=opt_result.get("gpu_metrics"),
+                        custom_metrics=opt_result.get("custom_metrics"),
+                        profiler_metrics=opt_result.get("optimized_profiler_metrics"),
+                        verification=opt_result.get("verification"),
+                        input_verification=opt_result.get("input_verification"),
+                    )
                     
                     if opt_result.get("status") == "succeeded" and speedup > result_entry['best_speedup']:
                         result_entry['best_speedup'] = speedup
@@ -3975,6 +4811,21 @@ def _test_chapter_impl(
                             'error': error_full,  # Store full error with type
                         })
                         maybe_reset_gpu_for_error(error_full, f"{chapter_name}:{example_name}:{opt_name}")
+                    if "opt_phase_start" in locals():
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "phase_end",
+                            chapter=chapter_name,
+                            example=example_name,
+                            example_type="python",
+                            phase="optimized_timing",
+                            variant="optimized",
+                            technique=technique,
+                            status="skipped" if skip_reason else "failed",
+                            duration_s=time.perf_counter() - opt_phase_start,
+                            error=skip_reason or error_full,
+                        )
                     
                     reset_cuda_state()  # Reset after failure
                     # Additional cleanup for cold start mode
@@ -3998,6 +4849,21 @@ def _test_chapter_impl(
                 optimization_goal = (result_entry.get("optimization_goal") or "speed").strip().lower()
                 best_opt = select_best_optimization(result_entry.get("optimizations", []), goal=optimization_goal)
                 if best_opt:
+                    emit_event(
+                        event_logger,
+                        logger,
+                        "best_optimization",
+                        chapter=chapter_name,
+                        example=example_name,
+                        example_type="python",
+                        optimization_goal=optimization_goal,
+                        technique=best_opt.get("technique") or best_opt.get("file"),
+                        optimization_file=best_opt.get("file"),
+                        speedup=best_opt.get("speedup"),
+                        time_ms=best_opt.get("time_ms"),
+                        memory_mb=best_opt.get("memory_mb"),
+                        throughput=best_opt.get("throughput"),
+                    )
                     if verify_input and isinstance(best_opt.get("input_verification"), dict):
                         result_entry["input_verification"] = best_opt.get("input_verification")
                     if verify_output and isinstance(best_opt.get("verification"), dict):
@@ -4009,6 +4875,7 @@ def _test_chapter_impl(
                         step=f"{chapter_name}:{example_name}",
                         step_detail="expectations update",
                     )
+                    old_entry = expectations_store.get_entry(example_key)
                     provenance = RunProvenance(
                         git_commit=git_commit or "unknown",
                         hardware_key=expectation_hardware_key,
@@ -4046,6 +4913,16 @@ def _test_chapter_impl(
                             "validation_issues": [issue.to_dict() for issue in update_result.validation_issues],
                         }
                     logger.info("    Expectations: %s", update_result.message)
+                    log_expectation_delta(
+                        logger,
+                        example_key=example_key,
+                        goal=optimization_goal,
+                        old_entry=old_entry,
+                        new_entry=entry,
+                        update_result=update_result,
+                        event_logger=event_logger,
+                        chapter=chapter_name,
+                    )
 
                 is_rejected_regression = bool(
                     update_result
@@ -4085,6 +4962,19 @@ def _test_chapter_impl(
                     result_entry['error'] = 'Baseline or optimization failed'
                 failed_error += 1
             
+            emit_event(
+                event_logger,
+                logger,
+                "example_end",
+                chapter=chapter_name,
+                example=example_name,
+                example_type="python",
+                status=result_entry.get("status"),
+                best_speedup=result_entry.get("best_speedup"),
+                best_memory_savings_pct=result_entry.get("best_memory_savings_pct"),
+                optimization_goal=result_entry.get("optimization_goal"),
+                error=result_entry.get("error"),
+            )
             benchmark_results.append(result_entry)
             mark_progress(example_name)
             
@@ -4097,10 +4987,29 @@ def _test_chapter_impl(
         # Process CUDA benchmarks
         for baseline_cu_path, optimized_cu_paths, example_name in cuda_pairs:
             logger.info(f"\n  Example (CUDA): {example_name}")
+            emit_event(
+                event_logger,
+                logger,
+                "example_start",
+                chapter=chapter_name,
+                example=example_name,
+                example_type="cuda",
+                baseline_file=baseline_cu_path.name,
+                optimized_files=[p.name for p in optimized_cu_paths],
+            )
 
             if example_name in informational_examples:
                 informational_skipped += 1
                 logger.info("    ℹ️ Informational systems demo - documented for reference, not benchmarked.")
+                emit_event(
+                    event_logger,
+                    logger,
+                    "example_skip",
+                    chapter=chapter_name,
+                    example=example_name,
+                    example_type="cuda",
+                    reason="informational_demo",
+                )
                 mark_progress(example_name)
                 continue
 
@@ -4130,6 +5039,15 @@ def _test_chapter_impl(
                 result_entry['skip_reason'] = reason
                 benchmark_results.append(result_entry)
                 skipped_hw += 1
+                emit_event(
+                    event_logger,
+                    logger,
+                    "example_skip",
+                    chapter=chapter_name,
+                    example=example_name,
+                    example_type="cuda",
+                    reason=reason,
+                )
                 mark_progress(example_name)
                 reset_cuda_state()  # Reset after skip to keep state clean
                 if cold_start:
@@ -4144,6 +5062,18 @@ def _test_chapter_impl(
             logger.info(
                 f"    Running baseline executable {baseline_executable.name} "
                 f"(runs={cuda_iterations}, timeout={cuda_timeout}s per run)"
+            )
+            baseline_phase_start = time.perf_counter()
+            emit_event(
+                event_logger,
+                logger,
+                "phase_start",
+                chapter=chapter_name,
+                example=example_name,
+                example_type="cuda",
+                phase="baseline_timing",
+                variant="baseline",
+                target=baseline_executable.name,
             )
             emit_progress(
                 "baseline_timing",
@@ -4160,6 +5090,19 @@ def _test_chapter_impl(
                 result_entry['error'] = f'Baseline execution failed or timed out ({cuda_timeout}s timeout)'
                 benchmark_results.append(result_entry)
                 failed_error += 1
+                emit_event(
+                    event_logger,
+                    logger,
+                    "phase_end",
+                    chapter=chapter_name,
+                    example=example_name,
+                    example_type="cuda",
+                    phase="baseline_timing",
+                    variant="baseline",
+                    status="failed",
+                    duration_s=time.perf_counter() - baseline_phase_start,
+                    error=result_entry['error'],
+                )
                 mark_progress(example_name)
                 reset_cuda_state()  # Reset after failure
                 if cold_start:
@@ -4173,6 +5116,28 @@ def _test_chapter_impl(
                 result_entry['skip_reason'] = reason
                 benchmark_results.append(result_entry)
                 skipped_hw += 1
+                emit_event(
+                    event_logger,
+                    logger,
+                    "example_skip",
+                    chapter=chapter_name,
+                    example=example_name,
+                    example_type="cuda",
+                    reason=reason,
+                )
+                emit_event(
+                    event_logger,
+                    logger,
+                    "phase_end",
+                    chapter=chapter_name,
+                    example=example_name,
+                    example_type="cuda",
+                    phase="baseline_timing",
+                    variant="baseline",
+                    status="skipped",
+                    duration_s=time.perf_counter() - baseline_phase_start,
+                    error=reason,
+                )
                 mark_progress(example_name)
                 reset_cuda_state()
                 if cold_start:
@@ -4207,6 +5172,35 @@ def _test_chapter_impl(
             if baseline_gpu_metrics:
                 result_entry['baseline_gpu_metrics'] = baseline_gpu_metrics
                 logger.info(f"      🌡️ GPU Telemetry: {format_gpu_telemetry(baseline_gpu_metrics)}")
+            emit_event(
+                event_logger,
+                logger,
+                "phase_end",
+                chapter=chapter_name,
+                example=example_name,
+                example_type="cuda",
+                phase="baseline_timing",
+                variant="baseline",
+                status="succeeded",
+                duration_s=time.perf_counter() - baseline_phase_start,
+            )
+            emit_event(
+                event_logger,
+                logger,
+                "baseline_result",
+                chapter=chapter_name,
+                example=example_name,
+                example_type="cuda",
+                time_ms=baseline_time,
+                median_ms=baseline_result.median_ms,
+                min_ms=baseline_result.min_ms,
+                max_ms=baseline_result.max_ms,
+                std_ms=baseline_result.std_ms,
+                percentiles=baseline_result.percentiles,
+                p75_ms=result_entry.get("baseline_p75_ms"),
+                p90_ms=result_entry.get("baseline_p90_ms"),
+                gpu_metrics=baseline_gpu_metrics,
+            )
 
             # Profile baseline if profiling is enabled (nsys, ncu)
             baseline_profile_paths: Dict[str, Optional[Path]] = {}
@@ -4230,12 +5224,24 @@ def _test_chapter_impl(
                         step_detail="nsys profiling (cuda baseline)",
                     )
                     logger.info(f"      nsys...")
+                    emit_event(
+                        event_logger,
+                        logger,
+                        "profiler_start",
+                        chapter=chapter_name,
+                        example=example_name,
+                        example_type="cuda",
+                        variant="baseline",
+                        profiler="nsys",
+                        timeout_seconds=base_config.get_effective_timeout("nsys"),
+                    )
                     nsys_path = profile_cuda_executable(
                         baseline_executable,
                         chapter_dir,
                         baseline_profile_dir,
                         variant="baseline",
                         output_stem=example_profile_stem,
+                        timeout_seconds=base_config.get_effective_timeout("nsys"),
                     )
                     if nsys_path:
                         result_entry['baseline_nsys_rep'] = str(nsys_path.relative_to(repo_root))
@@ -4245,10 +5251,49 @@ def _test_chapter_impl(
                         nsys_metrics = extract_from_nsys_report(nsys_path)
                         if nsys_metrics:
                             baseline_metrics['nsys'] = nsys_metrics
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "profiler_end",
+                            chapter=chapter_name,
+                            example=example_name,
+                            example_type="cuda",
+                            variant="baseline",
+                            profiler="nsys",
+                            status="succeeded",
+                            output_path=str(nsys_path),
+                            metrics=nsys_metrics,
+                        )
                     else:
                         profiler_results.append("nsys✗")
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "profiler_end",
+                            chapter=chapter_name,
+                            example=example_name,
+                            example_type="cuda",
+                            variant="baseline",
+                            profiler="nsys",
+                            status="failed",
+                            output_path=None,
+                            metrics=None,
+                        )
                 else:
                     profiler_results.append("nsys-")
+                    emit_event(
+                        event_logger,
+                        logger,
+                        "profiler_end",
+                        chapter=chapter_name,
+                        example=example_name,
+                        example_type="cuda",
+                        variant="baseline",
+                        profiler="nsys",
+                        status="skipped",
+                        output_path=None,
+                        metrics=None,
+                    )
 
                 # ncu profiling
                 if check_ncu_available():
@@ -4258,6 +5303,17 @@ def _test_chapter_impl(
                         step_detail="ncu profiling (cuda baseline)",
                     )
                     logger.info(f"      ncu...")
+                    emit_event(
+                        event_logger,
+                        logger,
+                        "profiler_start",
+                        chapter=chapter_name,
+                        example=example_name,
+                        example_type="cuda",
+                        variant="baseline",
+                        profiler="ncu",
+                        timeout_seconds=base_config.get_effective_timeout("ncu"),
+                    )
                     ncu_path = profile_cuda_executable_ncu(
                         baseline_executable,
                         chapter_dir,
@@ -4274,10 +5330,49 @@ def _test_chapter_impl(
                         ncu_metrics = extract_from_ncu_report(ncu_path)
                         if ncu_metrics:
                             baseline_metrics['ncu'] = ncu_metrics
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "profiler_end",
+                            chapter=chapter_name,
+                            example=example_name,
+                            example_type="cuda",
+                            variant="baseline",
+                            profiler="ncu",
+                            status="succeeded",
+                            output_path=str(ncu_path),
+                            metrics=ncu_metrics,
+                        )
                     else:
                         profiler_results.append("ncu✗")
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "profiler_end",
+                            chapter=chapter_name,
+                            example=example_name,
+                            example_type="cuda",
+                            variant="baseline",
+                            profiler="ncu",
+                            status="failed",
+                            output_path=None,
+                            metrics=None,
+                        )
                 else:
                     profiler_results.append("ncu-")
+                    emit_event(
+                        event_logger,
+                        logger,
+                        "profiler_end",
+                        chapter=chapter_name,
+                        example=example_name,
+                        example_type="cuda",
+                        variant="baseline",
+                        profiler="ncu",
+                        status="skipped",
+                        output_path=None,
+                        metrics=None,
+                    )
 
                 logger.info(f" ({', '.join(profiler_results)})")
 
@@ -4291,6 +5386,16 @@ def _test_chapter_impl(
                         for key, value in baseline_metrics['ncu'].items():
                             logger.info(f"        ncu.{key}: {value:.2f}")
                     result_entry['baseline_profiler_metrics'] = baseline_metrics
+                    emit_event(
+                        event_logger,
+                        logger,
+                        "profiler_summary",
+                        chapter=chapter_name,
+                        example=example_name,
+                        example_type="cuda",
+                        variant="baseline",
+                        metrics=baseline_metrics,
+                    )
 
             # Test each optimization
             for optimized_cu_path in optimized_cu_paths:
@@ -4311,6 +5416,17 @@ def _test_chapter_impl(
                         'skip_reason': reason,
                     })
                     skipped_hw += 1
+                    emit_event(
+                        event_logger,
+                        logger,
+                        "optimization_skip",
+                        chapter=chapter_name,
+                        example=example_name,
+                        example_type="cuda",
+                        optimization_file=opt_name,
+                        technique=technique,
+                        reason=reason,
+                    )
                     continue
 
                 optimized_executable = find_cuda_executable(optimized_cu_path, chapter_dir)
@@ -4327,11 +5443,35 @@ def _test_chapter_impl(
                         'error': reason,
                     })
                     skipped_hw += 1
+                    emit_event(
+                        event_logger,
+                        logger,
+                        "optimization_skip",
+                        chapter=chapter_name,
+                        example=example_name,
+                        example_type="cuda",
+                        optimization_file=opt_name,
+                        technique=technique,
+                        reason=reason,
+                    )
                     continue
 
                 logger.info(
                     f"    Running {opt_name} "
                     f"(runs={cuda_iterations}, timeout={cuda_timeout}s per run)"
+                )
+                opt_phase_start = time.perf_counter()
+                emit_event(
+                    event_logger,
+                    logger,
+                    "phase_start",
+                    chapter=chapter_name,
+                    example=example_name,
+                    example_type="cuda",
+                    phase="optimized_timing",
+                    variant="optimized",
+                    technique=technique,
+                    target=opt_name,
                 )
                 emit_progress(
                     "optimized_timing",
@@ -4353,6 +5493,31 @@ def _test_chapter_impl(
                         'error': f'Execution failed or timed out ({cuda_timeout}s timeout)',
                     })
                     failed_error += 1
+                    emit_event(
+                        event_logger,
+                        logger,
+                        "optimization_error",
+                        chapter=chapter_name,
+                        example=example_name,
+                        example_type="cuda",
+                        optimization_file=opt_name,
+                        technique=technique,
+                        error=f'Execution failed or timed out ({cuda_timeout}s timeout)',
+                    )
+                    emit_event(
+                        event_logger,
+                        logger,
+                        "phase_end",
+                        chapter=chapter_name,
+                        example=example_name,
+                        example_type="cuda",
+                        phase="optimized_timing",
+                        variant="optimized",
+                        technique=technique,
+                        status="failed",
+                        duration_s=time.perf_counter() - opt_phase_start,
+                        error=f'Execution failed or timed out ({cuda_timeout}s timeout)',
+                    )
                     continue
                 if optimized_result.skip_reason:
                     reason = optimized_result.skip_reason
@@ -4365,10 +5530,48 @@ def _test_chapter_impl(
                         'error': f'HARDWARE/SOFTWARE LIMITATION: {reason}',
                     })
                     skipped_hw += 1
+                    emit_event(
+                        event_logger,
+                        logger,
+                        "optimization_skip",
+                        chapter=chapter_name,
+                        example=example_name,
+                        example_type="cuda",
+                        optimization_file=opt_name,
+                        technique=technique,
+                        reason=reason,
+                    )
+                    emit_event(
+                        event_logger,
+                        logger,
+                        "phase_end",
+                        chapter=chapter_name,
+                        example=example_name,
+                        example_type="cuda",
+                        phase="optimized_timing",
+                        variant="optimized",
+                        technique=technique,
+                        status="skipped",
+                        duration_s=time.perf_counter() - opt_phase_start,
+                        error=reason,
+                    )
                     continue
 
                 optimized_time = optimized_result.mean_ms
                 speedup = baseline_time / optimized_time if optimized_time > 0 else 1.0
+                emit_event(
+                    event_logger,
+                    logger,
+                    "phase_end",
+                    chapter=chapter_name,
+                    example=example_name,
+                    example_type="cuda",
+                    phase="optimized_timing",
+                    variant="optimized",
+                    technique=technique,
+                    status="succeeded",
+                    duration_s=time.perf_counter() - opt_phase_start,
+                )
 
                 # Enhanced metrics display with emojis and formatting (same as Python)
                 emoji = "🚀" if speedup > 1.0 else "⚠️" if speedup < 1.0 else "="
@@ -4449,12 +5652,25 @@ def _test_chapter_impl(
                             step_detail=f"nsys profiling (cuda optimized {technique})",
                         )
                         logger.info(f"      nsys...")
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "profiler_start",
+                            chapter=chapter_name,
+                            example=example_name,
+                            example_type="cuda",
+                            variant="optimized",
+                            profiler="nsys",
+                            technique=technique,
+                            timeout_seconds=base_config.get_effective_timeout("nsys"),
+                        )
                         nsys_path = profile_cuda_executable(
                             optimized_executable,
                             chapter_dir,
                             pair_dir,
                             variant="optimized",
                             output_stem=example_profile_stem,
+                            timeout_seconds=base_config.get_effective_timeout("nsys"),
                         )
                         if nsys_path:
                             opt_result['optimized_nsys_rep'] = str(nsys_path.relative_to(repo_root))
@@ -4463,10 +5679,52 @@ def _test_chapter_impl(
                             nsys_metrics = extract_from_nsys_report(nsys_path)
                             if nsys_metrics:
                                 optimized_metrics['nsys'] = nsys_metrics
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "profiler_end",
+                                chapter=chapter_name,
+                                example=example_name,
+                                example_type="cuda",
+                                variant="optimized",
+                                profiler="nsys",
+                                technique=technique,
+                                status="succeeded",
+                                output_path=str(nsys_path),
+                                metrics=nsys_metrics,
+                            )
                         else:
                             profiler_results.append("nsys✗")
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "profiler_end",
+                                chapter=chapter_name,
+                                example=example_name,
+                                example_type="cuda",
+                                variant="optimized",
+                                profiler="nsys",
+                                technique=technique,
+                                status="failed",
+                                output_path=None,
+                                metrics=None,
+                            )
                     else:
                         profiler_results.append("nsys-")
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "profiler_end",
+                            chapter=chapter_name,
+                            example=example_name,
+                            example_type="cuda",
+                            variant="optimized",
+                            profiler="nsys",
+                            technique=technique,
+                            status="skipped",
+                            output_path=None,
+                            metrics=None,
+                        )
 
                     # ncu profiling
                     if check_ncu_available():
@@ -4476,6 +5734,18 @@ def _test_chapter_impl(
                             step_detail=f"ncu profiling (cuda optimized {technique})",
                         )
                         logger.info("ncu...")
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "profiler_start",
+                            chapter=chapter_name,
+                            example=example_name,
+                            example_type="cuda",
+                            variant="optimized",
+                            profiler="ncu",
+                            technique=technique,
+                            timeout_seconds=base_config.get_effective_timeout("ncu"),
+                        )
                         ncu_path = profile_cuda_executable_ncu(
                             optimized_executable,
                             chapter_dir,
@@ -4491,10 +5761,52 @@ def _test_chapter_impl(
                             ncu_metrics = extract_from_ncu_report(ncu_path)
                             if ncu_metrics:
                                 optimized_metrics['ncu'] = ncu_metrics
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "profiler_end",
+                                chapter=chapter_name,
+                                example=example_name,
+                                example_type="cuda",
+                                variant="optimized",
+                                profiler="ncu",
+                                technique=technique,
+                                status="succeeded",
+                                output_path=str(ncu_path),
+                                metrics=ncu_metrics,
+                            )
                         else:
                             profiler_results.append("ncu✗")
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "profiler_end",
+                                chapter=chapter_name,
+                                example=example_name,
+                                example_type="cuda",
+                                variant="optimized",
+                                profiler="ncu",
+                                technique=technique,
+                                status="failed",
+                                output_path=None,
+                                metrics=None,
+                            )
                     else:
                         profiler_results.append("ncu-")
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "profiler_end",
+                            chapter=chapter_name,
+                            example=example_name,
+                            example_type="cuda",
+                            variant="optimized",
+                            profiler="ncu",
+                            technique=technique,
+                            status="skipped",
+                            output_path=None,
+                            metrics=None,
+                        )
 
                     logger.info(f" ({', '.join(profiler_results)})")
                     if baseline_profile_paths:
@@ -4507,8 +5819,36 @@ def _test_chapter_impl(
                         logger.info("        📈 Profiler Metrics:")
                         log_profiler_metrics_table(logger, optimized_metrics, indent="          ")
                         opt_result['optimized_profiler_metrics'] = optimized_metrics
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "profiler_summary",
+                            chapter=chapter_name,
+                            example=example_name,
+                            example_type="cuda",
+                            variant="optimized",
+                            technique=technique,
+                            metrics=optimized_metrics,
+                        )
 
                 result_entry['optimizations'].append(opt_result)
+                emit_event(
+                    event_logger,
+                    logger,
+                    "optimization_result",
+                    chapter=chapter_name,
+                    example=example_name,
+                    example_type="cuda",
+                    optimization_file=opt_name,
+                    technique=technique,
+                    status=opt_result.get("status"),
+                    time_ms=opt_result.get("time_ms"),
+                    speedup=opt_result.get("speedup"),
+                    p75_ms=opt_result.get("p75_ms"),
+                    p90_ms=opt_result.get("p90_ms"),
+                    gpu_metrics=opt_result.get("gpu_metrics"),
+                    profiler_metrics=opt_result.get("optimized_profiler_metrics"),
+                )
 
                 if speedup > result_entry['best_speedup']:
                     result_entry['best_speedup'] = speedup
@@ -4532,11 +5872,25 @@ def _test_chapter_impl(
                 optimization_goal = (result_entry.get("optimization_goal") or "speed").strip().lower()
                 best_opt = select_best_optimization(result_entry.get("optimizations", []), goal=optimization_goal)
                 if best_opt:
+                    emit_event(
+                        event_logger,
+                        logger,
+                        "best_optimization",
+                        chapter=chapter_name,
+                        example=example_name,
+                        example_type="cuda",
+                        optimization_goal=optimization_goal,
+                        technique=best_opt.get("technique") or best_opt.get("file"),
+                        optimization_file=best_opt.get("file"),
+                        speedup=best_opt.get("speedup"),
+                        time_ms=best_opt.get("time_ms"),
+                    )
                     emit_progress(
                         "expectations",
                         step=f"{chapter_name}:{example_name}",
                         step_detail="expectations update",
                     )
+                    old_entry = expectations_store.get_entry(example_key)
                     provenance = RunProvenance(
                         git_commit=git_commit or "unknown",
                         hardware_key=expectation_hardware_key,
@@ -4574,6 +5928,16 @@ def _test_chapter_impl(
                             "validation_issues": [issue.to_dict() for issue in update_result.validation_issues],
                         }
                     logger.info("    Expectations: %s", update_result.message)
+                    log_expectation_delta(
+                        logger,
+                        example_key=example_key,
+                        goal=optimization_goal,
+                        old_entry=old_entry,
+                        new_entry=entry,
+                        update_result=update_result,
+                        event_logger=event_logger,
+                        chapter=chapter_name,
+                    )
 
                 is_rejected_regression = bool(
                     update_result
@@ -4620,6 +5984,18 @@ def _test_chapter_impl(
                     result_entry['error'] = 'Baseline or optimization failed'
                 failed_error += 1
 
+            emit_event(
+                event_logger,
+                logger,
+                "example_end",
+                chapter=chapter_name,
+                example=example_name,
+                example_type="cuda",
+                status=result_entry.get("status"),
+                best_speedup=result_entry.get("best_speedup"),
+                optimization_goal=result_entry.get("optimization_goal"),
+                error=result_entry.get("error"),
+            )
             benchmark_results.append(result_entry)
             mark_progress(example_name)
 
@@ -4969,6 +6345,24 @@ def _test_chapter_impl(
     else:
         logger.info("No successful optimizations exceeded baseline performance")
     logger.info("-" * 80)
+    emit_event(
+        event_logger,
+        logger,
+        "chapter_end",
+        chapter=chapter_name,
+        status="completed",
+        total_benchmarks=len(benchmark_results),
+        successful=successful,
+        failed=total_failed,
+        failed_error=failed_error,
+        failed_regression=failed_regression,
+        skipped_hardware=skipped_hw,
+        skipped_distributed=skipped_distributed,
+        informational=informational_skipped,
+        average_speedup=avg_speedup,
+        max_speedup=max_speedup,
+        min_speedup=min_speedup,
+    )
     
     result = {
         'chapter': chapter_name,
@@ -6440,7 +7834,7 @@ def test_chapter(
     enable_profiling: bool = False,
     profile_type: str = "none",
     profile_output_root: Optional[Path] = None,
-    timeout_multiplier: float = 1.0,
+    timeout_multiplier: float = 3.0,
     reproducible: bool = False,
     cold_start: bool = False,
     iterations: Optional[int] = None,
@@ -6455,6 +7849,8 @@ def test_chapter(
     ncu_metric_set: str = "auto",
     ncu_replay_mode: Optional[str] = None,
     pm_sampling_interval: Optional[int] = None,
+    nsys_timeout_seconds: Optional[int] = None,
+    ncu_timeout_seconds: Optional[int] = None,
     graph_capture_ratio_threshold: Optional[float] = None,
     graph_capture_memory_threshold_mb: Optional[float] = None,
     launch_via: str = "python",
@@ -6481,6 +7877,7 @@ def test_chapter(
     use_llm_cache: bool = True,
     llm_explain: bool = False,
     progress_recorder: Optional[ProgressRecorder] = None,
+    event_logger: Optional["BenchmarkEventLogger"] = None,
 ) -> Dict[str, Any]:
     return _test_chapter_impl(
         chapter_dir,
@@ -6504,6 +7901,8 @@ def test_chapter(
         ncu_metric_set=ncu_metric_set,
         ncu_replay_mode=ncu_replay_mode,
         pm_sampling_interval=pm_sampling_interval,
+        nsys_timeout_seconds=nsys_timeout_seconds,
+        ncu_timeout_seconds=ncu_timeout_seconds,
         launch_via=launch_via,
         nproc_per_node=nproc_per_node,
         nnodes=nnodes,
@@ -6526,6 +7925,7 @@ def test_chapter(
         use_llm_cache=use_llm_cache,
         llm_explain=llm_explain,
         progress_recorder=progress_recorder,
+        event_logger=event_logger,
     )
 
 
@@ -6871,8 +8271,8 @@ def main():
     parser.add_argument(
         '--profile',
         choices=['none', 'minimal', 'deep_dive', 'roofline'],
-        default='none',
-        help='Profiling preset: none (default), minimal, deep_dive, or roofline. Non-none enables nsys/ncu/PyTorch profiling.'
+        default='minimal',
+        help='Profiling preset: minimal (default), none, deep_dive, or roofline. Non-none enables nsys/ncu/PyTorch profiling.'
     )
     parser.add_argument(
         '--reproducible',
@@ -6966,8 +8366,20 @@ def main():
     parser.add_argument(
         '--timeout-multiplier',
         type=float,
-        default=1.0,
+        default=3.0,
         help='Multiply all benchmark timeouts by this factor (e.g., 2.0 doubles every timeout).'
+    )
+    parser.add_argument(
+        '--nsys-timeout-seconds',
+        type=int,
+        default=None,
+        help='Override Nsight Systems timeout in seconds (default from BenchmarkDefaults).'
+    )
+    parser.add_argument(
+        '--ncu-timeout-seconds',
+        type=int,
+        default=None,
+        help='Override Nsight Compute timeout in seconds (default from BenchmarkDefaults).'
     )
     parser.add_argument(
         '--ncu-metric-set',
@@ -7014,6 +8426,33 @@ def main():
     logger.info("")
     logger.info(f"Target override: {args.targets}")
     logger.info(f"Bench root: {active_bench_root}")
+    event_run_id = build_run_id("bench-main", base_dir=default_artifacts_root(active_bench_root))
+    event_log_path = args.output.parent / "benchmark_events.jsonl"
+    event_logger = BenchmarkEventLogger(event_log_path, event_run_id, logger)
+    defaults = get_defaults() or BenchmarkDefaults()
+    gpu_state = get_gpu_state()
+    emit_event(
+        event_logger,
+        logger,
+        "run_start",
+        targets=args.targets or ["all"],
+        profile_type=args.profile,
+        ncu_metric_set=args.ncu_metric_set,
+        timeout_multiplier=args.timeout_multiplier,
+        nsys_timeout_seconds=args.nsys_timeout_seconds,
+        ncu_timeout_seconds=args.ncu_timeout_seconds,
+        update_expectations=args.update_expectations,
+        allow_mixed_provenance=args.allow_mixed_provenance,
+        output_json=str(args.output),
+        events_file=str(event_log_path),
+        gpu_clock_lock_enabled=defaults.lock_gpu_clocks,
+        gpu_sm_clock_mhz=defaults.gpu_sm_clock_mhz,
+        gpu_mem_clock_mhz=defaults.gpu_mem_clock_mhz,
+        gpu_app_clock_mhz=gpu_state.get("gpu_app_clock_mhz"),
+        memory_app_clock_mhz=gpu_state.get("memory_app_clock_mhz"),
+        gpu_clock_mhz=gpu_state.get("gpu_clock_mhz"),
+        memory_clock_mhz=gpu_state.get("memory_clock_mhz"),
+    )
 
     dump_environment_and_capabilities()
     logger.info("")
@@ -7117,6 +8556,8 @@ def main():
             allow_mixed_provenance=args.allow_mixed_provenance if hasattr(args, "allow_mixed_provenance") else False,
             ncu_metric_set=args.ncu_metric_set,
             pm_sampling_interval=args.pm_sampling_interval,
+            nsys_timeout_seconds=args.nsys_timeout_seconds,
+            ncu_timeout_seconds=args.ncu_timeout_seconds,
             graph_capture_ratio_threshold=args.graph_capture_ratio_threshold,
             graph_capture_memory_threshold_mb=args.graph_capture_memory_threshold_mb,
             launch_via=args.launch_via,
@@ -7128,8 +8569,16 @@ def main():
             target_extra_args=extra_arg_map,
             only_cuda=bool(args.only_cuda),
             only_python=bool(args.only_python),
+            event_logger=event_logger,
         )
         all_results.append(result)
+        if args.format in ['json', 'both']:
+            with open(args.output, 'w') as f:
+                json.dump({
+                    'timestamp': datetime.now().isoformat(),
+                    'results': all_results,
+                }, f, indent=2)
+            logger.info(f"\nJSON results checkpoint saved to: {args.output}")
     
     # Save results
     output_json = args.output
@@ -7164,6 +8613,21 @@ def main():
     logger.info(f"Succeeded: {total_successful}")
     logger.info(f"Failed: {total_failed} (errors={total_failed_errors}, regressions={total_failed_regressions})")
     logger.info(f"Informational (not benchmarked): {total_informational}")
+    emit_event(
+        event_logger,
+        logger,
+        "run_end",
+        total_benchmarks=total_benchmarks,
+        total_successful=total_successful,
+        total_failed=total_failed,
+        total_failed_errors=total_failed_errors,
+        total_failed_regressions=total_failed_regressions,
+        total_skipped_hardware=total_skipped_hw,
+        total_informational=total_informational,
+        output_json=str(output_json),
+        output_markdown=str(output_md) if args.format in ["markdown", "both"] else None,
+    )
+    event_logger.close()
     if total_skipped_hw > 0:
         logger.warning(f"WARNING: Skipped (hardware/software limitations): {total_skipped_hw}")
     

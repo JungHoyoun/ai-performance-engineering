@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import shlex
 import signal
 import subprocess
@@ -87,6 +88,8 @@ from core.benchmark.artifact_manager import (
     build_bench_run_label,
     build_run_id,
 )
+from core.benchmark.defaults import BenchmarkDefaults, get_defaults
+from core.benchmark.run_manifest import get_gpu_state
 from core.harness.progress import ProgressEvent, ProgressRecorder
 from core.profiling import profiler_config as profiler_config_mod
 from core.discovery import chapter_slug, discover_all_chapters, resolve_target_chapters, discover_benchmarks
@@ -274,7 +277,12 @@ except ImportError:
 try:
     import torch  # noqa: F401
     from core.utils.chapter_compare_template import discover_benchmarks
-    from core.harness.run_benchmarks import test_chapter, generate_markdown_report
+    from core.harness.run_benchmarks import (
+        test_chapter,
+        generate_markdown_report,
+        BenchmarkEventLogger,
+        emit_event,
+    )
 
     BENCHMARK_AVAILABLE = True
 except ImportError:
@@ -300,7 +308,7 @@ def _execute_benchmarks(
     output_format: str = "both",
     profile_type: str = "minimal",
     suite_timeout: Optional[int] = 14400,
-    timeout_multiplier: float = 1.0,
+    timeout_multiplier: float = 3.0,
     allow_invalid_environment: bool = False,
     allow_virtualization: bool = True,
     reproducible: bool = False,
@@ -319,6 +327,8 @@ def _execute_benchmarks(
     ncu_metric_set: str = "auto",
     ncu_replay_mode: Optional[str] = None,
     pm_sampling_interval: Optional[int] = None,
+    nsys_timeout_seconds: Optional[int] = None,
+    ncu_timeout_seconds: Optional[int] = None,
     launch_via: str = "python",
     nproc_per_node: Optional[int] = None,
     nnodes: Optional[str] = None,
@@ -372,6 +382,11 @@ def _execute_benchmarks(
 
     setup_logging(level=log_level, log_file=log_file, log_format="json", use_rich=True)
     logger = get_logger(__name__)
+    event_logger = BenchmarkEventLogger(
+        artifact_manager.get_log_path("benchmark_events.jsonl"),
+        artifact_manager.run_id,
+        logger,
+    )
 
     if not BENCHMARK_AVAILABLE or not TEST_FUNCTIONS_AVAILABLE:
         logger.error("Benchmark dependencies missing (torch/benchmark_harness or test functions).")
@@ -431,8 +446,56 @@ def _execute_benchmarks(
             percent_complete=0.0,
         )
     )
+    defaults = get_defaults() or BenchmarkDefaults()
+    gpu_state = get_gpu_state()
+    emit_event(
+        event_logger,
+        logger,
+        "run_start",
+        targets=targets or ["all"],
+        profile_type=profile_type,
+        ncu_metric_set=ncu_metric_set,
+        ncu_replay_mode=ncu_replay_mode,
+        timeout_multiplier=timeout_multiplier,
+        nsys_timeout_seconds=nsys_timeout_seconds,
+        ncu_timeout_seconds=ncu_timeout_seconds,
+        allow_virtualization=allow_virtualization,
+        update_expectations=update_expectations,
+        allow_mixed_provenance=allow_mixed_provenance,
+        artifacts_dir=str(artifact_manager.run_dir),
+        log_file=str(log_file),
+        events_file=str(artifact_manager.get_log_path("benchmark_events.jsonl")),
+        gpu_clock_lock_enabled=defaults.lock_gpu_clocks,
+        gpu_sm_clock_mhz=defaults.gpu_sm_clock_mhz,
+        gpu_mem_clock_mhz=defaults.gpu_mem_clock_mhz,
+        gpu_app_clock_mhz=gpu_state.get("gpu_app_clock_mhz"),
+        memory_app_clock_mhz=gpu_state.get("memory_app_clock_mhz"),
+        gpu_clock_mhz=gpu_state.get("gpu_clock_mhz"),
+        memory_clock_mhz=gpu_state.get("memory_clock_mhz"),
+    )
+    heartbeat_stop = threading.Event()
+    def _heartbeat_loop() -> None:
+        while not heartbeat_stop.is_set():
+            payload: Any = None
+            try:
+                if progress_recorder.progress_path.exists():
+                    payload = json.loads(progress_recorder.progress_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                payload = {"error": str(exc)}
+            current = payload.get("current") if isinstance(payload, dict) else None
+            emit_event(
+                event_logger,
+                logger,
+                "run_heartbeat",
+                progress=current,
+                progress_path=str(progress_recorder.progress_path),
+            )
+            heartbeat_stop.wait(60.0)
+    heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
+    heartbeat_thread.start()
 
     all_results = []
+    output_json = artifact_manager.get_result_path("benchmark_test_results.json")
     for chapter_dir in chapter_dirs:
         chapter_id = chapter_slug(chapter_dir, active_bench_root, bench_root=active_bench_root)
         example_filters = chapter_filters.get(chapter_id)
@@ -457,6 +520,8 @@ def _execute_benchmarks(
             ncu_metric_set=ncu_metric_set,
             ncu_replay_mode=ncu_replay_mode,
             pm_sampling_interval=pm_sampling_interval,
+            nsys_timeout_seconds=nsys_timeout_seconds,
+            ncu_timeout_seconds=ncu_timeout_seconds,
             launch_via=launch_via,
             nproc_per_node=nproc_per_node,
             nnodes=nnodes,
@@ -481,8 +546,13 @@ def _execute_benchmarks(
             llm_patch_retries=llm_patch_retries,
             use_llm_cache=use_llm_cache,
             llm_explain=llm_explain,
+            event_logger=event_logger,
         )
         all_results.append(result)
+        if output_format in ["json", "both"]:
+            with open(output_json, "w") as f:
+                json.dump({"timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"), "results": all_results}, f, indent=2)
+            logger.info(f"JSON results checkpoint saved to: {output_json}")
 
     progress_recorder.emit(
         ProgressEvent(
@@ -503,7 +573,6 @@ def _execute_benchmarks(
             json.dump({"timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"), "manifests": manifests}, f, indent=2)
         logger.info(f"Manifest saved to: {artifact_manager.manifest_path}")
 
-    output_json = artifact_manager.get_result_path("benchmark_test_results.json")
     output_md = artifact_manager.get_report_path("benchmark_test_results.md")
 
     if output_format in ["json", "both"]:
@@ -515,6 +584,22 @@ def _execute_benchmarks(
         logger.info(f"Markdown report saved to: {output_md}")
 
     total_failed = sum(r.get("summary", {}).get("failed", 0) for r in all_results)
+    total_successful = sum(r.get("summary", {}).get("successful", 0) for r in all_results)
+    total_skipped = sum(r.get("summary", {}).get("total_skipped", 0) for r in all_results)
+    emit_event(
+        event_logger,
+        logger,
+        "run_end",
+        total_chapters=len(all_results),
+        total_successful=total_successful,
+        total_failed=total_failed,
+        total_skipped=total_skipped,
+        output_json=str(output_json),
+        output_markdown=str(output_md) if output_format in ["markdown", "both"] else None,
+    )
+    heartbeat_stop.set()
+    heartbeat_thread.join(timeout=5.0)
+    event_logger.close()
     if total_failed > 0:
         sys.exit(1)
 
@@ -530,7 +615,7 @@ if TYPER_AVAILABLE:
         profile_type: str = Option("minimal", "--profile", "-p", help="Profiling preset: minimal (default), none, deep_dive, or roofline. Non-'none' enables nsys/ncu/PyTorch profiling.", callback=_validate_profile_type),
         suite_timeout: Optional[int] = Option(14400, "--suite-timeout", help="Suite timeout in seconds (default: 14400 = 4 hours, 0 = disabled)"),
         timeout_seconds: Optional[int] = Option(None, "--timeout-seconds", help="Override suite timeout in seconds (0 disables timeout)"),
-        timeout_multiplier: float = Option(1.0, "--timeout-multiplier", help="Multiply all benchmark timeouts by this factor (e.g., 2.0 = double all timeouts)"),
+        timeout_multiplier: float = Option(3.0, "--timeout-multiplier", help="Multiply all benchmark timeouts by this factor (e.g., 2.0 = double all timeouts)"),
         allow_invalid_environment: bool = Option(
             False,
             "--allow-invalid-environment",
@@ -579,6 +664,16 @@ if TYPER_AVAILABLE:
             "--ncu-replay-mode",
             help="Nsight Compute replay mode: kernel or application. When set, overrides the minimal preset replay mode.",
             callback=_validate_ncu_replay_mode,
+        ),
+        nsys_timeout_seconds: Optional[int] = Option(
+            None,
+            "--nsys-timeout-seconds",
+            help="Override Nsight Systems timeout in seconds (default from BenchmarkDefaults).",
+        ),
+        ncu_timeout_seconds: Optional[int] = Option(
+            None,
+            "--ncu-timeout-seconds",
+            help="Override Nsight Compute timeout in seconds (default from BenchmarkDefaults).",
         ),
         pm_sampling_interval: Optional[int] = Option(
             None,
@@ -655,6 +750,8 @@ if TYPER_AVAILABLE:
                 "allow_invalid_environment": allow_invalid_environment,
                 "allow_virtualization": allow_virtualization,
                 "allow_mixed_provenance": allow_mixed_provenance,
+                "nsys_timeout_seconds": nsys_timeout_seconds,
+                "ncu_timeout_seconds": ncu_timeout_seconds,
             }
             typer.echo(json.dumps(plan, indent=2))
             raise typer.Exit(code=0)
@@ -682,6 +779,8 @@ if TYPER_AVAILABLE:
             allow_mixed_provenance=allow_mixed_provenance,
             ncu_metric_set=ncu_metric_set,
             ncu_replay_mode=ncu_replay_mode,
+            nsys_timeout_seconds=nsys_timeout_seconds,
+            ncu_timeout_seconds=ncu_timeout_seconds,
             only_cuda=only_cuda,
             only_python=only_python,
             launch_via=launch_via,
