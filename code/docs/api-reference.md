@@ -213,6 +213,8 @@ Optimization recommendations and technique analysis.
 
 **MCP-only optimize workflow:** `optimize` accepts `path` or `target` and runs quick LLM variants (benchmark_variants defaults).
 
+**MCP-only deep-dive workflow:** `benchmark_deep_dive_compare` accepts `targets` or a benchmark `path` (baseline_*/optimized_*) and runs one-shot deep-dive profiling + compare.
+
 **Python API:**
 ```python
 engine.optimize.recommend(model_size=70, gpus=8)
@@ -299,6 +301,12 @@ engine.benchmark.overview()                     # Summary stats
 engine.benchmark.speed_test()                   # Quick GEMM/attention test
 ```
 
+**Runner notes:**
+- CUDA benchmarks execute via Python wrappers (`CudaBinaryBenchmark`); direct `.cu` runs are not supported.
+- Ad-hoc script runs should use `benchmark_main` (supports `--iterations`, `--warmup`, and defaults to `--force-sync`; disable with `--no-force-sync` or `AISP_FORCE_SYNC=0`).
+- Use `--force-sync` (CLI) / `force_sync=true` (MCP) to insert a device-wide synchronize after each `benchmark_fn()` when you need an extra safety net outside standard harness timing.
+- Use `--only-cuda` / `only_cuda=true` to run only CUDA binary wrappers, or `--only-python` / `only_python=true` to skip them.
+
 **Note:** `aisp benchmark ...` commands are diagnostic microbenchmarks (`hw_*` tools) and do not use the harness.
 
 ---
@@ -323,8 +331,11 @@ engine.ai.ask("How do I fix CUDA OOM?", include_citations=True)
 engine.ai.explain("flash-attention")
 engine.ai.troubleshoot("NCCL timeout")
 engine.ai.suggest_tools("I keep OOMing on 24GB VRAM")
+engine.ai.suggest_tools("Profile and compare baseline vs optimized", llm_routing=True)
 engine.ai.status()                              # Check LLM availability
 ```
+
+**Routing options:** `suggest_tools` defaults to LLM-based routing. Set `llm_routing=false` to use keyword heuristics. Use `max_suggestions` to cap results.
 
 ---
 

@@ -26,11 +26,21 @@ This is the standard "run → deep_dive profile → compare baseline vs optimize
 
 ### One-shot (recommended)
 
-Call the single MCP tool `benchmark_deep_dive_compare`:
+Call the single MCP tool `benchmark_deep_dive_compare` (targets or path):
 
 ```json
 {
   "targets": ["ch10:atomic_reduction"],
+  "output_dir": "artifacts/mcp-deep-dive",
+  "async": true
+}
+```
+
+Or pass a benchmark file path directly:
+
+```json
+{
+  "path": "ch10/baseline_atomic_reduction.py",
   "output_dir": "artifacts/mcp-deep-dive",
   "async": true
 }

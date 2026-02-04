@@ -1,4 +1,6 @@
-// optimized_cutlass_gemm.cu -- CUTLASS Tensor Core GEMM optimized.
+// baseline_cutlass_gemm_preloaded.cu -- CUTLASS SIMT GEMM with preloaded inputs.
+//
+// Preloaded inputs isolate kernel execution time by removing H2D transfer overhead.
 
 #include <cuda_runtime.h>
 
@@ -27,7 +29,7 @@
   do {                                                                           \
     cutlass::Status error = (status);                                            \
     if (error != cutlass::Status::kSuccess) {                                    \
-      std::cerr << "CUTLASS error " << __FILE__ << ":" << __LINE__ << " "         \
+      std::cerr << "CUTLASS error " << __FILE__ << ":" << __LINE__ << " "        \
                 << cutlassGetStatusString(error) << std::endl;                   \
       std::exit(EXIT_FAILURE);                                                   \
     }                                                                            \
@@ -50,7 +52,7 @@ int main() {
         Element, Layout,
         Element, Layout,
         ElementAccumulator,
-        cutlass::arch::OpClassTensorOp,
+        cutlass::arch::OpClassSimt,
         cutlass::arch::Sm100
     >;
 
@@ -129,7 +131,7 @@ int main() {
 
     CUDA_CHECK(cudaEventRecord(start, stream));
     for (int iter = 0; iter < kIterations; ++iter) {
-        NVTX_RANGE("compute_math:cutlass_tensorop");
+        NVTX_RANGE("compute_math:cutlass_preloaded");
         for (int rep = 0; rep < kRepeats; ++rep) {
             CUTLASS_CHECK(gemm_op.run(stream));
         }
@@ -140,7 +142,7 @@ int main() {
     float total_ms = 0.0f;
     CUDA_CHECK(cudaEventElapsedTime(&total_ms, start, stop));
     const float avg_ms = total_ms / static_cast<float>(kIterations * kRepeats);
-    std::cout << "CUTLASS Tensor Core GEMM (optimized): " << avg_ms << " ms" << std::endl;
+    std::cout << "CUTLASS SIMT GEMM (preloaded inputs): " << avg_ms << " ms" << std::endl;
 
     CUDA_CHECK(cudaMemcpy(h_C, d_C, size_C, cudaMemcpyDeviceToHost));
     std::cout << "Checksum sample: " << h_C[0] << std::endl;

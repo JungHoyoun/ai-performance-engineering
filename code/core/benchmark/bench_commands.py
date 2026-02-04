@@ -713,7 +713,10 @@ if TYPER_AVAILABLE:
         precheck_only: bool = Option(False, "--precheck-only", help="Validate targets and print planned command without running."),
         dry_run: bool = Option(False, "--dry-run", help="Describe planned execution without running benchmarks."),
     ):
-        """Run benchmarks - discover, run, and summarize results."""
+        """Run benchmarks - discover, run, and summarize results.
+
+        CUDA binaries execute only via Python wrappers (CudaBinaryBenchmark).
+        """
         # LLM features are always available - no capability check needed
 
         active_bench_root = Path(bench_root).resolve() if bench_root else repo_root

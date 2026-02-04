@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "uneven_partition_common.cuh"
+#include "../core/common/headers/cuda_verify.cuh"
 #include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                        \
@@ -95,13 +96,22 @@ int main() {
 
     CUDA_CHECK(cudaMemcpy(h_out.data(), d_out, elems * sizeof(float), cudaMemcpyDeviceToHost));
     double max_err = 0.0;
+#ifdef VERIFY
+    double checksum = 0.0;
+#endif
     for (int i = 0; i < elems; ++i) {
         NVTX_RANGE("cleanup");
         const double input = static_cast<double>(h_in[i]);
         const double expected = input * input + 0.5 * input;
         max_err = std::max(max_err, std::abs(static_cast<double>(h_out[i]) - expected));
+#ifdef VERIFY
+        checksum += std::abs(static_cast<double>(h_out[i]));
+#endif
     }
     std::printf("Baseline uneven max error: %.3e\n", max_err);
+#ifdef VERIFY
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
 
     CUDA_CHECK(cudaEventDestroy(start_evt));
     CUDA_CHECK(cudaEventDestroy(stop_evt));

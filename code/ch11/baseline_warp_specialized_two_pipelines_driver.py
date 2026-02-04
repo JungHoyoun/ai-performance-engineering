@@ -27,9 +27,10 @@ class BaselineWarpSpecializedTwoPipelinesDriverBenchmark(CudaBinaryBenchmark):
             warmup=5,
             timeout_seconds=180,
             workload_params={
-                "kNumStreams": 2,
-                "kBatches": 8,
-                "dtype": 'float32',
+                "tiles": 128,
+                "tile_elems": 1024,
+                "num_streams": 2,
+                "dtype": "float32",
             },
         )
 

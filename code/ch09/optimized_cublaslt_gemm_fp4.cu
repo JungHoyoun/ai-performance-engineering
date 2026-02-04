@@ -19,6 +19,7 @@
 #include <random>
 #include <cmath>
 #include <vector>
+#include "../core/common/headers/cuda_verify.cuh"
 #include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                         \
@@ -329,6 +330,16 @@ int main() {
     
     std::cout << "cuBLASLt NVFP4 GEMM (tensor cores): " << avg_ms << " ms" << std::endl;
     std::cout << "Throughput: " << tflops << " TFLOPS" << std::endl;
+
+#ifdef VERIFY
+    CUDA_CHECK(cudaMemcpy(h_C.data(), d_C, elements_C * kBatchCount * sizeof(__half), cudaMemcpyDeviceToHost));
+    const size_t elements = elements_C * kBatchCount;
+    double checksum = 0.0;
+    for (size_t i = 0; i < elements; ++i) {
+        checksum += std::abs(__half2float(h_C[i]));
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
 
     // Cleanup
     CUBLASLT_CHECK(cublasLtMatmulPreferenceDestroy(preference));

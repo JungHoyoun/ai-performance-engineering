@@ -21,6 +21,7 @@ REPORT_OUTPUT = REPO_ROOT / "artifacts" / "mcp-report.pdf"
 EXPORT_OUTPUT = REPO_ROOT / "artifacts" / "mcp-export.csv"
 BENCH_FILE = REPO_ROOT / "benchmark_test_results.json"
 PROFILE_FIXTURE_DIR = ARTIFACT_RUNS_DIR / "mcp-fixtures" / "profiles" / "bench" / "ch04"
+QUEUE_DIR = REPO_ROOT / "artifacts" / "parallel_runs"
 NSYS_SAMPLE = PROFILE_FIXTURE_DIR / "baseline_nccl_baseline.nsys-summary.csv"
 NCU_SAMPLE = PROFILE_FIXTURE_DIR / "baseline_nvlink_baseline.ncu-rep"
 NSYS_REP_FIXTURE = PROFILE_FIXTURE_DIR / "baseline_fixture.nsys-rep"
@@ -295,7 +296,7 @@ TOOL_PARAMS: Dict[str, Dict[str, Any]] = {
     "info_features": {},
     "profile_compare": {"chapter": "ch11"},
     "benchmark_deep_dive_compare": {
-        "targets": ["ch10:atomic_reduction"],
+        "path": "ch10/baseline_atomic_reduction.py",
         "output_dir": str(REPO_ROOT / "artifacts" / "mcp-deep-dive-tests"),
         "iterations": 1,
         "warmup": 5,
@@ -325,7 +326,7 @@ TOOL_PARAMS: Dict[str, Dict[str, Any]] = {
     "hf": {"action": "search", "query": "llama", "limit": 3},
     "cluster_slurm": {"model": "7b", "nodes": 1, "gpus": 2},
     "cost_estimate": {"gpu_type": "h100", "num_gpus": 1, "hours_per_day": 1},
-    "suggest_tools": {"query": "profile this model"},
+    "suggest_tools": {"query": "profile this model", "llm_routing": False},
     "job_status": {"job_id": "test_job_missing"},
     "benchmark_data": {"page": 1, "page_size": 10},
     "benchmark_overview": {},
@@ -362,6 +363,7 @@ def prepare_artifacts() -> None:
     ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
     MICROBENCH_DIR.mkdir(parents=True, exist_ok=True)
     PROFILE_FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
+    QUEUE_DIR.mkdir(parents=True, exist_ok=True)
     nsys_csv = PROFILE_FIXTURE_DIR / "baseline_nccl_baseline.nsys-summary.csv"
     if not nsys_csv.exists():
         nsys_csv.write_text(
@@ -444,10 +446,11 @@ def test_tool_list_protocol_matches_registration(server: mcp_server.MCPServer):
             ("topology matrix", "gpu_topology_matrix"),
             ("cloud cost estimate", "cost_estimate"),
             ("llm status", "ai_status"),
+            ("profile and compare @ch09/baseline_cublas_gemm_fp4_perchannel.py and optimized version", "benchmark_deep_dive_compare"),
     ],
 )
 def test_suggest_tools_common_intents(server: mcp_server.MCPServer, query: str, expected_tool: str):
-    result = server.call_tool("suggest_tools", {"query": query})
+    result = server.call_tool("suggest_tools", {"query": query, "llm_routing": False})
     payload = _payload_from_result(result)
     tool_result = payload.get("result") or {}
     suggestions = tool_result.get("suggestions") or []
@@ -532,6 +535,9 @@ def test_slow_tools_opt_in_execution(server: mcp_server.MCPServer, case: ToolCas
         tool_result = payload["result"]
         if tool_result.get("returncode", 1) == 0 and tool_result.get("results_json"):
             assert "triage" in tool_result
+        queue_log = QUEUE_DIR / "queue.log"
+        assert queue_log.exists()
+        assert "RUN_START" in queue_log.read_text()
     if case.name == "profile_nsys":
         tool_result = payload["result"]
         if tool_result.get("success"):

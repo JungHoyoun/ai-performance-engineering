@@ -1,7 +1,9 @@
 // Chapter 19: Baseline KV prefetch example without stream overlap.
 #include <cuda_runtime.h>
+#include <cmath>
 #include <cstdio>
 #include <vector>
+#include "../core/common/headers/cuda_verify.cuh"
 #include "../core/common/nvtx_utils.cuh"
 
 namespace {
@@ -45,6 +47,14 @@ void run_baseline(int iterations) {
     float ms = 0.0f;
     cudaEventElapsedTime(&ms, start, stop);
     printf("baseline_kv_prefetch_overlap: %d iters, %.3f ms\n", iterations, ms);
+
+#ifdef VERIFY
+    double checksum = 0.0;
+    for (float v : host_out) {
+        checksum += std::abs(v);
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
 
     cudaEventDestroy(start);
     cudaEventDestroy(stop);

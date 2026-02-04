@@ -30,10 +30,9 @@ class OptimizedCutlassGemmFp16Benchmark(CudaBinaryBenchmark):
                 "M": 2048,
                 "N": 2048,
                 "K": 2048,
-                "batch_count": 64,
-                "iterations": 10,
-                "workspace_bytes": 128,
-                "dtype": 'float16',
+                "kIterations": 10,
+                "kRepeats": 64,
+                "dtype": "float16",
             },
         )
 

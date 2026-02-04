@@ -6,8 +6,10 @@
 #if defined(__CUDACC_VER_MAJOR__) && (__CUDACC_VER_MAJOR__ >= 13)
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <vector>
+#include "../core/common/headers/cuda_verify.cuh"
 #include "../core/common/nvtx_utils.cuh"
 
 namespace {
@@ -38,6 +40,7 @@ int main() {
     check(cudaMalloc(&d_b, bytes));
     check(cudaMalloc(&d_out, bytes));
 
+    const auto start = std::chrono::high_resolution_clock::now();
     check(cudaMemcpy(d_a, h_a.data(), bytes, cudaMemcpyHostToDevice));
     check(cudaMemcpy(d_b, h_b.data(), bytes, cudaMemcpyHostToDevice));
 
@@ -66,15 +69,25 @@ int main() {
     check(cudaStreamSynchronize(streams[1]));
 
     check(cudaMemcpy(h_out.data(), d_out, bytes, cudaMemcpyDeviceToHost));
+    const auto stop = std::chrono::high_resolution_clock::now();
+    const double total_ms =
+        std::chrono::duration<double, std::milli>(stop - start).count();
+    std::printf("TIME_MS: %.3f\n", total_ms);
 
     double max_err = 0.0;
+    double checksum = 0.0;
     for (size_t i = 0; i < elems; ++i) {
         NVTX_RANGE("cleanup");
         // Kernel computes a + b
         double expected = h_a[i] + h_b[i];
         max_err = std::max(max_err, std::abs(expected - h_out[i]));
+        checksum += std::abs(h_out[i]);
     }
     std::printf("warp_specialized_two_pipelines_multistream_driver complete. max_err=%.3e\n", max_err);
+
+#ifdef VERIFY
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
 
     check(cudaStreamDestroy(streams[0]));
     check(cudaStreamDestroy(streams[1]));

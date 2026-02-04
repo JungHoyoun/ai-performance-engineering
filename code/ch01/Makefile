@@ -11,6 +11,7 @@ SUFFIX = $(TARGET_SUFFIX)
 CUDA_SOURCES := $(wildcard *.cu)
 BASE_TARGETS := $(CUDA_SOURCES:.cu=)
 TARGETS := $(addsuffix $(SUFFIX), $(BASE_TARGETS))
+VERIFY_TARGETS := $(addsuffix _verify$(SUFFIX), $(BASE_TARGETS))
 
 .PHONY: all clean test compare b200 gb10 b300 gb300
 
@@ -22,6 +23,10 @@ all: $(TARGETS)
 # Default pattern rule
 %$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
 	$(NVCC) $(NVCC_FLAGS) $(NVCC_LIBS) -o $@ $< $(CUDA_NVTX_LDFLAGS)
+
+# Verify-mode pattern rule (adds -DVERIFY=1)
+%_verify$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 $(NVCC_LIBS) -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
 test: all
 	@echo "Testing GEMM optimizations..."

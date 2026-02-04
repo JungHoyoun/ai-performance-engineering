@@ -31,9 +31,8 @@ class BaselineCutlassGemmFp16Benchmark(CudaBinaryBenchmark):
                 "N": 2048,
                 "K": 2048,
                 "kIterations": 10,
-                "kBatchCount": 64,
-                "TILE_SIZE": 32,
-                "dtype": 'float16',
+                "kRepeats": 64,
+                "dtype": "float16",
             },
         )
 

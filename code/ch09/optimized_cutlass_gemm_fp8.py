@@ -31,9 +31,8 @@ class OptimizedCutlassGemmFp8Benchmark(CudaBinaryBenchmark):
                 "N": 4096,
                 "K": 4096,
                 "kIterations": 10,
-                "kBatchCount": 8,
-                "workspaceSize": 1024,
-                "dtype": 'fp8',
+                "kRepeats": 16,
+                "dtype": "fp8_e4m3",
             },
         )
 

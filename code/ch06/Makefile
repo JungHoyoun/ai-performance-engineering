@@ -10,6 +10,7 @@ SUFFIX = $(TARGET_SUFFIX)
 CUDA_SOURCES = $(wildcard *.cu)
 BASE_TARGETS = $(CUDA_SOURCES:.cu=)
 TARGETS = $(addsuffix $(SUFFIX), $(BASE_TARGETS))
+VERIFY_TARGETS = $(addsuffix _verify$(SUFFIX), $(BASE_TARGETS))
 
 $(TARGETS): $(CUDA_NVTX_DEPS)
 
@@ -24,6 +25,11 @@ all: $(TARGETS)
 $(addsuffix $(SUFFIX), $(BASE_TARGETS)): %$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
 	@echo "Building $@..."
 	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS) $(CUDA_NVTX_LDFLAGS)
+
+# Verify-mode pattern rule (adds -DVERIFY=1)
+%_verify$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
+	@echo "Building $@ (verify)..."
+	$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -o $@ $< $(NVCC_LIBS) $(CUDA_NVTX_LDFLAGS)
 
 test: all
 	@echo "Testing all Chapter 6 examples..."

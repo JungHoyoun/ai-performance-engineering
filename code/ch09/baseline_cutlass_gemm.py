@@ -20,8 +20,8 @@ class BaselineCutlassGemmBenchmark(CudaBinaryBenchmark):
     def __init__(self) -> None:
         chapter_dir = Path(__file__).parent
         m = n = k = 1024
-        micro_batches = 32
         iterations = 5
+        repeats = 32
         bytes_a = m * k * 4
         bytes_b = k * n * 4
         bytes_c = m * n * 4
@@ -36,8 +36,8 @@ class BaselineCutlassGemmBenchmark(CudaBinaryBenchmark):
                 "M": m,
                 "N": n,
                 "K": k,
-                "micro_batches": micro_batches,
-                "iterations": iterations,
+                "kIterations": iterations,
+                "kRepeats": repeats,
                 "dtype": "float32",
             },
         )

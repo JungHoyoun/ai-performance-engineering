@@ -20,8 +20,8 @@ class OptimizedCutlassGemmBenchmark(CudaBinaryBenchmark):
     def __init__(self) -> None:
         chapter_dir = Path(__file__).parent
         m = n = k = 1024
-        micro_batches = 32
         iterations = 5
+        repeats = 32
         bytes_a = m * k * 4
         bytes_b = k * n * 4
         bytes_c = m * n * 4
@@ -29,15 +29,15 @@ class OptimizedCutlassGemmBenchmark(CudaBinaryBenchmark):
             chapter_dir=chapter_dir,
             binary_name="optimized_cutlass_gemm",
             friendly_name="Optimized Cutlass Gemm",
-            iterations=3,
+            iterations=5,
             warmup=5,
             timeout_seconds=120,
             workload_params={
                 "M": m,
                 "N": n,
                 "K": k,
-                "micro_batches": micro_batches,
-                "iterations": iterations,
+                "kIterations": iterations,
+                "kRepeats": repeats,
                 "dtype": "float32",
             },
         )

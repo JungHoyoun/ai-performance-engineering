@@ -1,7 +1,9 @@
 // Chapter 19: Optimized KV prefetch example overlapping memcpy + compute via dual streams.
 #include <cuda_runtime.h>
+#include <cmath>
 #include <cstdio>
 #include <vector>
+#include "../core/common/headers/cuda_verify.cuh"
 #include "../core/common/nvtx_utils.cuh"
 
 namespace {
@@ -64,6 +66,14 @@ void run_optimized(int iterations) {
     float ms = 0.0f;
     cudaEventElapsedTime(&ms, start, stop);
     printf("optimized_kv_prefetch_overlap: %d iters, %.3f ms\n", iterations, ms);
+
+#ifdef VERIFY
+    double checksum = 0.0;
+    for (size_t i = 0; i < static_cast<size_t>(iterations) * elems_per_chunk; ++i) {
+        checksum += std::abs(host_out[i]);
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
 
     cudaEventDestroy(start);
     cudaEventDestroy(stop);

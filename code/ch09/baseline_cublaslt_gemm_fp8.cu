@@ -11,8 +11,10 @@
 #include <cuda_fp16.h>
 
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <random>
+#include "../core/common/headers/cuda_verify.cuh"
 #include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                         \
@@ -174,6 +176,16 @@ int main() {
     CUDA_CHECK(cudaEventElapsedTime(&total_ms, start, stop));
     const float avg_ms = total_ms / (kIterations * kBatchCount);
     std::cout << "Naive FP8 GEMM (baseline): " << avg_ms << " ms" << std::endl;
+
+#ifdef VERIFY
+    CUDA_CHECK(cudaMemcpy(h_C, d_C, size_C, cudaMemcpyDeviceToHost));
+    const size_t elements = elements_C * kBatchCount;
+    double checksum = 0.0;
+    for (size_t i = 0; i < elements; ++i) {
+        checksum += std::abs(static_cast<float>(h_C[i]));
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
 
     // Cleanup
     CUDA_CHECK(cudaEventDestroy(start));

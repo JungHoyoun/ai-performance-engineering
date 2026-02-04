@@ -10,6 +10,7 @@ SUFFIX = $(TARGET_SUFFIX)
 CUDA_SOURCES := $(wildcard *.cu)
 BASE_TARGETS := $(CUDA_SOURCES:.cu=)
 TARGETS := $(addsuffix $(SUFFIX), $(BASE_TARGETS))
+VERIFY_TARGETS := $(addsuffix _verify$(SUFFIX), $(BASE_TARGETS))
 
 .PHONY: all clean compare profile-hta profile-perf profile-all b200 gb10 b300 gb300
 
@@ -21,6 +22,10 @@ all: $(TARGETS)
 # Default pattern rule
 %$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
 	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(CUDA_NVTX_LDFLAGS)
+
+# Verify-mode pattern rule (adds -DVERIFY=1)
+%_verify$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -o $@ $< $(CUDA_NVTX_LDFLAGS)
 
 compare: clean
 	@for arch in $(ARCH_LIST); do \

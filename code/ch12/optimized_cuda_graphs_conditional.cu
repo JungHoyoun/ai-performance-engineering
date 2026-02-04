@@ -1,8 +1,10 @@
 // optimized_cuda_graphs_conditional.cu -- CUDA graph with static path (optimized).
 
 #include <cuda_runtime.h>
+#include <cmath>
 #include <cstdio>
 #include <vector>
+#include "../core/common/headers/cuda_verify.cuh"
 #include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
@@ -106,6 +108,15 @@ int main() {
     CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
     
     std::printf("Optimized (CUDA graph static path): %.2f ms (%.3f ms/iter)\n", ms, ms / ITERS);
+
+#ifdef VERIFY
+    CUDA_CHECK(cudaMemcpy(h_data.data(), d_data, bytes, cudaMemcpyDeviceToHost));
+    double checksum = 0.0;
+    for (float v : h_data) {
+        checksum += std::abs(v);
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
     
     CUDA_CHECK(cudaGraphExecDestroy(graph_exec_static));
     CUDA_CHECK(cudaGraphDestroy(graph_static));

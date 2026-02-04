@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "dynamic_segments_common.cuh"
+#include "../core/common/headers/cuda_verify.cuh"
 #include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                        \
@@ -109,6 +110,9 @@ int main() {
         checksum += static_cast<double>(v);
     }
     std::printf("Optimized checksum: %.6e\n", checksum);
+#ifdef VERIFY
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
 
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));

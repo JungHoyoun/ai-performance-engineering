@@ -1,8 +1,10 @@
 // baseline_cuda_graphs_conditional_enhanced.cu -- Standard approach (baseline).
 
 #include <cuda_runtime.h>
+#include <cmath>
 #include <cstdio>
 #include <vector>
+#include "../core/common/headers/cuda_verify.cuh"
 #include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
@@ -97,6 +99,15 @@ int main() {
     
     std::printf("Baseline (individual kernel launches): %.2f ms (%.3f ms/iter)\n", ms, ms / ITERS);
     std::printf("Note: Comparing kernel launch overhead vs CUDA graph replay\n");
+
+#ifdef VERIFY
+    CUDA_CHECK(cudaMemcpy(h_data.data(), d_data, bytes, cudaMemcpyDeviceToHost));
+    double checksum = 0.0;
+    for (float v : h_data) {
+        checksum += std::abs(v);
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
     
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));

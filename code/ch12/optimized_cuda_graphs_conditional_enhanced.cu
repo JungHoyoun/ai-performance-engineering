@@ -1,8 +1,10 @@
 // optimized_cuda_graphs_conditional_enhanced.cu -- CUDA graph static path (optimized).
 
 #include <cuda_runtime.h>
+#include <cmath>
 #include <cstdio>
 #include <vector>
+#include "../core/common/headers/cuda_verify.cuh"
 #include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
@@ -104,6 +106,15 @@ int main() {
     
     std::printf("Optimized (CUDA graph static path): %.2f ms (%.3f ms/iter)\n", ms, ms / ITERS);
     std::printf("Note: Fixed path, no dynamic branching\n");
+
+#ifdef VERIFY
+    CUDA_CHECK(cudaMemcpy(h_data.data(), d_data, bytes, cudaMemcpyDeviceToHost));
+    double checksum = 0.0;
+    for (float v : h_data) {
+        checksum += std::abs(v);
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
     
     if (is_sm10x || is_sm12x) {
         std::printf("\n✅ Blackwell Optimizations:\n");

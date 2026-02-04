@@ -6,6 +6,7 @@ and custom CUDA Events. Supports nsys, ncu, and PyTorch profiler integration.
 
 from __future__ import annotations
 
+import argparse
 import copy
 import gc
 import json
@@ -4835,6 +4836,7 @@ def benchmark_main(
     iterations: int = 10,
     warmup: int = 5,
     name: Optional[str] = None,
+    force_sync: Optional[bool] = None,
 ) -> None:
     """Safe helper for running benchmarks in __main__ blocks.
     
@@ -4858,13 +4860,52 @@ def benchmark_main(
     Args:
         get_benchmark_fn: Callable that returns a benchmark instance
         iterations: Number of timed iterations
-        warmup: Number of warmup iterations  
+        warmup: Number of warmup iterations
         name: Optional name for output
+        force_sync: If True, synchronize the whole device after each iteration.
+            If None, honors CLI flags/env, otherwise defaults to True for ad-hoc
+            runs (unless explicitly disabled).
     """
     # Run directly without harness to avoid CUDA subprocess issues
         # The harness subprocess mode is designed for run_benchmarks.py
     # which properly manages CUDA context by spawning fresh subprocesses
     
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--iterations", type=int, default=None)
+    parser.add_argument("--warmup", type=int, default=None)
+    sync_group = parser.add_mutually_exclusive_group()
+    sync_group.add_argument("--force-sync", action="store_true", default=None)
+    sync_group.add_argument("--no-force-sync", action="store_true", default=None)
+    cli_args, _ = parser.parse_known_args()
+
+    if cli_args.iterations is not None:
+        iterations = cli_args.iterations
+    if cli_args.warmup is not None:
+        warmup = cli_args.warmup
+
+    if force_sync is None:
+        if cli_args.force_sync:
+            force_sync = True
+        elif cli_args.no_force_sync:
+            force_sync = False
+
+    if force_sync is None:
+        env_force_sync = os.getenv("AISP_FORCE_SYNC", "").strip().lower()
+        if env_force_sync:
+            if env_force_sync in {"1", "true", "yes", "on"}:
+                force_sync = True
+            elif env_force_sync in {"0", "false", "no", "off"}:
+                force_sync = False
+        if force_sync is None:
+            force_sync = True
+            warn_msg = (
+                "WARNING: ad-hoc benchmark_main run detected; enabling device-wide "
+                "synchronize after each iteration. Use --no-force-sync (or "
+                "AISP_FORCE_SYNC=0) to disable."
+            )
+            print(warn_msg, file=sys.stderr)
+            warnings.warn(warn_msg, RuntimeWarning, stacklevel=1)
+
     benchmark = get_benchmark_fn()
     bench_name = name or getattr(benchmark, 'name', None) or benchmark.__class__.__name__
     
@@ -4896,6 +4937,8 @@ def benchmark_main(
         for _ in range(iterations):
             start_event.record()
             benchmark.benchmark_fn()
+            if force_sync:
+                torch.cuda.synchronize()
             end_event.record()
             end_event.synchronize()
             elapsed_ms = start_event.elapsed_time(end_event)

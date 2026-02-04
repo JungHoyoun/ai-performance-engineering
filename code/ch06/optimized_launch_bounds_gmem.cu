@@ -2,8 +2,10 @@
 
 #include <cuda_runtime.h>
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstdio>
+#include "../core/common/headers/cuda_verify.cuh"
 #include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                       \
@@ -87,6 +89,14 @@ int main() {
     cudaEventElapsedTime(&ms, start, stop);
     std::printf("Launch-bounds optimized (gmem forcing) time: %.3f ms\\n", ms);
     std::printf("First output: %.4f\\n", h_out[0]);
+
+#ifdef VERIFY
+    double checksum = 0.0;
+    for (int i = 0; i < N; ++i) {
+        checksum += std::abs(h_out[i]);
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
 
     cudaFree(d_in);
     cudaFree(d_out);

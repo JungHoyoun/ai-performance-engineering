@@ -56,10 +56,11 @@ IGNORE_DIRS = {
     "gpt-oss-20b",
     "mixtral-8x7b",
     "phi-3.5-moe",
+    "kernels",
     "third_party",
 }
 
-BENCHMARK_SUFFIXES = {".py", ".cu"}
+BENCHMARK_SUFFIXES = {".py"}
 GENERATED_DIR_NAMES = {"llm_patches", "llm_patches_test"}
 
 def _iter_named_dirs(repo_root: Path, names: set[str]) -> Iterable[Path]:

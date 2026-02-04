@@ -1020,50 +1020,54 @@ class AIDomain:
         """
         return _safe_call(_get_handler().analyze_kernel_with_llm, {"code": code})
     
-    def suggest_tools(self, query: str) -> Dict[str, Any]:
+    def suggest_tools(
+        self,
+        query: str,
+        llm_routing: bool = True,
+        max_suggestions: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """
         Suggest relevant tools based on user intent.
-        
+
         Args:
             query: User intent (e.g., "I keep OOMing on 24GB VRAM")
+            llm_routing: If True, use LLM-based routing (requires configured LLM backend)
+            max_suggestions: Optional cap on the number of suggestions returned
         """
-        # Return tool suggestions based on query keywords
-        suggestions = []
-        query_lower = query.lower()
-        
-        if "oom" in query_lower or "memory" in query_lower or "vram" in query_lower:
-            suggestions.extend([
-                {"tool": "gpu_info", "reason": "Check current VRAM usage"},
-                {"tool": "analyze_memory_patterns", "reason": "Analyze memory access patterns"},
-                {"tool": "inference_quantization", "reason": "Reduce memory with quantization"},
-                {"tool": "recommend", "reason": "Get memory optimization tips"},
-            ])
-        
-        if "slow" in query_lower or "latency" in query_lower:
-            suggestions.extend([
-                {"tool": "analyze_bottlenecks", "reason": "Identify bottlenecks"},
-                {"tool": "profile_flame", "reason": "Visualize time breakdown"},
-                {"tool": "recommend", "reason": "Get optimization recommendations"},
-            ])
-        
-        if "distributed" in query_lower or "multi-gpu" in query_lower or "parallel" in query_lower:
-            suggestions.extend([
-                {"tool": "gpu_topology", "reason": "Check GPU interconnects"},
-                {"tool": "distributed_plan", "reason": "Plan parallelism strategy"},
-                {"tool": "distributed_nccl", "reason": "NCCL tuning recommendations"},
-            ])
-        
-        if not suggestions:
-            suggestions = [
-                {"tool": "system_context", "reason": "Get full system overview"},
-                {"tool": "analyze_bottlenecks", "reason": "Start with bottleneck analysis"},
-                {"tool": "ask", "reason": "Ask your specific question"},
-            ]
-        
+        from core.analysis.tool_router import (
+            DEFAULT_SUGGEST_RULES,
+            suggest_tools_heuristic,
+            suggest_tools_llm,
+        )
+
+        try:
+            if llm_routing:
+                suggestions = suggest_tools_llm(
+                    query,
+                    DEFAULT_SUGGEST_RULES,
+                    max_suggestions=max_suggestions,
+                )
+                routing = "llm"
+            else:
+                suggestions = suggest_tools_heuristic(
+                    query,
+                    DEFAULT_SUGGEST_RULES,
+                    max_suggestions=max_suggestions,
+                )
+                routing = "heuristic"
+        except (RuntimeError, ValueError) as exc:
+            return {
+                "query": query,
+                "success": False,
+                "error": str(exc),
+            }
+
         return {
             "query": query,
-            "suggestions": suggestions[:5],
+            "suggestions": suggestions,
+            "routing": routing,
             "note": "Call suggested tools in order for best results",
+            "success": True,
         }
 
     def troubleshoot(

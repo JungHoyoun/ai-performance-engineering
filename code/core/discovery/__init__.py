@@ -171,6 +171,7 @@ def _iter_benchmark_dirs(bench_root: Path) -> Iterable[Path]:
         "gpt-oss-20b",
         "mixtral-8x7b",
         "phi-3.5-moe",
+        "kernels",
         "third_party",
         "vendor",
     }
@@ -184,7 +185,7 @@ def _iter_benchmark_dirs(bench_root: Path) -> Iterable[Path]:
             and not d.startswith("pymp-")
         ]
         if any(
-            fname.startswith("baseline_") and (fname.endswith(".py") or fname.endswith(".cu"))
+            fname.startswith("baseline_") and fname.endswith(".py")
             for fname in filenames
         ):
             yield Path(current)
@@ -476,17 +477,12 @@ def resolve_target_chapters(
         # Collect per-chapter example filters when provided
         if sep:
             slug = chapter_slug(chapter_dir, repo_root, bench_root=primary_root)
-            allowed_python = {example for _, _, example in discover_benchmarks(chapter_dir)}
-            allowed_cuda = {
-                p.stem.replace("baseline_", "", 1)
-                for p in chapter_dir.glob("baseline_*.cu")
-            }
-            allowed = allowed_python | allowed_cuda
+            allowed = {example for _, _, example in discover_benchmarks(chapter_dir)}
             for example in _parse_examples(examples):
-                if allowed and example not in allowed:
+                if example not in allowed:
                     raise ValueError(
                         f"Example '{example}' not found in {slug}. "
-                        f"Available: {', '.join(sorted(allowed))}"
+                        f"Available: {', '.join(sorted(allowed)) or 'none'}"
                     )
                 chapter_filters.setdefault(slug, set()).add(example)
 

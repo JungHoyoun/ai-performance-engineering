@@ -23,41 +23,43 @@ all: $(TARGETS)
 $(addsuffix $(SUFFIX), $(BASE_TARGETS)): %$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
 	@echo "Building $@..."
 	@if [ "$*" = "cutlass_gemm_example" ] || [ "$*" = "micro_tiling_matmul" ]; then \
-		$(NVCC) $(NVCC_FLAGS) -lcublas -lcuda -o $@ $<; \ $(CUDA_NVTX_LDFLAGS)
-	elif [ "$*" = "baseline_cutlass_gemm_fp4_perchannel" ] || [ "$*" = "optimized_cutlass_gemm_fp4_perchannel" ]; then \
-		$(NVCC) $(NVCC_FLAGS) $(CUTLASS_INCLUDES) -lcuda -o $@ $<; \ $(CUDA_NVTX_LDFLAGS)
-	elif [ "$*" = "baseline_cublaslt_gemm" ] || [ "$*" = "optimized_cublaslt_gemm" ] || \
-	     [ "$*" = "baseline_cutlass_gemm" ] || [ "$*" = "optimized_cutlass_gemm" ] || \
-	     [ "$*" = "baseline_cublaslt_gemm_fp16" ] || [ "$*" = "optimized_cublaslt_gemm_fp16" ] || \
+		$(NVCC) $(NVCC_FLAGS) -lcublas -lcuda -o $@ $< $(CUDA_NVTX_LDFLAGS); \
+	elif [ "$*" = "baseline_cutlass_gemm" ] || [ "$*" = "optimized_cutlass_gemm" ] || \
+	     [ "$*" = "baseline_cutlass_gemm_preloaded" ] || [ "$*" = "optimized_cutlass_gemm_preloaded" ] || \
 	     [ "$*" = "baseline_cutlass_gemm_fp16" ] || [ "$*" = "optimized_cutlass_gemm_fp16" ] || \
-	     [ "$*" = "baseline_cublaslt_gemm_fp8" ] || [ "$*" = "optimized_cublaslt_gemm_fp8" ] || \
 	     [ "$*" = "baseline_cutlass_gemm_fp8" ] || [ "$*" = "optimized_cutlass_gemm_fp8" ] || \
-	     [ "$*" = "baseline_cublaslt_gemm_fp4" ] || [ "$*" = "optimized_cublaslt_gemm_fp4" ] || \
 	     [ "$*" = "baseline_cutlass_gemm_fp4" ] || [ "$*" = "optimized_cutlass_gemm_fp4" ] || \
+	     [ "$*" = "baseline_cutlass_gemm_fp4_perchannel" ] || [ "$*" = "optimized_cutlass_gemm_fp4_perchannel" ]; then \
+		$(NVCC) $(NVCC_FLAGS) $(CUTLASS_INCLUDES) -lcuda -o $@ $< $(CUDA_NVTX_LDFLAGS); \
+	elif [ "$*" = "baseline_cublaslt_gemm" ] || [ "$*" = "optimized_cublaslt_gemm" ] || \
+	     [ "$*" = "baseline_cublaslt_gemm_fp16" ] || [ "$*" = "optimized_cublaslt_gemm_fp16" ] || \
+	     [ "$*" = "baseline_cublaslt_gemm_fp8" ] || [ "$*" = "optimized_cublaslt_gemm_fp8" ] || \
+	     [ "$*" = "baseline_cublaslt_gemm_fp4" ] || [ "$*" = "optimized_cublaslt_gemm_fp4" ] || \
 	     [ "$*" = "baseline_cublas_gemm_fp4_perchannel" ] || [ "$*" = "optimized_cublas_gemm_fp4_perchannel" ]; then \
-		$(NVCC) $(NVCC_FLAGS) -lcublas -lcublasLt -lcuda -o $@ $<; \ $(CUDA_NVTX_LDFLAGS)
+		$(NVCC) $(NVCC_FLAGS) -lcublas -lcublasLt -lcuda -o $@ $< $(CUDA_NVTX_LDFLAGS); \
 	else \
-		$(NVCC) $(NVCC_FLAGS) -lcuda -o $@ $<; \ $(CUDA_NVTX_LDFLAGS)
+		$(NVCC) $(NVCC_FLAGS) -lcuda -o $@ $< $(CUDA_NVTX_LDFLAGS); \
 	fi
 
 $(VERIFY_TARGETS): %_verify$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
 	@echo "Building $@ (verify)..."
 	@if [ "$*" = "cutlass_gemm_example" ] || [ "$*" = "micro_tiling_matmul" ]; then \
-		$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -lcublas -lcuda -o $@ $<; \ $(CUDA_NVTX_LDFLAGS)
-	elif [ "$*" = "baseline_cutlass_gemm_fp4_perchannel" ] || [ "$*" = "optimized_cutlass_gemm_fp4_perchannel" ]; then \
-		$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 $(CUTLASS_INCLUDES) -lcuda -o $@ $<; \ $(CUDA_NVTX_LDFLAGS)
-	elif [ "$*" = "baseline_cublaslt_gemm" ] || [ "$*" = "optimized_cublaslt_gemm" ] || \
-	     [ "$*" = "baseline_cutlass_gemm" ] || [ "$*" = "optimized_cutlass_gemm" ] || \
-	     [ "$*" = "baseline_cublaslt_gemm_fp16" ] || [ "$*" = "optimized_cublaslt_gemm_fp16" ] || \
+		$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -lcublas -lcuda -o $@ $< $(CUDA_NVTX_LDFLAGS); \
+	elif [ "$*" = "baseline_cutlass_gemm" ] || [ "$*" = "optimized_cutlass_gemm" ] || \
+	     [ "$*" = "baseline_cutlass_gemm_preloaded" ] || [ "$*" = "optimized_cutlass_gemm_preloaded" ] || \
 	     [ "$*" = "baseline_cutlass_gemm_fp16" ] || [ "$*" = "optimized_cutlass_gemm_fp16" ] || \
-	     [ "$*" = "baseline_cublaslt_gemm_fp8" ] || [ "$*" = "optimized_cublaslt_gemm_fp8" ] || \
 	     [ "$*" = "baseline_cutlass_gemm_fp8" ] || [ "$*" = "optimized_cutlass_gemm_fp8" ] || \
-	     [ "$*" = "baseline_cublaslt_gemm_fp4" ] || [ "$*" = "optimized_cublaslt_gemm_fp4" ] || \
 	     [ "$*" = "baseline_cutlass_gemm_fp4" ] || [ "$*" = "optimized_cutlass_gemm_fp4" ] || \
+	     [ "$*" = "baseline_cutlass_gemm_fp4_perchannel" ] || [ "$*" = "optimized_cutlass_gemm_fp4_perchannel" ]; then \
+		$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 $(CUTLASS_INCLUDES) -lcuda -o $@ $< $(CUDA_NVTX_LDFLAGS); \
+	elif [ "$*" = "baseline_cublaslt_gemm" ] || [ "$*" = "optimized_cublaslt_gemm" ] || \
+	     [ "$*" = "baseline_cublaslt_gemm_fp16" ] || [ "$*" = "optimized_cublaslt_gemm_fp16" ] || \
+	     [ "$*" = "baseline_cublaslt_gemm_fp8" ] || [ "$*" = "optimized_cublaslt_gemm_fp8" ] || \
+	     [ "$*" = "baseline_cublaslt_gemm_fp4" ] || [ "$*" = "optimized_cublaslt_gemm_fp4" ] || \
 	     [ "$*" = "baseline_cublas_gemm_fp4_perchannel" ] || [ "$*" = "optimized_cublas_gemm_fp4_perchannel" ]; then \
-		$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -lcublas -lcublasLt -lcuda -o $@ $<; \ $(CUDA_NVTX_LDFLAGS)
+		$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -lcublas -lcublasLt -lcuda -o $@ $< $(CUDA_NVTX_LDFLAGS); \
 	else \
-		$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -lcuda -o $@ $<; \ $(CUDA_NVTX_LDFLAGS)
+		$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -lcuda -o $@ $< $(CUDA_NVTX_LDFLAGS); \
 	fi
 
 compare: clean

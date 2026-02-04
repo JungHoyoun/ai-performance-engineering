@@ -13,8 +13,10 @@
 //   - Much lower global memory traffic
 
 #include <cuda_runtime.h>
+#include <cmath>
 #include <cstdio>
 #include <vector>
+#include "../core/common/headers/cuda_verify.cuh"
 #include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call) do { \
@@ -129,6 +131,16 @@ int main() {
     printf("Results:\n");
     printf("  Time: %.3f ms (%.2f TFLOPS)\n", avg_ms, tflops);
     printf("\nNote: No shared memory = poor data reuse.\n");
+
+#ifdef VERIFY
+    std::vector<float> h_C(M * N);
+    CUDA_CHECK(cudaMemcpy(h_C.data(), d_C, bytes_C, cudaMemcpyDeviceToHost));
+    double checksum = 0.0;
+    for (size_t i = 0; i < h_C.size(); ++i) {
+        checksum += std::abs(h_C[i]);
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
     
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));

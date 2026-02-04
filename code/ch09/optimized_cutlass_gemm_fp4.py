@@ -27,14 +27,11 @@ class OptimizedCutlassGemmFp4Benchmark(CudaBinaryBenchmark):
             warmup=5,
             timeout_seconds=180,
             workload_params={
-                "FP4_BLOCK_SIZE": 16,
                 "M": 4096,
                 "N": 4096,
                 "K": 4096,
                 "kIterations": 10,
-                "kBatchCount": 8,
-                "workspaceSize": 1024,
-                "dtype": 'fp4',
+                "dtype": "nvfp4",
             },
         )
 

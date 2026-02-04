@@ -31,9 +31,8 @@ class BaselineCutlassGemmFp8Benchmark(CudaBinaryBenchmark):
                 "N": 4096,
                 "K": 4096,
                 "kIterations": 10,
-                "kBatchCount": 8,
-                "TILE_SIZE": 32,
-                "dtype": 'fp8',
+                "kRepeats": 16,
+                "dtype": "fp8_e4m3",
             },
         )
 

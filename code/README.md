@@ -32,27 +32,14 @@ python -m cli.aisp bench run --targets ch01 --profile minimal
 - Use `python -m cli.aisp bench expectations --hardware b200 --min-speedup 1.05` to report expectation entries below a target threshold.
 - Use `python -m cli.aisp bench run --targets ch*` for automated regression suites.
 - `python core/analysis/analyze_expectations.py --artifacts-dir artifacts` compares new runs to stored thresholds.
+- CUDA benchmarks execute via Python wrappers (`CudaBinaryBenchmark`). Direct `.cu` runs are not supported; for ad-hoc runs use `python chXX/baseline_*.py`, which calls `benchmark_main`.
+- Ad-hoc `benchmark_main` runs default to device-wide sync and warn loudly. Disable with `--no-force-sync` (or `AISP_FORCE_SYNC=0`). The harness already enforces full-device sync.
 
 ## Validation Checklist
 - `pytest tests/integration` succeeds to confirm harness discovery and CLI plumbing.
 - `python core/benchmark/benchmark_peak.py` reports TFLOP/s, bandwidth, and NVLink numbers close to the published ceilings.
 
 ## Wall of Shame
-The benchmark harness includes a strict set of correctness and validity checks to prevent misleading speedups.
-Below is the reference list of validity issues we explicitly protect against, plus real-world incidents that
-motivated these checks.
-
-Note: All 95 validity issues are protected by the harness.
-
-CUDA Graph Note: Capturing CUDA graphs in `setup()` is allowed for steady-state replay benchmarks (we intentionally
-measure replay, not capture). It is NOT allowed to precompute and reuse the final output from `setup()`. The output
-used for verification must come from the timed `benchmark_fn()` run and be surfaced via `capture_verification_payload()`.
-
-Virtualization Note: `validate_environment()` treats virtualization (hypervisor present) as invalid. Benchmarks are
-supported only on bare metal.
-
-### Benchmark Validity Issues Reference
-
 | Category | Issue | What Happens | Protection | Status | Real-World Incident |
 | --- | --- | --- | --- | --- | --- |
 | Timing | Unsynced Streams | Work on non-default streams is not timed | Full device sync + StreamAuditor | OK | Locus/KernelBench 2025 |
@@ -152,6 +139,17 @@ supported only on bare metal.
 | Evaluation | Missing Holdout Sets | No proper train/test split | Held-out evaluation data | OK | AI Agent Benchmark Shortcuts 2024, Microsoft Tay 2016 |
 
 Total: 11 categories, 95 validity issues - all protected by the harness.
+
+### How we detect new Hall of Shame members (and how we avoid it)
+The harness enforces strict correctness and validity checks; the table above is the Benchmark Validity Issues
+Reference and the incidents that motivated each protection. Any violation fails the run and blocks the speedup report.
+
+CUDA Graph Note: Capturing CUDA graphs in `setup()` is allowed for steady-state replay benchmarks (we intentionally
+measure replay, not capture). It is NOT allowed to precompute and reuse the final output from `setup()`. The output
+used for verification must come from the timed `benchmark_fn()` run and be surfaced via `capture_verification_payload()`.
+
+Virtualization Note: `validate_environment()` treats virtualization (hypervisor present) as invalid. Benchmarks are
+supported only on bare metal.
 
 ### Notable Real-World Incidents
 

@@ -3,9 +3,11 @@
 // Compile: nvcc -O3 -std=c++17 -arch=sm_121 baseline_memory_transfer_multigpu.cu -o baseline_memory_transfer_multigpu_sm121
 
 #include <cuda_runtime.h>
+#include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <chrono>
+#include "../core/common/headers/cuda_verify.cuh"
 #include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
@@ -77,6 +79,14 @@ int main() {
 
     std::printf("Average time per iteration: %.3f ms\n", avg_ms);
     std::printf("Bandwidth: %.2f GB/s (host-staged)\n", bandwidth_gbs);
+
+#ifdef VERIFY
+    double checksum = 0.0;
+    for (size_t i = 0; i < N; ++i) {
+        checksum += std::abs(h_buffer[i]);
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
 
     CUDA_CHECK(cudaSetDevice(src_device));
     CUDA_CHECK(cudaFree(d_src));

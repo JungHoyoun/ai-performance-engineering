@@ -17,6 +17,7 @@ EXCLUDE_SOURCES := $(EXTENSION_SOURCES) $(DRIVER_SOURCES)
 STANDALONE_SOURCES := $(filter-out $(EXCLUDE_SOURCES),$(CUDA_SOURCES))
 BASE_TARGETS := $(STANDALONE_SOURCES:.cu=)
 TARGETS := $(addsuffix $(SUFFIX), $(BASE_TARGETS))
+VERIFY_TARGETS := $(addsuffix _verify$(SUFFIX), $(BASE_TARGETS))
 
 # Default target
 all: $(TARGETS)
@@ -27,6 +28,10 @@ all: $(TARGETS)
 # Pattern rule for building targets with architecture suffix
 %$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
 	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LDFLAGS)
+
+# Verify-mode pattern rule (adds -DVERIFY=1)
+%_verify$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
+	$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -o $@ $< $(NVCC_LDFLAGS)
 
 # Special rules for dual-pipeline executables (use dedicated drivers)
 baseline_warp_specialized_two_pipelines_multistream$(SUFFIX): \

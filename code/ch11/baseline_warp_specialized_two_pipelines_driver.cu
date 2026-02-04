@@ -1,15 +1,18 @@
 #include <cuda_runtime.h>
 
+#include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstddef>
 
 #include "baseline_warp_specialized_two_pipelines_common.cuh"
+#include "../core/common/headers/cuda_verify.cuh"
 #include "../core/common/nvtx_utils.cuh"
 
 namespace {
 
 constexpr int kNumStreams = 2;
-constexpr int kBatches = 8;
+constexpr int kBatches = 128;
 constexpr size_t kBytesPerTile =
     static_cast<size_t>(ch11::kBaselineTileElems) * sizeof(float);
 
@@ -39,11 +42,12 @@ int main() {
       NVTX_RANGE("setup");
     for (int i = 0; i < ch11::kBaselineTileElems; ++i) {
         NVTX_RANGE("setup");
-      hA[static_cast<size_t>(b) * ch11::kBaselineTileElems + i] = static_cast<float>(i);
-      hB[static_cast<size_t>(b) * ch11::kBaselineTileElems + i] = 1.0f;
+      hA[static_cast<size_t>(b) * ch11::kBaselineTileElems + i] = 1.0f;
+      hB[static_cast<size_t>(b) * ch11::kBaselineTileElems + i] = 2.0f;
     }
   }
 
+  const auto start = std::chrono::high_resolution_clock::now();
   for (int b = 0; b < kBatches; ++b) {
       NVTX_RANGE("iteration");
     cudaStream_t st = streams[b % kNumStreams];
@@ -71,6 +75,23 @@ int main() {
   for (int i = 0; i < kNumStreams; ++i) {
       NVTX_RANGE("cleanup");
     check(cudaStreamSynchronize(streams[i]));
+  }
+
+  const auto stop = std::chrono::high_resolution_clock::now();
+  const double total_ms =
+      std::chrono::duration<double, std::milli>(stop - start).count();
+  std::printf("TIME_MS: %.3f\n", total_ms);
+
+#ifdef VERIFY
+  double checksum = 0.0;
+  for (size_t i = 0; i < static_cast<size_t>(kBatches) * ch11::kBaselineTileElems; ++i) {
+    checksum += std::abs(hC[i]);
+  }
+  VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
+
+  for (int i = 0; i < kNumStreams; ++i) {
+      NVTX_RANGE("cleanup");
     check(cudaStreamDestroy(streams[i]));
   }
 
@@ -79,4 +100,3 @@ int main() {
   check(cudaFreeHost(hC));
   return 0;
 }
-

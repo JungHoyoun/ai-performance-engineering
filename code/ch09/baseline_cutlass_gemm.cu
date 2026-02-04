@@ -1,11 +1,14 @@
-// baseline_cutlass_gemm.cu -- Host-staged GEMM baseline.
+// baseline_cutlass_gemm.cu -- CUTLASS SIMT GEMM baseline (no tensor cores).
 
 #include <cuda_runtime.h>
 
 #include <cmath>
 #include <iostream>
 #include <random>
-#include <vector>
+
+#include "cutlass/cutlass.h"
+#include "cutlass/gemm/device/gemm.h"
+#include "cutlass/layout/matrix.h"
 
 #include "../core/common/headers/cuda_verify.cuh"
 #include "../core/common/nvtx_utils.cuh"
@@ -19,41 +22,16 @@
       std::exit(EXIT_FAILURE);                                                   \
     }                                                                            \
   } while (0)
-#define CUDA_CHECK_LAST_ERROR()                                                  \
+
+#define CUTLASS_CHECK(status)                                                    \
   do {                                                                           \
-    cudaError_t status = cudaGetLastError();                                     \
-    if (status != cudaSuccess) {                                                 \
-      std::cerr << "CUDA error " << __FILE__ << ":" << __LINE__ << " "           \
-                << cudaGetErrorString(status) << std::endl;                      \
+    cutlass::Status error = (status);                                            \
+    if (error != cutlass::Status::kSuccess) {                                    \
+      std::cerr << "CUTLASS error " << __FILE__ << ":" << __LINE__ << " "         \
+                << cutlassGetStatusString(error) << std::endl;                   \
       std::exit(EXIT_FAILURE);                                                   \
     }                                                                            \
   } while (0)
-
-// Simple GEMM kernel with no tiling (intentionally bandwidth bound).
-__global__ void simple_gemm_kernel(const float* __restrict__ A,
-                                   const float* __restrict__ B,
-                                   float* __restrict__ C,
-                                   int M,
-                                   int N,
-                                   int K,
-                                   float alpha,
-                                   float beta) {
-    const int row = blockIdx.y * blockDim.y + threadIdx.y;
-    const int col = blockIdx.x * blockDim.x + threadIdx.x;
-    if (row >= M || col >= N) {
-        return;
-    }
-
-    const volatile float* A_volatile = reinterpret_cast<const volatile float*>(A);
-    const volatile float* B_volatile = reinterpret_cast<const volatile float*>(B);
-    float sum = 0.0f;
-    for (int k = 0; k < K; ++k) {
-        float a = A_volatile[row * K + k];
-        float b = B_volatile[k * N + col];
-        sum = fmaf(a, b, sum);
-    }
-    C[row * N + col] = alpha * sum + beta * C[row * N + col];
-}
 
 int main() {
     NVTX_RANGE("main");
@@ -61,52 +39,88 @@ int main() {
     constexpr int N = 1024;
     constexpr int K = 1024;
     constexpr int kIterations = 5;
-    constexpr int kBatchCount = 32;
+    constexpr int kRepeats = 32;
+
+    using Element = float;
+    using Layout = cutlass::layout::RowMajor;
+    using ElementAccumulator = float;
+
+    using Gemm = cutlass::gemm::device::Gemm<
+        Element, Layout,
+        Element, Layout,
+        Element, Layout,
+        ElementAccumulator,
+        cutlass::arch::OpClassSimt,
+        cutlass::arch::Sm100
+    >;
 
     const size_t elements_A = static_cast<size_t>(M) * K;
     const size_t elements_B = static_cast<size_t>(K) * N;
     const size_t elements_C = static_cast<size_t>(M) * N;
-    const size_t size_A = elements_A * sizeof(float) * kBatchCount;
-    const size_t size_B = elements_B * sizeof(float) * kBatchCount;
-    const size_t size_C = elements_C * sizeof(float);
+    const size_t size_A = elements_A * sizeof(Element);
+    const size_t size_B = elements_B * sizeof(Element);
+    const size_t size_C = elements_C * sizeof(Element);
 
-    float* h_A = nullptr;
-    float* h_B = nullptr;
-    float* h_C0 = nullptr;
+    Element* h_A = nullptr;
+    Element* h_B = nullptr;
+    Element* h_C = nullptr;
     CUDA_CHECK(cudaMallocHost(&h_A, size_A));
     CUDA_CHECK(cudaMallocHost(&h_B, size_B));
-    CUDA_CHECK(cudaMallocHost(&h_C0, size_C));
+    CUDA_CHECK(cudaMallocHost(&h_C, size_C));
 
     std::mt19937 gen(42);
     std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
-    for (size_t i = 0; i < elements_A * kBatchCount; ++i) {
+    for (size_t i = 0; i < elements_A; ++i) {
         NVTX_RANGE("setup");
-        h_A[i] = dis(gen);
+        h_A[i] = static_cast<Element>(dis(gen));
     }
-    for (size_t i = 0; i < elements_B * kBatchCount; ++i) {
+    for (size_t i = 0; i < elements_B; ++i) {
         NVTX_RANGE("setup");
-        h_B[i] = dis(gen);
+        h_B[i] = static_cast<Element>(dis(gen));
     }
+    std::fill(h_C, h_C + elements_C, Element(0));
 
-    float *d_A = nullptr, *d_B = nullptr, *d_C = nullptr;
+    Element *d_A = nullptr, *d_B = nullptr, *d_C = nullptr;
     CUDA_CHECK(cudaMalloc(&d_A, size_A));
     CUDA_CHECK(cudaMalloc(&d_B, size_B));
-    CUDA_CHECK(cudaMalloc(&d_C, size_C * kBatchCount));
+    CUDA_CHECK(cudaMalloc(&d_C, size_C));
+
+    CUDA_CHECK(cudaMemcpy(d_A, h_A, size_A, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_B, h_B, size_B, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_C, h_C, size_C, cudaMemcpyHostToDevice));
 
     cudaStream_t stream;
     CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
-    CUDA_CHECK(cudaMemcpyAsync(d_A, h_A, size_A, cudaMemcpyHostToDevice, stream));
-    CUDA_CHECK(cudaMemcpyAsync(d_B, h_B, size_B, cudaMemcpyHostToDevice, stream));
-    CUDA_CHECK(cudaMemsetAsync(d_C, 0, size_C * kBatchCount, stream));
 
-    dim3 block_size(16, 8);
-    dim3 grid_size((N + block_size.x - 1) / block_size.x,
-                   (M + block_size.y - 1) / block_size.y);
+    const int lda = K;
+    const int ldb = N;
+    const int ldc = N;
 
-    // Warmup (single batch).
-    simple_gemm_kernel<<<grid_size, block_size, 0, stream>>>(
-        d_A, d_B, d_C, M, N, K, 1.0f, 0.0f);
-    CUDA_CHECK_LAST_ERROR();
+    cutlass::gemm::GemmCoord problem_size(M, N, K);
+    cutlass::TensorRef<Element const, Layout> ref_A(d_A, Layout(lda));
+    cutlass::TensorRef<Element const, Layout> ref_B(d_B, Layout(ldb));
+    cutlass::TensorRef<Element const, Layout> ref_C(d_C, Layout(ldc));
+    cutlass::TensorRef<Element, Layout> ref_D(d_C, Layout(ldc));
+
+    typename Gemm::Arguments args(
+        problem_size,
+        ref_A,
+        ref_B,
+        ref_C,
+        ref_D,
+        {ElementAccumulator(1.0f), ElementAccumulator(0.0f)}
+    );
+
+    Gemm gemm_op;
+    size_t workspace_size = Gemm::get_workspace_size(args);
+    void* workspace = nullptr;
+    if (workspace_size > 0) {
+        CUDA_CHECK(cudaMalloc(&workspace, workspace_size));
+    }
+    CUTLASS_CHECK(gemm_op.initialize(args, workspace, stream));
+
+    // Warmup
+    CUTLASS_CHECK(gemm_op.run(stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
     cudaEvent_t start, stop;
@@ -115,41 +129,27 @@ int main() {
 
     CUDA_CHECK(cudaEventRecord(start, stream));
     for (int iter = 0; iter < kIterations; ++iter) {
-        NVTX_RANGE("batch");
-        for (int batch = 0; batch < kBatchCount; ++batch) {
-            NVTX_RANGE("compute_kernel:simple_gemm_kernel");
-            const size_t a_off = static_cast<size_t>(batch) * elements_A;
-            const size_t b_off = static_cast<size_t>(batch) * elements_B;
-            const size_t c_off = static_cast<size_t>(batch) * elements_C;
-            simple_gemm_kernel<<<grid_size, block_size, 0, stream>>>(
-                d_A + a_off,
-                d_B + b_off,
-                d_C + c_off,
-                M,
-                N,
-                K,
-                1.0f,
-                0.0f);
-            CUDA_CHECK_LAST_ERROR();
+        NVTX_RANGE("compute_math:cutlass");
+        for (int rep = 0; rep < kRepeats; ++rep) {
+            CUTLASS_CHECK(gemm_op.run(stream));
         }
     }
     CUDA_CHECK(cudaEventRecord(stop, stream));
     CUDA_CHECK(cudaEventSynchronize(stop));
 
-    float time_total = 0.0f;
-    CUDA_CHECK(cudaEventElapsedTime(&time_total, start, stop));
-    const float time_avg = time_total / static_cast<float>(kIterations * kBatchCount);
-    std::cout << "Naive batched GEMM (baseline): " << time_avg << " ms" << std::endl;
+    float total_ms = 0.0f;
+    CUDA_CHECK(cudaEventElapsedTime(&total_ms, start, stop));
+    const float avg_ms = total_ms / static_cast<float>(kIterations * kRepeats);
+    std::cout << "CUTLASS SIMT GEMM (baseline): " << avg_ms << " ms" << std::endl;
 
-    CUDA_CHECK(cudaMemcpyAsync(h_C0, d_C, size_C, cudaMemcpyDeviceToHost, stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-    std::cout << "Checksum sample: " << h_C0[0] << std::endl;
+    CUDA_CHECK(cudaMemcpy(h_C, d_C, size_C, cudaMemcpyDeviceToHost));
+    std::cout << "Checksum sample: " << h_C[0] << std::endl;
 
 #ifdef VERIFY
     double checksum = 0.0;
     for (size_t i = 0; i < elements_C; ++i) {
         NVTX_RANGE("verify");
-        checksum += std::abs(static_cast<double>(h_C0[i]));
+        checksum += std::abs(static_cast<double>(h_C[i]));
     }
     VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
 #endif
@@ -157,12 +157,15 @@ int main() {
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));
     CUDA_CHECK(cudaStreamDestroy(stream));
+    if (workspace) {
+        CUDA_CHECK(cudaFree(workspace));
+    }
     CUDA_CHECK(cudaFree(d_A));
     CUDA_CHECK(cudaFree(d_B));
     CUDA_CHECK(cudaFree(d_C));
     CUDA_CHECK(cudaFreeHost(h_A));
     CUDA_CHECK(cudaFreeHost(h_B));
-    CUDA_CHECK(cudaFreeHost(h_C0));
+    CUDA_CHECK(cudaFreeHost(h_C));
 
     return 0;
 }

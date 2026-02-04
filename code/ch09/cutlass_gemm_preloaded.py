@@ -1,7 +1,6 @@
-"""Harness wrapper for cutlass_gemm_variant1 (preloaded CUTLASS GEMM).
+"""Harness wrapper for cutlass_gemm_preloaded (preloaded-inputs CUTLASS GEMM).
 
-VARIANT 1: Fair comparison baseline with pre-loaded data
-This ensures kernel execution time is measured without data transfer overhead.
+Preloaded inputs provide a fair kernel-only comparison by removing H2D transfer overhead.
 
 BOOK REFERENCE (Ch9): When comparing GEMM implementations, it's critical to
 isolate kernel execution from data movement to make fair comparisons.
@@ -19,21 +18,37 @@ if str(repo_root) not in sys.path:
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode
 from core.benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
-from core.benchmark.verification import simple_signature
 
 
-class CutlassGemmVariant1Benchmark(CudaBinaryBenchmark):
-    """Wraps the fair comparison baseline CUTLASS GEMM (pre-loaded data)."""
+class CutlassGemmPreloadedBenchmark(CudaBinaryBenchmark):
+    """Wraps the fair comparison baseline CUTLASS GEMM (preloaded inputs)."""
 
     def __init__(self) -> None:
         chapter_dir = Path(__file__).parent
+        m = n = k = 1024
+        repeats = 32
+        iterations = 5
+        bytes_a = m * k * 4
+        bytes_b = k * n * 4
+        bytes_c = m * n * 4
+        # CUDA binary reports per-GEMM average time (total / (iterations * repeats)).
+        self._total_flops = 2.0 * m * n * k
+        self._total_bytes = float(bytes_a + bytes_b + bytes_c)
         super().__init__(
             chapter_dir=chapter_dir,
-            binary_name="baseline_cutlass_gemm_variant1",
-            friendly_name="Tiled GEMM Baseline (Fair - Preloaded)",
+            binary_name="baseline_cutlass_gemm_preloaded",
+            friendly_name="Tiled GEMM Baseline (Preloaded Inputs)",
             iterations=5,
             warmup=5,
             timeout_seconds=120,
+            workload_params={
+                "M": m,
+                "N": n,
+                "K": k,
+                "kIterations": iterations,
+                "kRepeats": repeats,
+                "dtype": "float32",
+            },
         )
 
     def get_custom_metrics(self) -> Optional[dict]:
@@ -42,19 +57,15 @@ class CutlassGemmVariant1Benchmark(CudaBinaryBenchmark):
         return compute_roofline_metrics(
             total_flops=self._total_flops,
             total_bytes=self._total_bytes,
-            elapsed_ms=getattr(self, '_last_elapsed_ms', 1.0),
+            elapsed_ms=self.last_time_ms or 1.0,
             precision="fp32",
         )
     # get_verify_output inherited from CudaBinaryBenchmark - uses checksum from -DVERIFY=1 build
 
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return simple_signature(batch_size=1, dtype="float32", workload=1).to_dict()
 
-
-def get_benchmark() -> CutlassGemmVariant1Benchmark:
+def get_benchmark() -> CutlassGemmPreloadedBenchmark:
     """Factory for discover_benchmarks()."""
-    return CutlassGemmVariant1Benchmark()
+    return CutlassGemmPreloadedBenchmark()
 
 
 if __name__ == "__main__":

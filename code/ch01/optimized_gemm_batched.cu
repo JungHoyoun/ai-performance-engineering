@@ -3,9 +3,11 @@
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
+#include "../core/common/headers/cuda_verify.cuh"
 #include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
@@ -138,6 +140,18 @@ int main() {
     std::printf("Time: %.3f ms\n", time_batched);
     std::printf("Performance: %.2f TFLOPS\n", tflops_batched);
     std::printf("Kernel launches: 1 per iteration (batched)\n");
+
+#ifdef VERIFY
+    std::vector<float> h_C_host(m * n);
+    double checksum = 0.0;
+    for (int i = 0; i < batch_count; ++i) {
+        CUDA_CHECK(cudaMemcpy(h_C_host.data(), h_C[i], m * n * sizeof(float), cudaMemcpyDeviceToHost));
+        for (int j = 0; j < m * n; ++j) {
+            checksum += std::abs(h_C_host[j]);
+        }
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
     
     // Cleanup
     for (int i = 0; i < batch_count; ++i) {
@@ -155,4 +169,3 @@ int main() {
     
     return 0;
 }
-

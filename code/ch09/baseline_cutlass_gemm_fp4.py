@@ -27,14 +27,11 @@ class BaselineCutlassGemmFp4Benchmark(CudaBinaryBenchmark):
             warmup=5,
             timeout_seconds=180,
             workload_params={
-                "BLOCK_SIZE_SCALE": 32,
                 "M": 4096,
                 "N": 4096,
                 "K": 4096,
                 "kIterations": 10,
-                "kBatchCount": 8,
-                "TILE_SIZE": 32,
-                "dtype": 'fp4',
+                "dtype": "nvfp4",
             },
         )
 

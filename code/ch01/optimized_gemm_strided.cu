@@ -3,8 +3,11 @@
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
+#include "../core/common/headers/cuda_verify.cuh"
 #include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
@@ -143,6 +146,17 @@ int main() {
     std::printf("Time: %.3f ms\n", time_strided);
     std::printf("Performance: %.2f TFLOPS\n", tflops_strided);
     std::printf("Kernel launches: 1 per iteration (strided, contiguous memory)\n");
+
+#ifdef VERIFY
+    const size_t total_elements = stride_C * batch_count;
+    std::vector<float> h_C(total_elements);
+    CUDA_CHECK(cudaMemcpy(h_C.data(), d_C, total_elements * sizeof(float), cudaMemcpyDeviceToHost));
+    double checksum = 0.0;
+    for (size_t i = 0; i < total_elements; ++i) {
+        checksum += std::abs(h_C[i]);
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
     
     // Cleanup
     CUDA_CHECK(cudaFree(d_A));
@@ -154,4 +168,3 @@ int main() {
     
     return 0;
 }
-

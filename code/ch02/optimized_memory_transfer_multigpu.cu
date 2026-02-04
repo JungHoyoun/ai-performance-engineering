@@ -3,9 +3,12 @@
 // Compile: nvcc -O3 -std=c++17 -arch=sm_121 optimized_memory_transfer_multigpu.cu -o optimized_memory_transfer_multigpu_sm121
 
 #include <cuda_runtime.h>
+#include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <chrono>
+#include <vector>
+#include "../core/common/headers/cuda_verify.cuh"
 #include "../core/common/nvtx_utils.cuh"
 
 #define CUDA_CHECK(call)                                                     \
@@ -85,6 +88,17 @@ int main() {
 
     std::printf("Average time per iteration: %.3f ms\n", avg_ms);
     std::printf("Bandwidth: %.2f GB/s (P2P)\n", bandwidth_gbs);
+
+#ifdef VERIFY
+    std::vector<float> h_buffer(N);
+    CUDA_CHECK(cudaSetDevice(dst_device));
+    CUDA_CHECK(cudaMemcpy(h_buffer.data(), d_dst, bytes, cudaMemcpyDeviceToHost));
+    double checksum = 0.0;
+    for (float v : h_buffer) {
+        checksum += std::abs(v);
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
 
     CUDA_CHECK(cudaSetDevice(src_device));
     CUDA_CHECK(cudaFree(d_src));

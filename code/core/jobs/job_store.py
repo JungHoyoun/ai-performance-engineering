@@ -118,10 +118,11 @@ class JobStore:
         *,
         arguments: Optional[Dict[str, Any]] = None,
         run_metadata: Optional[Dict[str, Any]] = None,
+        job_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Run a task in the background and return a polling ticket."""
         self.cleanup()
-        job_id = f"{tool_name}-{uuid.uuid4().hex[:10]}"
+        job_id = job_id or f"{tool_name}-{uuid.uuid4().hex[:10]}"
         submitted_at = time.time()
         record: JobRecord = {
             "job_id": job_id,
@@ -139,6 +140,8 @@ class JobStore:
                     f"Job queue is full ({len(self._store)} >= {self._max_entries}). "
                     "Poll existing jobs or increase AISP_MCP_JOB_MAX_ENTRIES."
                 )
+            if job_id in self._store:
+                raise RuntimeError(f"Job id already exists: {job_id}")
             self._store[job_id] = record
 
         def _runner():
@@ -173,6 +176,14 @@ class JobStore:
             for key, value in run_metadata.items():
                 ticket[key] = str(value) if isinstance(value, Path) else value
         return ticket
+
+    def update_job(self, job_id: str, **fields: Any) -> None:
+        """Update an existing job record in-place."""
+        with self._lock:
+            record = self._store.get(job_id)
+            if not record:
+                return
+            record.update(fields)
 
     def get_status(self, job_id: str) -> Optional[JobRecord]:
         """Return the stored job record, if present."""

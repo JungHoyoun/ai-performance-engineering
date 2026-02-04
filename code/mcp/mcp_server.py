@@ -116,6 +116,7 @@ import traceback
 import time
 import threading
 import uuid
+from collections import defaultdict, deque
 from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -126,6 +127,7 @@ CODE_ROOT = Path(__file__).resolve().parent.parent
 if str(CODE_ROOT) not in sys.path:
     sys.path.insert(0, str(CODE_ROOT))
 
+from core.analysis.tool_router import DEFAULT_SUGGEST_RULES, suggest_tools_heuristic, suggest_tools_llm
 from core.harness.progress import ProgressEvent, ProgressRecorder
 from core.jobs import JobStore
 
@@ -253,13 +255,13 @@ _OUTPUT_ENVELOPE_SUMMARY = (
 
 # Explicit overrides for tools that have notable runtime/side effects.
 _EXPECTATION_OVERRIDES: Dict[str, str] = {
-    "run_benchmarks": "Runs the bench CLI; can take minutes and writes artifacts/logs under artifacts/runs/<run_id>/ by default. Run IDs are self-describing (timestamp + run kind + targets). Also runs triage + HTML report generation unless auto_analyze/auto_report are disabled. Use artifacts_dir to control output location. For full baseline-vs-optimized profiling + diffs, use profile='deep_dive' or benchmark_deep_dive_compare.",
+    "run_benchmarks": "Runs the bench CLI; can take minutes and writes artifacts/logs under artifacts/runs/<run_id>/ by default. Run IDs are self-describing (timestamp + run kind + targets). Serialized via the MCP queue runner under artifacts/parallel_runs to prevent overlap. Also runs triage + HTML report generation unless auto_analyze/auto_report are disabled. Use artifacts_dir to control output location. For full baseline-vs-optimized profiling + diffs, use profile='deep_dive' or benchmark_deep_dive_compare.",
     "benchmark_deep_dive_compare": "Runs bench with profile='deep_dive' (slow) and then compares baseline vs optimized profiles (nsys+ncu). Emits side-by-side JSON + narrative and writes a self-describing run directory under output_dir (default: artifacts/runs).",
     "benchmark_report": "Generates a report from existing benchmark JSON; writes PDF/HTML to the chosen output.",
     "benchmark_export": "Exports existing benchmark JSON to csv/markdown/json; writes to the chosen output file.",
     "benchmark_compare_runs": "Diffs two benchmark JSON files; CPU-bound and quick, writes only if an output is specified.",
-    "profile_nsys": "Calls Nsight Systems; requires nsys installed and writes .nsys-rep under artifacts/runs/<run_id>/profiles/tools/<tool>/<label>/ by default. Slow/interactive; run status or triage first. Default preset is full; set preset=light explicitly to shrink traces.",
-    "profile_ncu": "Calls Nsight Compute; requires ncu installed and writes .ncu-rep under artifacts/runs/<run_id>/profiles/tools/<tool>/<label>/ by default. Slow/interactive; run status or triage first. Defaults to memory_bound metric set; opt into heavier modes explicitly.",
+    "profile_nsys": "Calls Nsight Systems; requires nsys installed and writes .nsys-rep under artifacts/runs/<run_id>/profiles/tools/<tool>/<label>/ by default. Serialized via the MCP queue runner under artifacts/parallel_runs to prevent overlap. Slow/interactive; run status or triage first. Default preset is full; set preset=light explicitly to shrink traces.",
+    "profile_ncu": "Calls Nsight Compute; requires ncu installed and writes .ncu-rep under artifacts/runs/<run_id>/profiles/tools/<tool>/<label>/ by default. Serialized via the MCP queue runner under artifacts/parallel_runs to prevent overlap. Slow/interactive; run status or triage first. Defaults to memory_bound metric set; opt into heavier modes explicitly.",
     "profile_compare": "Generates flame graph comparison + side-by-side Nsight Systems/Compute JSON report; parses NSYS reports and may traverse multiple files; allow extra runtime.",
     "hw_speed": "Runs GPU/host micro-benchmarks; stresses hardware briefly. Run status first; supports precheck_only/dry_run/timeout_seconds.",
     "hw_roofline": "Runs roofline micro-benchmark; stresses memory subsystem briefly. Run status first; supports precheck_only/dry_run/timeout_seconds.",
@@ -781,10 +783,11 @@ def _resolve_benchmark_target_from_path(path_value: str) -> Tuple[Optional[str],
     except Exception as exc:
         return None, f"Benchmark discovery import failed: {exc}"
 
-    try:
-        from core.harness.run_benchmarks import discover_cuda_benchmarks
-    except Exception as exc:
-        return None, f"CUDA benchmark discovery import failed: {exc}"
+    if path.suffix == ".cu":
+        return None, (
+            "CUDA benchmarks run via Python wrappers only. "
+            "Provide the baseline_/optimized_ .py wrapper path instead of the .cu file."
+        )
 
     roots = get_bench_roots(repo_root=CODE_ROOT)
     bench_root = roots[0] if roots else CODE_ROOT
@@ -796,15 +799,6 @@ def _resolve_benchmark_target_from_path(path_value: str) -> Tuple[Optional[str],
         except Exception:
             python_pairs = []
         for baseline, optimized_list, example_name in python_pairs:
-            if path == baseline.resolve() or any(path == opt.resolve() for opt in optimized_list):
-                slug = chapter_slug(chapter_dir, CODE_ROOT, bench_root=bench_root)
-                candidates.append(f"{slug}:{example_name}")
-
-        try:
-            cuda_pairs = discover_cuda_benchmarks(chapter_dir)
-        except Exception:
-            cuda_pairs = []
-        for baseline, optimized_list, example_name in cuda_pairs:
             if path == baseline.resolve() or any(path == opt.resolve() for opt in optimized_list):
                 slug = chapter_slug(chapter_dir, CODE_ROOT, bench_root=bench_root)
                 candidates.append(f"{slug}:{example_name}")
@@ -1218,6 +1212,7 @@ def _queue_job(
     runner: Callable[[], Any],
     arguments: Optional[Dict[str, Any]] = None,
     run_metadata: Optional[Dict[str, Any]] = None,
+    job_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run a task in the background and return a ticket for polling."""
     return JOB_STORE.queue_job(
@@ -1225,7 +1220,257 @@ def _queue_job(
         runner,
         arguments=_sanitize_arguments(arguments),
         run_metadata=run_metadata,
+        job_id=job_id,
     )
+
+
+# =============================================================================
+# BENCH/PROFILE QUEUE RUNNER (serialized execution under artifacts/parallel_runs)
+# =============================================================================
+
+_QUEUE_DIR = CODE_ROOT / "artifacts" / "parallel_runs"
+_QUEUE_SCRIPT_PATH = _QUEUE_DIR / "bench_queue.sh"
+_QUEUE_LOG_PATH = _QUEUE_DIR / "queue.log"
+_QUEUE_LOCK = threading.Lock()
+_QUEUE_LOG_LOCK = threading.Lock()
+
+
+def _queue_timestamp() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _ensure_queue_artifacts() -> bool:
+    try:
+        _QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return False
+    if not _QUEUE_SCRIPT_PATH.exists():
+        header = (
+            "#!/usr/bin/env bash\n"
+            "# MCP queue runner manifest (append-only).\n"
+            "# Entries are recorded automatically by MCP to serialize bench/profiling runs.\n"
+        )
+        try:
+            _QUEUE_SCRIPT_PATH.write_text(header)
+        except Exception:
+            return False
+    return True
+
+
+def _append_queue_script(entry: Dict[str, Any]) -> None:
+    if not _ensure_queue_artifacts():
+        return
+    try:
+        payload = json.dumps(entry, default=str)
+    except Exception:
+        payload = str(entry)
+    line = f"# QUEUED {_queue_timestamp()} {payload}\n"
+    try:
+        with _QUEUE_SCRIPT_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(line)
+    except Exception:
+        pass
+
+
+def _log_queue_event(message: str) -> None:
+    if not _ensure_queue_artifacts():
+        return
+    line = f"[{_queue_timestamp()}] {message}\n"
+    try:
+        with _QUEUE_LOG_LOCK:
+            with _QUEUE_LOG_PATH.open("a", encoding="utf-8") as handle:
+                handle.write(line)
+    except Exception:
+        pass
+
+
+def _snapshot_processes() -> List[Dict[str, Any]]:
+    try:
+        result = subprocess.run(
+            ["ps", "-eo", "pid,ppid,command"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return []
+    lines = result.stdout.splitlines()
+    records: List[Dict[str, Any]] = []
+    for line in lines[1:]:
+        parts = line.strip().split(None, 2)
+        if len(parts) < 3:
+            continue
+        pid, ppid, cmd = parts
+        try:
+            pid_val = int(pid)
+            ppid_val = int(ppid)
+        except ValueError:
+            continue
+        records.append({"pid": pid_val, "ppid": ppid_val, "cmd": cmd})
+    return records
+
+
+def _descendant_pids(root_pid: int, records: List[Dict[str, Any]]) -> set[int]:
+    children_map: Dict[int, List[int]] = defaultdict(list)
+    for rec in records:
+        children_map[rec["ppid"]].append(rec["pid"])
+    descendants = set()
+    queue = deque([root_pid])
+    while queue:
+        current = queue.popleft()
+        if current in descendants:
+            continue
+        descendants.add(current)
+        for child in children_map.get(current, []):
+            if child not in descendants:
+                queue.append(child)
+    return descendants
+
+
+def _is_active_run_command(cmd: str) -> bool:
+    tokens = cmd.split()
+    if not tokens:
+        return False
+    if "core.benchmark.bench_commands" in cmd and " run " in f" {cmd} ":
+        return True
+    if "bench run" in cmd and ("cli.aisp" in cmd or "aisp.py" in cmd or "python -m cli.aisp" in cmd):
+        return True
+    if "torchrun_wrapper.py" in cmd:
+        return True
+    exe = Path(tokens[0]).name
+    if exe == "nsys" and "profile" in tokens:
+        return True
+    if exe == "ncu":
+        return True
+    return False
+
+
+def _active_run_processes(records: List[Dict[str, Any]], ignore_pids: set[int]) -> List[Dict[str, Any]]:
+    active: List[Dict[str, Any]] = []
+    for rec in records:
+        if rec["pid"] in ignore_pids:
+            continue
+        cmd = rec["cmd"]
+        if "parallel_runs" in cmd or "bench_queue.sh" in cmd or "queue.log" in cmd:
+            continue
+        if _is_active_run_command(cmd):
+            active.append(rec)
+    return active
+
+
+def _wait_for_idle(poll_seconds: int = 5) -> None:
+    logged = False
+    while True:
+        records = _snapshot_processes()
+        ignore_pids = _descendant_pids(os.getpid(), records)
+        active = _active_run_processes(records, ignore_pids)
+        if not active:
+            if logged:
+                _log_queue_event("System idle: no active bench/profiling processes.")
+            return
+        if not logged:
+            _log_queue_event(f"Waiting for idle; active processes={len(active)}")
+            logged = True
+        time.sleep(poll_seconds)
+
+
+def _monitor_overlap(stop_event: threading.Event, overlap_event: threading.Event, poll_seconds: int = 5) -> None:
+    while not stop_event.is_set():
+        records = _snapshot_processes()
+        ignore_pids = _descendant_pids(os.getpid(), records)
+        active = _active_run_processes(records, ignore_pids)
+        if active:
+            overlap_event.set()
+        time.sleep(poll_seconds)
+
+
+def _extract_exit_code(result: Any) -> Optional[int]:
+    if isinstance(result, dict):
+        if "returncode" in result:
+            try:
+                return int(result.get("returncode"))
+            except (TypeError, ValueError):
+                return None
+        if "success" in result:
+            return 0 if result.get("success") else 1
+    return None
+
+
+def _attach_queue_metadata(result: Any, retries: int, overlap_detected: bool) -> Any:
+    if not isinstance(result, dict):
+        return result
+    queue_info = {
+        "queue_log": str(_QUEUE_LOG_PATH),
+        "queue_script": str(_QUEUE_SCRIPT_PATH),
+        "queue_retries": retries,
+        "overlap_detected": overlap_detected,
+    }
+    result.setdefault("queue", {}).update(queue_info)
+    return result
+
+
+def _run_with_queue(
+    tool_name: str,
+    runner: Callable[[], Any],
+    *,
+    queue_label: Optional[str] = None,
+    queue_payload: Optional[Dict[str, Any]] = None,
+    job_id: Optional[str] = None,
+) -> Any:
+    if not _ensure_queue_artifacts():
+        raise RuntimeError("Queue runner unavailable: failed to initialize artifacts/parallel_runs.")
+    queue_id = job_id or f"{tool_name}-{uuid.uuid4().hex[:8]}"
+    entry = {
+        "queue_id": queue_id,
+        "tool": tool_name,
+        "label": queue_label,
+        "payload": queue_payload or {},
+    }
+    _append_queue_script(entry)
+    if job_id:
+        JOB_STORE.update_job(job_id, status="queued", note="Waiting for MCP queue runner.")
+    with _QUEUE_LOCK:
+        if job_id:
+            JOB_STORE.update_job(job_id, status="running", note="Running via MCP queue runner.")
+        retries = 0
+        overlap_detected = False
+        while True:
+            _wait_for_idle()
+            _log_queue_event(f"RUN_START id={queue_id} tool={tool_name} label={queue_label} attempt={retries + 1}")
+            start_ts = time.time()
+            stop_event = threading.Event()
+            overlap_event = threading.Event()
+            monitor = threading.Thread(
+                target=_monitor_overlap,
+                args=(stop_event, overlap_event),
+                daemon=True,
+            )
+            monitor.start()
+            try:
+                result = runner()
+            except Exception as exc:
+                stop_event.set()
+                monitor.join()
+                _log_queue_event(
+                    f"RUN_END id={queue_id} tool={tool_name} label={queue_label} exit_code=1 error={exc}"
+                )
+                raise
+            stop_event.set()
+            monitor.join()
+            duration = time.time() - start_ts
+            overlap = overlap_event.is_set()
+            if overlap:
+                overlap_detected = True
+            exit_code = _extract_exit_code(result)
+            _log_queue_event(
+                f"RUN_END id={queue_id} tool={tool_name} label={queue_label} "
+                f"exit_code={exit_code} overlap={overlap} duration_s={duration:.2f}"
+            )
+            if overlap:
+                retries += 1
+                _log_queue_event(f"REQUEUE id={queue_id} tool={tool_name} label={queue_label} reason=overlap")
+                continue
+            return _attach_queue_metadata(result, retries, overlap_detected)
 
 
 def _context_snapshot() -> Dict[str, Any]:
@@ -1526,6 +1771,7 @@ def tool_system_network(params: Dict[str, Any]) -> Dict[str, Any]:
     "run_benchmarks",
     "Tags: benchmarks, run, profiling, performance-test, chapters, labs, validation. "
     "Run benchmarks via the bench CLI with optional profiling and LLM analysis. "
+    "MCP serializes bench/profiling runs via a hidden queue under artifacts/parallel_runs to prevent overlap. "
     "Returns: {stdout, stderr, returncode, duration_seconds, results_json (best-effort), run_dir (best-effort), suggested_next_steps}. "
     "⚠️ SLOW: 2-30+ minutes depending on targets. ALWAYS run status first! "
     "USE when: Validating optimizations, generating benchmark data for comparison. "
@@ -1580,6 +1826,11 @@ def tool_system_network(params: Dict[str, Any]) -> Dict[str, Any]:
             "warmup": {
                 "type": "integer",
                 "description": "Override warmup iterations (all targets).",
+            },
+            "force_sync": {
+                "type": "boolean",
+                "description": "Force a device-wide synchronize immediately after benchmark_fn() (opt-in safeguard).",
+                "default": False,
             },
             "llm_analysis": {
                 "type": "boolean",
@@ -1661,6 +1912,16 @@ def tool_system_network(params: Dict[str, Any]) -> Dict[str, Any]:
                 ),
                 "default": False,
             },
+            "only_cuda": {
+                "type": "boolean",
+                "description": "Run only CUDA binary benchmarks (Python wrappers).",
+                "default": False,
+            },
+            "only_python": {
+                "type": "boolean",
+                "description": "Run only Python benchmarks (skip CUDA binary wrappers).",
+                "default": False,
+            },
             "auto_analyze": {
                 "type": "boolean",
                 "description": "Automatically run benchmark_triage after a successful run.",
@@ -1699,6 +1960,7 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
         run_id = _default_run_id("bench", run_label, base_dir)
     iterations_param = params.get("iterations")
     warmup_param = params.get("warmup")
+    force_sync = bool(params.get("force_sync", False))
     timeout_multiplier = params.get("timeout_multiplier")
     nsys_timeout_seconds = params.get("nsys_timeout_seconds")
     ncu_timeout_seconds = params.get("ncu_timeout_seconds")
@@ -1717,7 +1979,7 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
             auto_report = False
         if "profile" not in params or profile in {"minimal", "deep_dive", "roofline"}:
             profile = "none"
-        if "only_python" not in params:
+        if "only_python" not in params and "only_cuda" not in params:
             only_python = True
         if "allow_virtualization" not in params:
             allow_virtualization = True
@@ -1802,6 +2064,8 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
         args.extend(["--iterations", str(int(iterations_param))])
     if warmup_param is not None:
         args.extend(["--warmup", str(int(warmup_param))])
+    if force_sync:
+        args.append("--force-sync")
     if timeout_multiplier is not None:
         args.extend(["--timeout-multiplier", str(float(timeout_multiplier))])
     if nsys_timeout_seconds is not None:
@@ -1865,9 +2129,20 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
             "note": "Set dry_run=false to execute; use async=true for background execution.",
         }
 
-    def _execute_benchmarks():
-        base_result = _attach_bench_artifact_paths(
+    def _execute_bench_cli_only() -> Dict[str, Any]:
+        return _attach_bench_artifact_paths(
             _run_bench_cli(args, timeout=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None)
+        )
+
+    def _execute_benchmarks(queue_job_id: Optional[str] = None):
+        queue_label = f"bench run {' '.join(targets)}" if targets else "bench run"
+        queue_payload = {"targets": targets, "profile": profile, "run_id": run_id}
+        base_result = _run_with_queue(
+            "run_benchmarks",
+            _execute_bench_cli_only,
+            queue_label=queue_label,
+            queue_payload=queue_payload,
+            job_id=queue_job_id,
         )
         return _maybe_run_post_benchmark_steps(
             base_result,
@@ -1877,13 +2152,24 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
         )
 
     if run_async:
+        job_id = f"run_benchmarks-{uuid.uuid4().hex[:10]}"
+        def _execute_benchmarks_queued():
+            return _execute_benchmarks(job_id)
         run_metadata = {
             "run_id": run_id,
             "run_dir": str(run_dir) if run_dir else None,
             "progress_path": str(progress_path) if progress_path else None,
         }
-        queued = _queue_job("run_benchmarks", _execute_benchmarks, params, run_metadata=run_metadata)
+        queued = _queue_job(
+            "run_benchmarks",
+            _execute_benchmarks_queued,
+            params,
+            run_metadata=run_metadata,
+            job_id=job_id,
+        )
         queued["targets"] = targets
+        queued["queue_log"] = str(_QUEUE_LOG_PATH)
+        queued["queue_script"] = str(_QUEUE_SCRIPT_PATH)
         queued["note"] = "Background benchmark started; poll with job_status using job_id. When complete, use benchmark_triage to analyze results."
         return queued
 
@@ -2069,7 +2355,14 @@ def tool_benchmark_variants(params: Dict[str, Any]) -> Dict[str, Any]:
                     "items": {"type": "string"},
                     "description": (
                         "Benchmark targets to run (chapter or chapter:example). Prefer a single example pair for clean diffs. "
-                        "Discover targets via benchmark_targets or list_chapters."
+                        "Discover targets via benchmark_targets or list_chapters. Provide either targets or path."
+                    ),
+                },
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Benchmark file path (baseline_*.py or optimized_*.py). "
+                        "Resolves to a single target. Provide either path or targets."
                     ),
                 },
                 "output_dir": {
@@ -2119,7 +2412,7 @@ def tool_benchmark_variants(params: Dict[str, Any]) -> Dict[str, Any]:
             },
             }
         ),
-        "required": ["targets"],
+        "required": [],
     },
 )
 def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -2130,6 +2423,7 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
 
     include_context, context_level = extract_context_opts(params)
     targets = params.get("targets") or []
+    path = params.get("path")
     output_dir = params.get("output_dir") or "artifacts/runs"
     run_id_param = params.get("run_id")
     run_id = run_id_param.strip() if isinstance(run_id_param, str) else run_id_param
@@ -2152,8 +2446,22 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
     run_dir = _resolve_run_dir(output_dir, str(run_id))
     progress_path = _progress_path_for_run(run_dir, str(run_id))
 
+    if path is not None and not isinstance(path, str):
+        return make_error("path must be a string.", include_context, context_level)
+    if path and targets:
+        return make_error("Provide either path or targets, not both.", include_context, context_level)
+    if path:
+        path_value = path.strip()
+        if not path_value:
+            return make_error("path cannot be empty.", include_context, context_level)
+        if path_value.startswith("@"):
+            path_value = path_value[1:]
+        resolved_target, err = _resolve_benchmark_target_from_path(path_value)
+        if err:
+            return make_error(err, include_context, context_level)
+        targets = [resolved_target]
     if not targets:
-        return make_error("targets is required", include_context, context_level)
+        return make_error("targets or path is required", include_context, context_level)
 
     def _run_and_analyze() -> Dict[str, Any]:
         test_mode = _is_test_mode()
@@ -3470,7 +3778,7 @@ def tool_analyze_whatif(params: Dict[str, Any]) -> Dict[str, Any]:
         "properties": with_context_params({
             "path": {
                 "type": "string",
-                "description": "Benchmark file path (baseline_*/optimized_* .py or .cu)."
+                "description": "Benchmark file path (baseline_*/optimized_* .py wrapper only)."
             },
             "target": {
                 "type": "string",
@@ -4309,6 +4617,7 @@ def tool_profile_compare(params: Dict[str, Any]) -> Dict[str, Any]:
     "profile_nsys",
     "Tags: nsys, nsight-systems, profile, timeline, trace, cuda-api, nvtx, deep-dive. "
     "Run Nsight Systems profiling to capture GPU timeline, CUDA API calls, kernel launches. "
+    "Serialized via the MCP queue runner under artifacts/parallel_runs to prevent overlap. "
     "Returns: {output_path, success, run_details, nsys_metrics} and writes .nsys-rep file. "
     "USE when: Need detailed timeline view, understanding kernel launch patterns, API overhead. "
     "Example: \"Profile python train.py with nsys\" or \"Capture timeline for batch 32 inference\". "
@@ -4530,26 +4839,49 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
         )
         return attach_context_if_requested(result, include_context, context_level)
 
+    def _execute_capture_queued(queue_job_id: Optional[str] = None):
+        queue_label = f"profile_nsys {output_name}"
+        queue_payload = {"output_name": output_name, "run_id": run_id}
+        return _run_with_queue(
+            "profile_nsys",
+            _execute_capture,
+            queue_label=queue_label,
+            queue_payload=queue_payload,
+            job_id=queue_job_id,
+        )
+
     if run_async:
+        job_id = f"profile_nsys-{uuid.uuid4().hex[:10]}"
+        def _execute_capture_with_job():
+            return _execute_capture_queued(job_id)
         run_metadata = {
             "run_id": run_id,
             "run_dir": str(run_dir),
             "profiles_dir": str(profile_dir),
             "progress_path": str(progress_path),
         }
-        queued = _queue_job("profile_nsys", _execute_capture, params, run_metadata=run_metadata)
+        queued = _queue_job(
+            "profile_nsys",
+            _execute_capture_with_job,
+            params,
+            run_metadata=run_metadata,
+            job_id=job_id,
+        )
         queued["note"] = "Background capture started; poll with job_status using job_id."
         queued["preset"] = preset
         queued["run_id"] = run_id
+        queued["queue_log"] = str(_QUEUE_LOG_PATH)
+        queued["queue_script"] = str(_QUEUE_SCRIPT_PATH)
         return queued
 
-    return _execute_capture()
+    return _execute_capture_queued()
 
 
 @register_tool(
     "profile_ncu",
     "Tags: ncu, nsight-compute, profile, kernel-metrics, occupancy, memory-throughput. "
     "Run Nsight Compute profiling to capture detailed per-kernel metrics (occupancy, throughput, etc.). "
+    "Serialized via the MCP queue runner under artifacts/parallel_runs to prevent overlap. "
     "Returns: {output_path, success, run_details, ncu_metrics} and writes .ncu-rep file. "
     "USE when: Deep-diving into specific kernel performance, optimizing occupancy, memory access. "
     "Example: \"Profile attention kernel with ncu\" or \"Get detailed metrics for matmul\". "
@@ -4821,26 +5153,49 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
         )
         return attach_context_if_requested(result, include_context, context_level)
 
+    def _execute_capture_queued(queue_job_id: Optional[str] = None):
+        queue_label = f"profile_ncu {output_name}"
+        queue_payload = {"output_name": output_name, "run_id": run_id}
+        return _run_with_queue(
+            "profile_ncu",
+            _execute_capture,
+            queue_label=queue_label,
+            queue_payload=queue_payload,
+            job_id=queue_job_id,
+        )
+
     if run_async:
+        job_id = f"profile_ncu-{uuid.uuid4().hex[:10]}"
+        def _execute_capture_with_job():
+            return _execute_capture_queued(job_id)
         run_metadata = {
             "run_id": run_id,
             "run_dir": str(run_dir),
             "profiles_dir": str(profile_dir),
             "progress_path": str(progress_path),
         }
-        queued = _queue_job("profile_ncu", _execute_capture, params, run_metadata=run_metadata)
+        queued = _queue_job(
+            "profile_ncu",
+            _execute_capture_with_job,
+            params,
+            run_metadata=run_metadata,
+            job_id=job_id,
+        )
         queued["note"] = "Background capture started; poll with job_status using job_id."
         queued["workload_type"] = workload_type
         queued["run_id"] = run_id
+        queued["queue_log"] = str(_QUEUE_LOG_PATH)
+        queued["queue_script"] = str(_QUEUE_SCRIPT_PATH)
         return queued
 
-    return _execute_capture()
+    return _execute_capture_queued()
 
 
 @register_tool(
     "profile_torch",
     "Tags: torch, profiler, pytorch, chrome-trace, autograd, cpu-gpu. "
     "Run PyTorch torch.profiler to capture CPU/GPU activity with Chrome trace output. "
+    "Serialized via the MCP queue runner under artifacts/parallel_runs to prevent overlap. "
     "Returns: {trace_path, summary, torch_metrics, success} and writes Chrome trace JSON + summary. "
     "USE when: Profiling PyTorch code specifically, understanding autograd overhead, CPU/GPU interplay. "
     "Example: \"Profile my training script with torch.profiler\" or \"Get PyTorch trace for train.py\". "
@@ -4980,27 +5335,50 @@ def tool_profile_torch(params: Dict[str, Any]) -> Dict[str, Any]:
         )
         return attach_context_if_requested(result, include_context, context_level)
 
+    def _execute_capture_queued(queue_job_id: Optional[str] = None):
+        queue_label = f"profile_torch {output_name}"
+        queue_payload = {"output_name": output_name, "run_id": run_id}
+        return _run_with_queue(
+            "profile_torch",
+            _execute_capture,
+            queue_label=queue_label,
+            queue_payload=queue_payload,
+            job_id=queue_job_id,
+        )
+
     if run_async:
+        job_id = f"profile_torch-{uuid.uuid4().hex[:10]}"
+        def _execute_capture_with_job():
+            return _execute_capture_queued(job_id)
         run_metadata = {
             "run_id": run_id,
             "run_dir": str(run_dir),
             "profiles_dir": str(profile_dir),
             "progress_path": str(progress_path),
         }
-        queued = _queue_job("profile_torch", _execute_capture, params, run_metadata=run_metadata)
+        queued = _queue_job(
+            "profile_torch",
+            _execute_capture_with_job,
+            params,
+            run_metadata=run_metadata,
+            job_id=job_id,
+        )
         queued["note"] = "Background torch.profiler capture started; poll with job_status using job_id."
         queued["mode"] = mode
         queued["nvtx_label"] = nvtx_label
         queued["run_id"] = run_id
+        queued["queue_log"] = str(_QUEUE_LOG_PATH)
+        queued["queue_script"] = str(_QUEUE_SCRIPT_PATH)
         return queued
 
-    return _execute_capture()
+    return _execute_capture_queued()
 
 
 @register_tool(
     "profile_hta",
     "Tags: hta, holistic-trace, nsys, analysis, gpu-idle, timeline. "
     "Run Nsight Systems capture with HTA (Holistic Trace Analysis) for automated bottleneck detection. "
+    "Serialized via the MCP queue runner under artifacts/parallel_runs to prevent overlap. "
     "Returns: {nsys_rep_path, trace_json_path, hta_report_path, analysis_summary, nsys_metrics}. "
     "USE when: Want automated analysis of trace data, finding GPU idle time, communication bottlenecks. "
     "Example: \"Profile and analyze with HTA\" or \"Get holistic trace analysis for my script\". "
@@ -5142,20 +5520,42 @@ def tool_profile_hta(params: Dict[str, Any]) -> Dict[str, Any]:
         )
         return attach_context_if_requested(result, include_context, context_level)
 
+    def _execute_capture_queued(queue_job_id: Optional[str] = None):
+        queue_label = f"profile_hta {output_name}"
+        queue_payload = {"output_name": output_name, "run_id": run_id}
+        return _run_with_queue(
+            "profile_hta",
+            _execute_capture,
+            queue_label=queue_label,
+            queue_payload=queue_payload,
+            job_id=queue_job_id,
+        )
+
     if run_async:
+        job_id = f"profile_hta-{uuid.uuid4().hex[:10]}"
+        def _execute_capture_with_job():
+            return _execute_capture_queued(job_id)
         run_metadata = {
             "run_id": run_id,
             "run_dir": str(run_dir),
             "profiles_dir": str(profile_dir),
             "progress_path": str(progress_path),
         }
-        queued = _queue_job("profile_hta", _execute_capture, params, run_metadata=run_metadata)
+        queued = _queue_job(
+            "profile_hta",
+            _execute_capture_with_job,
+            params,
+            run_metadata=run_metadata,
+            job_id=job_id,
+        )
         queued["note"] = "Background HTA capture started; poll with job_status using job_id."
         queued["preset"] = preset
         queued["run_id"] = run_id
+        queued["queue_log"] = str(_QUEUE_LOG_PATH)
+        queued["queue_script"] = str(_QUEUE_SCRIPT_PATH)
         return queued
 
-    return _execute_capture()
+    return _execute_capture_queued()
 
 
 @register_tool(
@@ -6365,10 +6765,11 @@ def tool_triage(params: Dict[str, Any]) -> Dict[str, Any]:
     "job_status",
     "Tags: job, status, poll, async, background, queue, progress. "
     "Check status of a background job started with async=true. "
-    "Returns: {job_id, status: running|completed|error, result (if completed), duration_ms, progress?}. "
+    "Returns: {job_id, status: queued|running|completed|error, result (if completed), duration_ms, progress?}. "
     "⚡ FAST (<1s). USE when: Polling for completion of background jobs. "
     "Example: \"Check job status\" or \"Is my benchmark done?\" or \"Poll nsys capture\". "
     "STATUS VALUES: "
+    "• 'queued' → Waiting for the MCP queue runner to start "
     "• 'running' → Job in progress, poll again in 10-30s "
     "• 'completed' → Done! Result in 'result' field "
     "• 'error' → Failed, check 'error' field for details. "
@@ -6672,644 +7073,67 @@ def tool_tools_probe_hw(params: Dict[str, Any]) -> Dict[str, Any]:
     "• 'deep dive baseline vs optimized (nsys+ncu)' → benchmark_deep_dive_compare "
     "• 'compare profiles' → compare_nsys, profile_compare. "
     "WORKFLOW: suggest_tools → use suggested tools. "
-    "NOT FOR: Direct answers (use ask), getting started (use triage).",
+    "NOT FOR: Direct answers (use ask), getting started (use triage). "
+    "Defaults to LLM-based routing; set llm_routing=false to use keyword heuristics.",
     {"type": "object", "properties": with_context_params({
         "query": {
             "type": "string",
             "description": "Your intent, problem, or question in natural language"
         },
+        "llm_routing": {
+            "type": "boolean",
+            "description": "Use LLM-based intent routing instead of keyword heuristics (requires LLM backend).",
+            "default": True,
+        },
+        "max_suggestions": {
+            "type": "integer",
+            "description": "Maximum number of suggestions to return (default: no limit for heuristics, 6 for LLM).",
+        },
     }), "required": ["query"]}
 )
 def tool_suggest_tools(params: Dict[str, Any]) -> Dict[str, Any]:
     """Return a ranked list of suggested tools given a query."""
-    query = (params.get("query") or "").lower()
+    query = params.get("query") or ""
     include_context, context_level = extract_context_opts(params)
+    llm_routing = params.get("llm_routing", True)
+    max_suggestions = params.get("max_suggestions")
 
-    rules = [
-        {
-            "tool": "benchmark_deep_dive_compare",
-            "keywords": [
-                "deep_dive",
-                "deep dive",
-                "deep-dive",
-                "baseline vs optimized",
-                "compare baseline",
-                "compare optimized",
-                "nsys+ncu",
-                "nsys and ncu",
-                "nsight systems and compute",
-                "profile diff",
-            ],
-            "reason": "One-shot: run benchmark with deep_dive profiling and return baseline-vs-optimized diffs (nsys+ncu+torch)",
-        },
-        {
-            "tool": "profile_compare",
-            "keywords": ["compare profiles", "profile compare", "flamegraph compare", "flame graph compare"],
-            "reason": "Compare profiles with flame graph narrative + metrics",
-        },
-        {
-            "tool": "compare_nsys",
-            "keywords": ["compare nsys", "nsys diff", "nsight systems compare", "timeline compare"],
-            "reason": "Compare Nsight Systems reports",
-        },
-        {
-            "tool": "compare_ncu",
-            "keywords": ["compare ncu", "ncu diff", "nsight compute compare", "kernel compare"],
-            "reason": "Compare Nsight Compute reports",
-        },
-        {
-            "tool": "benchmark_compare_runs",
-            "keywords": [
-                "compare runs",
-                "compare benchmark runs",
-                "compare benchmarks",
-                "benchmark runs",
-                "bench runs",
-                "benchmark diff",
-                "diff results",
-                "regressions",
-                "improvements",
-            ],
-            "reason": "Diff two benchmark JSON runs",
-        },
-        {
-            "tool": "benchmark_compare",
-            "keywords": ["compare benchmark results", "benchmark compare", "compare results table"],
-            "reason": "Compare benchmark results (dashboard-style diff)",
-        },
-        {
-            "tool": "benchmark_triage",
-            "keywords": ["benchmark analysis", "analyze results", "triage benchmarks", "triage results"],
-            "reason": "Post-benchmark analysis and recommendations",
-        },
-        {
-            "tool": "analyze_bottlenecks",
-            "keywords": [
-                "slow",
-                "latency",
-                "bottleneck",
-                "utilization",
-                "stall",
-                "idle",
-                "regression",
-                "throughput drop",
-                "analyze",
-                "analysis",
-                "diagnose",
-                "why slow",
-            ],
-            "reason": "Diagnose bottlenecks for slow workload/latency issues",
-        },
-        {
-            "tool": "analyze_comm_overlap",
-            "keywords": ["comm overlap", "communication overlap", "allreduce overlap", "overlap compute"],
-            "reason": "Analyze communication/compute overlap",
-        },
-        {
-            "tool": "analyze_dataloader",
-            "keywords": ["dataloader", "data loading", "input pipeline", "prefetch", "data loader"],
-            "reason": "Find input pipeline and DataLoader bottlenecks",
-        },
-        {
-            "tool": "analyze_energy",
-            "keywords": ["energy", "power efficiency", "watts", "energy efficiency"],
-            "reason": "Analyze power draw and energy efficiency",
-        },
-        {
-            "tool": "analyze_memory_patterns",
-            "keywords": ["memory pattern", "memory coalescing", "coalescing", "bank conflict", "warp divergence"],
-            "reason": "Analyze memory access patterns and coalescing",
-        },
-        {
-            "tool": "predict_scaling",
-            "keywords": ["scaling", "scale up", "scale to", "multi-gpu scaling", "more gpus"],
-            "reason": "Predict scaling to more GPUs or larger workloads",
-        },
-        {
-            "tool": "hw_disk",
-            "keywords": ["disk", "io", "storage"],
-            "reason": "Disk I/O benchmark (sequential)",
-        },
-        {
-            "tool": "hw_pcie",
-            "keywords": ["pcie", "h2d", "d2h", "pci-e"],
-            "reason": "PCIe H2D/D2H bandwidth benchmark",
-        },
-        {
-            "tool": "hw_cache",
-            "keywords": ["memory stride", "cache", "l2", "hbm"],
-            "reason": "Stride/bandwidth test for memory hierarchy",
-        },
-        {
-            "tool": "hw_tc",
-            "keywords": ["tensor core", "tflops", "matmul"],
-            "reason": "Tensor core throughput test",
-        },
-        {
-            "tool": "hw_speed",
-            "keywords": ["speed test", "quick speed", "gemm speed", "attention speed"],
-            "reason": "Quick GPU speed tests (GEMM/memory/attention)",
-        },
-        {
-            "tool": "hw_ib",
-            "keywords": ["infiniband", "ib bandwidth", "rdma bandwidth"],
-            "reason": "InfiniBand bandwidth test",
-        },
-        {
-            "tool": "hw_nccl",
-            "keywords": ["nccl bandwidth", "allreduce bandwidth", "collective bandwidth"],
-            "reason": "NCCL collective bandwidth test",
-        },
-        {
-            "tool": "hw_p2p",
-            "keywords": ["p2p bandwidth", "nvlink bandwidth", "gpu p2p"],
-            "reason": "GPU-to-GPU P2P bandwidth test",
-        },
-        {
-            "tool": "hw_network",
-            "keywords": ["network bandwidth", "nic throughput", "network test"],
-            "reason": "Network throughput test",
-        },
-        {
-            "tool": "profile_flame",
-            "keywords": ["flame", "flame graph", "flamegraph", "hotspot", "hot spot", "call stack", "stack trace"],
-            "reason": "Inspect time hotspots with flame graph",
-        },
-        # Profile kernels is reserved for perf hotspots; avoid matching install/import issues.
-        {
-            "tool": "profile_kernels",
-            "keywords": [
-                "kernel hotspot",
-                "cuda hotspot",
-                "ptx hotspot",
-                "kernel time",
-                "kernel breakdown",
-                "kernel list",
-                "top kernels",
-                "kernel stats",
-                "launch count",
-                "kernel profiling",
-            ],
-            "reason": "Check CUDA kernel hotspots",
-        },
-        {
-            "tool": "profile_roofline",
-            "keywords": ["roofline", "compute bound", "memory bound", "arithmetic intensity"],
-            "reason": "See compute vs memory bound positioning",
-        },
-        {
-            "tool": "profile_torch",
-            "keywords": [
-                "torch profiler",
-                "pytorch profiler",
-                "operator breakdown",
-                "op breakdown",
-                "autograd",
-                "torch.compile",
-                "torch compile",
-                "inductor",
-                "dynamo",
-                "graph break",
-                "graph breaks",
-            ],
-            "reason": "Profile PyTorch operator breakdown",
-        },
-        {
-            "tool": "profile_nsys",
-            "keywords": ["profile", "profiling", "trace", "timeline", "nsys", "nsight systems", "systems trace", "cuda api", "overlap"],
-            "reason": "Capture timeline with Nsight Systems",
-        },
-        {
-            "tool": "profile_ncu",
-            "keywords": [
-                "ncu",
-                "nsight compute",
-                "compute profile",
-                "kernel metrics",
-                "kernel profile",
-                "occupancy",
-                "register",
-                "register pressure",
-                "smem",
-                "shared memory",
-                "warp",
-                "ipc",
-                "sm efficiency",
-                "kernel tuning",
-                "tune kernel",
-                "kernel optimize",
-                "ptx",
-                "sass",
-            ],
-            "reason": "Capture kernel metrics with Nsight Compute",
-        },
-        {
-            "tool": "profile_memory",
-            "keywords": ["memory", "vram", "oom", "out of memory", "memory leak", "fragmentation", "allocation", "spike"],
-            "reason": "See memory timeline and spikes",
-        },
-        {
-            "tool": "profile_hta",
-            "keywords": ["hta", "holistic trace", "trace analysis", "bottleneck trace"],
-            "reason": "Run HTA analysis for timeline bottlenecks",
-        },
-        {
-            "tool": "nsys_summary",
-            "keywords": ["nsys summary", "summarize nsys", "nsys report summary"],
-            "reason": "Summarize an existing Nsight Systems report",
-        },
-        {
-            "tool": "gpu_bandwidth",
-            "keywords": ["bandwidth", "p2p", "nvlink", "pci-e", "pci express"],
-            "reason": "Check GPU memory/P2P bandwidth",
-        },
-        {
-            "tool": "gpu_power",
-            "keywords": ["power", "thermal", "throttle", "temperature", "temp"],
-            "reason": "Check power/thermal headroom and throttling",
-        },
-        {
-            "tool": "gpu_info",
-            "keywords": ["gpu info", "name", "memory", "vram", "utilization", "compute capability"],
-            "reason": "Get GPU inventory and basic telemetry",
-        },
-        {
-            "tool": "gpu_topology_matrix",
-            "keywords": ["topology matrix", "topo -m", "nvidia-smi topo", "topo matrix"],
-            "reason": "Get raw GPU/NUMA topology matrix",
-        },
-        {
-            "tool": "system_software",
-            "keywords": ["pytorch", "cuda version", "driver", "software version", "cuDNN", "python version"],
-            "reason": "Check software stack versions",
-        },
-        {
-            "tool": "system_dependencies",
-            "keywords": ["import error", "torch.cuda", "dependency", "missing library", "package check", "install issue"],
-            "reason": "Check dependency health for install/import issues",
-        },
-        {
-            "tool": "system_env",
-            "keywords": ["env vars", "environment variables", "env", "paths", "cuda_home"],
-            "reason": "Snapshot key environment variables and paths",
-        },
-        {
-            "tool": "system_network",
-            "keywords": ["network status", "ib status", "rdma status", "gpudirect", "infiniband status"],
-            "reason": "Inspect network interfaces and InfiniBand status",
-        },
-        {
-            "tool": "system_parameters",
-            "keywords": ["sysctl", "kernel parameters", "swappiness", "dirty ratio", "numa balancing"],
-            "reason": "Inspect kernel/system parameters",
-        },
-        {
-            "tool": "system_container",
-            "keywords": ["container", "cgroup", "limits", "quota"],
-            "reason": "Inspect container/cgroup limits",
-        },
-        {
-            "tool": "system_cpu_memory",
-            "keywords": ["numa", "cpu memory", "cache size", "memory hierarchy", "hugepages"],
-            "reason": "Analyze CPU/NUMA/memory hierarchy",
-        },
-        {
-            "tool": "system_capabilities",
-            "keywords": ["capabilities", "features", "tensor cores", "fp8", "tma", "bf16"],
-            "reason": "Inspect hardware capabilities",
-        },
-        {
-            "tool": "system_full",
-            "keywords": ["full system", "system audit", "system analysis", "full inventory"],
-            "reason": "Full system analysis with tuning recommendations",
-        },
-        {
-            "tool": "context_summary",
-            "keywords": ["context summary", "summary context", "system snapshot"],
-            "reason": "Get a quick system context summary",
-        },
-        {
-            "tool": "context_full",
-            "keywords": ["full context", "full system context", "system dump"],
-            "reason": "Get full system context",
-        },
-        {
-            "tool": "tools_kv_cache",
-            "keywords": ["kv cache", "kv-cache size", "kv cache size"],
-            "reason": "Calculate KV-cache size",
-        },
-        {
-            "tool": "tools_cost_per_token",
-            "keywords": ["cost per token", "token cost", "cost estimate"],
-            "reason": "Estimate cost per token",
-        },
-        {
-            "tool": "tools_compare_precision",
-            "keywords": ["compare precision", "precision comparison", "fp16 vs bf16", "accuracy comparison"],
-            "reason": "Compare precision/accuracy tradeoffs",
-        },
-        {
-            "tool": "tools_detect_cutlass",
-            "keywords": ["detect cutlass", "cutlass setup", "cutlass environment"],
-            "reason": "Detect CUTLASS environment",
-        },
-        {
-            "tool": "tools_dump_hw",
-            "keywords": ["dump hardware", "hardware report", "capability report"],
-            "reason": "Dump hardware capability report",
-        },
-        {
-            "tool": "tools_probe_hw",
-            "keywords": ["probe hardware", "hardware probe", "capabilities probe"],
-            "reason": "Probe GPU capabilities and cache results",
-        },
-        {
-            "tool": "hf",
-            "keywords": ["huggingface", "hf search", "trending models", "download model", "hugging face"],
-            "reason": "HuggingFace Hub operations (search/trending/download)",
-        },
-        {
-            "tool": "cost_estimate",
-            "keywords": ["cost estimate", "cloud cost", "training cost", "inference cost", "pricing"],
-            "reason": "Estimate cloud cost for workloads",
-        },
-        {
-            "tool": "analyze_whatif",
-            "keywords": ["vram", "memory", "limit", "constraint", "cap"],
-            "reason": "What-if recommendations under VRAM/latency constraints",
-        },
-        {
-            "tool": "optimize",
-            "keywords": [
-                "optimize file",
-                "optimize path",
-                "optimize benchmark",
-                "optimize target",
-                "optimize this file",
-                "benchmark file",
-                "benchmark target",
-                "baseline_",
-                "optimized_",
-            ],
-            "reason": "Run quick LLM variants for a benchmark file or target",
-        },
-        {
-            "tool": "recommend",
-            "keywords": [
-                "optimize",
-                "optimization",
-                "tune",
-                "tuning",
-                "speed up",
-                "speedup",
-                "faster",
-                "improve performance",
-                "increase throughput",
-                "reduce latency",
-                "throughput",
-                "latency target",
-                "goal",
-                "recommend",
-                "playbook",
-            ],
-            "reason": "Get an optimization playbook for your goal",
-        },
-        {
-            "tool": "benchmark_variants",
-            "keywords": [
-                "autotune",
-                "auto-tune",
-                "auto tune",
-                "parameter sweep",
-                "grid search",
-                "sweep",
-                "tile size",
-                "block size",
-                "kernel tuning",
-            ],
-            "reason": "Generate and benchmark optimized variants (LLM-assisted)",
-        },
-        {
-            "tool": "benchmark_llm_patch_loop",
-            "keywords": ["llm patch loop", "full patch loop", "auto optimize", "one shot optimize", "end-to-end optimize"],
-            "reason": "Run the full LLM patch loop with deep-dive comparison",
-        },
-        {
-            "tool": "optimize_roi",
-            "keywords": ["roi", "cost benefit", "impact vs effort", "prioritize", "quick wins"],
-            "reason": "Rank optimizations by ROI and effort",
-        },
-        {
-            "tool": "optimize_techniques",
-            "keywords": ["optimization techniques", "list optimizations", "techniques", "methods", "options"],
-            "reason": "List available optimization techniques",
-        },
-        {
-            "tool": "analyze_pareto",
-            "keywords": ["compare", "tradeoff", "pareto"],
-            "reason": "Compare throughput/latency/memory tradeoffs",
-        },
-        {
-            "tool": "analyze_scaling",
-            "keywords": ["scale", "scaling", "scale out", "scale up", "multi-gpu scaling", "strong scaling", "weak scaling"],
-            "reason": "Analyze scaling behavior",
-        },
-        {
-            "tool": "analyze_stacking",
-            "keywords": ["stack optimizations", "combine optimizations", "optimization stacking", "compatibility"],
-            "reason": "Check optimization compatibility and stacking order",
-        },
-        {
-            "tool": "cluster_slurm",
-            "keywords": ["slurm", "batch", "sbatch", "job script", "slurm script", "srun"],
-            "reason": "Generate SLURM script for cluster runs",
-        }, {
-            "tool": "distributed_plan",
-            "keywords": ["distributed", "multi node", "tp", "pp", "dp", "fsdp"],
-            "reason": "Plan DP/TP/PP strategy",
-        },
-        {
-            "tool": "distributed_nccl",
-            "keywords": ["nccl", "tune nccl", "collective", "allreduce", "all-gather", "rdma", "infiniband", "ib"],
-            "reason": "Tune NCCL for multi-node",
-        },
-        {
-            "tool": "launch_plan",
-            "keywords": ["torchrun", "srun", "launch plan", "launch command", "run command"],
-            "reason": "Generate torchrun/srun launch commands",
-        },
-        {
-            "tool": "run_benchmarks",
-            "keywords": ["benchmark", "benchmarks", "bench run", "run benchmark", "perf run"],
-            "reason": "Run standard benchmarks with optional profiling",
-        },
-        {
-            "tool": "inference_vllm",
-            "keywords": ["vllm", "inference", "serving", "throughput", "latency"],
-            "reason": "Generate vLLM config for throughput/latency",
-        },
-        {
-            "tool": "inference_deploy",
-            "keywords": ["deploy", "deployment", "serving config", "serve model"],
-            "reason": "Generate inference deployment configuration",
-        },
-        {
-            "tool": "inference_estimate",
-            "keywords": ["estimate throughput", "estimate latency", "throughput estimate", "latency estimate"],
-            "reason": "Estimate inference throughput/latency",
-        },
-        {
-            "tool": "inference_quantization",
-            "keywords": ["quant", "int8", "fp8", "fp4", "kv cache"],
-            "reason": "Quantization guidance for inference",
-        }, {
-            "tool": "benchmark_targets",
-            "keywords": ["benchmark targets", "bench targets", "list benchmarks", "what can I run"],
-            "reason": "List benchmark targets",
-        },
-        {
-            "tool": "list_chapters",
-            "keywords": ["list chapters", "chapters list", "chapters"],
-            "reason": "List all benchmark chapters and labs",
-        },
-        {
-            "tool": "benchmark_overview",
-            "keywords": ["overview", "summary", "latest results", "latest benchmarks"],
-            "reason": "Summarize latest benchmark results",
-        },
-        {
-            "tool": "benchmark_history",
-            "keywords": ["history", "past runs", "previous runs"],
-            "reason": "List historical benchmark runs",
-        },
-        {
-            "tool": "benchmark_trends",
-            "keywords": ["trend", "trends", "over time", "performance trend"],
-            "reason": "Compute performance trends over time",
-        },
-        {
-            "tool": "benchmark_data",
-            "keywords": ["benchmark data", "raw results", "results data", "table view"],
-            "reason": "Fetch benchmark results with filtering/pagination",
-        },
-        {
-            "tool": "triage",
-            "keywords": ["triage", "start", "first", "status", "health", "quick check"],
-            "reason": "Get status + summary context",
-        },
-        {
-            "tool": "status",
-            "keywords": ["status", "health", "ready", "check", "sanity"],
-            "reason": "Quick status: GPU, software, AI backend",
-        },
-        {
-            "tool": "job_status",
-            "keywords": ["job status", "async status", "check job", "poll job"],
-            "reason": "Check status of a background job",
-        },
-        {
-            "tool": "ai_status",
-            "keywords": ["ai status", "llm status", "api key", "model availability"],
-            "reason": "Check AI/LLM backend availability",
-        },
-        {
-            "tool": "ask",
-            "keywords": ["question", "why", "how"],
-            "reason": "Free-form performance question with citations",
-        },
-        {
-            "tool": "explain",
-            "keywords": ["what is", "explain", "concept"],
-            "reason": "Explain a performance concept with citations",
-        },
-        {
-            "tool": "ai_troubleshoot",
-            "keywords": ["troubleshoot", "error", "failure", "stack trace", "timeout", "nccl timeout"],
-            "reason": "Diagnose common training/distributed errors",
-        },
-        {
-            "tool": "ask",
-            "keywords": ["flash attention", "torch.compile", "compile", "cuda graphs", "why slow"],
-            "reason": "Ask targeted performance questions (FlashAttn, torch.compile, CUDA Graphs, etc.)",
-        },
-        {
-            "tool": "benchmark_targets",
-            "keywords": ["list targets", "what benchmarks", "examples", "chapters"],
-            "reason": "List available benchmark targets (chapter:example)",
-        }, {
-            "tool": "benchmark_report",
-            "keywords": ["report", "pdf", "html", "export report"],
-            "reason": "Generate PDF/HTML benchmark report",
-        },
-        {
-            "tool": "benchmark_export",
-            "keywords": ["export", "csv", "markdown", "json"],
-            "reason": "Export benchmark results",
-        },
-        {
-            "tool": "export_csv",
-            "keywords": ["export csv", "inline csv", "csv data", "return csv"],
-            "reason": "Inline CSV export of benchmark data",
-        },
-        {
-            "tool": "export_html",
-            "keywords": ["export html", "inline html", "html data"],
-            "reason": "Inline HTML export of benchmark data",
-        },
-        {
-            "tool": "export_pdf",
-            "keywords": ["export pdf", "inline pdf", "pdf data"],
-            "reason": "Inline PDF export of benchmark data",
-        },
-        {
-            "tool": "benchmark_compare_runs",
-            "keywords": ["compare runs", "diff results", "regressions", "improvements"],
-            "reason": "Diff two benchmark JSON runs",
-        },
-        {
-            "tool": "hw_roofline",
-            "keywords": ["stride", "roofline", "memory sweep"],
-            "reason": "Quick stride sweep roofline for memory hierarchy",
-        }, {
-            "tool": "gpu_topology",
-            "keywords": ["topology", "nvlink", "pcie", "multi gpu"],
-            "reason": "Inspect multi-GPU topology",
-        },
-    ]
+    if not isinstance(llm_routing, bool):
+        return make_error("llm_routing must be a boolean.", include_context, context_level)
+    if max_suggestions is not None and not isinstance(max_suggestions, int):
+        return make_error("max_suggestions must be an integer.", include_context, context_level)
+    if max_suggestions is not None and max_suggestions < 1:
+        return make_error("max_suggestions must be >= 1.", include_context, context_level)
 
-    def score(rule: Dict[str, Any], text: str) -> int:
-        s = 0
-        for kw in rule["keywords"]:
-            if kw in text:
-                s += 2 if " " in kw else 1
-        return s
+    try:
+        if llm_routing:
+            tool_catalog = [
+                {"tool": name, "description": tool.description}
+                for name, tool in TOOLS.items()
+            ]
+            suggestions = suggest_tools_llm(
+                query,
+                DEFAULT_SUGGEST_RULES,
+                tool_catalog=tool_catalog,
+                max_suggestions=max_suggestions,
+            )
+            routing = "llm"
+        else:
+            suggestions = suggest_tools_heuristic(
+                query,
+                DEFAULT_SUGGEST_RULES,
+                max_suggestions=max_suggestions,
+            )
+            routing = "heuristic"
+    except (RuntimeError, ValueError) as exc:
+        return make_error(str(exc), include_context, context_level)
 
-    scored = []
-    for rule in rules:
-        sc = score(rule, query)
-        if sc > 0:
-            scored.append((sc, rule))
-
-    # If nothing matched, fall back to triage + core suggestions
-    if not scored:
-        suggestions = [
-            {"tool": "triage", "reason": "Start with triage to gather context"},
-            {"tool": "analyze_bottlenecks", "reason": "Check for bottlenecks"},
-            {"tool": "recommend", "reason": "Get optimization recommendations"},
-        ]
-        return {"suggestions": suggestions, "count": len(suggestions)}
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-
-    seen = set()
-    suggestions = []
-    for sc, rule in scored:
-        if rule["tool"] in seen:
-            continue
-        seen.add(rule["tool"])
-        suggestions.append({"tool": rule["tool"], "reason": rule["reason"], "score": sc})
-
-    result = {"suggestions": suggestions, "count": len(suggestions), "success": True}
+    result = {
+        "suggestions": suggestions,
+        "count": len(suggestions),
+        "success": True,
+        "routing": routing,
+    }
     return attach_context_if_requested(result, include_context, context_level)
 
 
