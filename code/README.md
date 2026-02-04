@@ -134,17 +134,17 @@ supported only on bare metal.
 | Environment | Library Version Mismatch | Different cuDNN/cuBLAS | RunManifest version lock | OK | |
 | Environment | Container Resource Limits | cgroups limits differ | Resource limit check | OK | |
 | Environment | Virtualization Overhead | VM/container overhead varies | Bare-metal validation | OK | |
-| Statistical | Cherry-picking | Only best iterations reported | All-iteration reporting | OK | Chatbot Arena 2024 |
+| Statistical | Cherry-picking | Only best iterations reported | All-iteration reporting | OK | Chatbot Arena 2025 |
 | Statistical | Outlier Injection | Slow iterations added to baseline | Statistical validation | OK | |
 | Statistical | Variance Gaming | Variance reporting manipulated | Consistent statistics | OK | |
 | Statistical | Percentile Selection | Favorable percentile chosen | Fixed percentile policy | OK | |
-| Statistical | Insufficient Samples | Too few iterations for significance | Adaptive iterations | OK | AI Benchmarks 2025 |
+| Statistical | Insufficient Samples | Too few iterations for significance | Adaptive iterations | OK | Measuring What Matters 2025 |
 | Statistical | Cold Start Inclusion | First run included unfairly | Warmup enforcement | OK | |
 | Statistical | GC Interference | Garbage collection during timing | gc_disabled | OK | |
 | Statistical | Background Process Noise | System processes affect timing | Process isolation | OK | |
 | Evaluation | Eval Code Exploitation | Benchmark code modified to pass | BenchmarkContract enforcement | OK | |
 | Evaluation | Timeout Manipulation | Timeout extended to hide slowdowns | Config immutability | OK | |
-| Evaluation | Metric Definition Gaming | Redefine what speedup means | Standardized metric definitions | OK | MLPerf 2019, GLUE 2024, AI Benchmarks 2025 |
+| Evaluation | Metric Definition Gaming | Redefine what speedup means | Standardized metric definitions | OK | MLPerf 2019, GLUE 2024, Measuring What Matters 2025, Medical LLM Benchmarks 2025 |
 | Evaluation | Test Data Leakage | Training on test data | Data contamination checks | OK | Benchmark Data Contamination Survey 2024 |
 | Evaluation | Benchmark Overfitting | Optimize specifically for benchmark | Fresh-input + jitter checks | OK | Underspecification 2020, Epic Sepsis 2021 |
 | Evaluation | Self-Modifying Tests | AI/code modifies its own tests | Config immutability | OK | |
@@ -158,13 +158,14 @@ Total: 11 categories, 95 validity issues - all protected by the harness.
 | Year | Incident | Issue Type | What Happened | Source |
 | --- | --- | --- | --- | --- |
 | 2025 | Locus/KernelBench Stream Exploit | Unsynced Streams | Claimed 20x speedup on Llama FFW kernel. AI launched work on non-default CUDA streams but timer only measured default stream. 32.8 percent of RL-generated kernels exploited this, causing fake 18x speedups. | https://x.com/miru_why/status/1991773868806361138 |
-| 2025 | AI Benchmark Scientific Rigor | Metric Definition Gaming | Only 16 percent of 445 AI benchmarks used statistical tests; about 50 percent tested abstract concepts without clear definitions. | http://web.archive.org/web/20251113204928/https://www.theregister.com/2025/11/07/measuring_ai_models_hampered_by/ |
-| 2025 | MMLU Benchmark Errors | Invalid Ground Truth | About 57 percent of questions in the MMLU virology subset were incorrect. | https://promptengineering.org/challenges-and-innovations-in-language-model-benchmarking-and-generalization/ |
+| 2025 | Measuring What Matters: Construct Validity in LLM Benchmarks | Metric Definition Gaming / Construct Validity | Systematic review of 445 LLM benchmarks found construct-validity weaknesses and low statistical rigor; issued eight design recommendations. | https://ora.ox.ac.uk/objects/uuid%3Aad2b69b6-0986-42d0-a512-a6e56338b6cc ; https://www.oii.ox.ac.uk/news-events/study-identifies-weaknesses-in-how-ai-systems-are-evaluated/ |
+| 2025 | Medical LLM Benchmarks and Construct Validity | Metric Definition Gaming / Construct Validity | Position paper argues exam-style medical LLM benchmarks miss real-world tasks and documents construct-validity gaps using clinical data. | https://arxiv.org/abs/2503.10694 |
 | 2025 | Sakana AI Scientist Evaluation | Evaluation Integrity | Independent evaluation found frequent experiment failures and hallucinated numerical results. | https://arxiv.org/abs/2502.14297 |
+| 2025 | Chatbot Arena Benchmark Issues | Cherry-picking | Crowdsourced benchmark results showed selection bias and inconsistent submissions. | https://techcrunch.com/2025/04/22/crowdsourced-ai-benchmarks-have-serious-flaws-some-experts-say/ |
+| 2024 | MMLU Benchmark Errors | Invalid Ground Truth | Analysis found 57 percent of MMLU virology subset questions incorrect and estimated 6.49 percent errors overall. | https://arxiv.org/abs/2406.04127 |
 | 2024 | AI Agent Benchmark Shortcuts | Missing Holdout Sets | Study found AI agents memorize benchmark test samples instead of learning to generalize. Many benchmarks lack proper holdout test sets. | https://arxiv.org/abs/2407.01502 |
 | 2024 | GLUE Benchmark Heuristics | Metric Definition Gaming | Models achieved high GLUE scores by exploiting shallow heuristics rather than genuine language understanding. | http://web.archive.org/web/20250429145344/https://revelry.co/insights/artificial-intelligence/why-ai-benchmarks-fail/ |
 | 2024 | HumanEval Limitations | Benchmark Overfitting | Models performing well on HumanEval struggled with real-world coding tasks. | http://web.archive.org/web/20250429145344/https://revelry.co/insights/artificial-intelligence/why-ai-benchmarks-fail/ |
-| 2024 | Chatbot Arena Benchmark Issues | Cherry-picking | Crowdsourced benchmark results showed selection bias and inconsistent submissions. | https://techcrunch.com/2025/04/22/crowdsourced-ai-benchmarks-have-serious-flaws-some-experts-say/ |
 | 2024 | Benchmark Data Contamination Survey | Data Contamination | Survey catalogs contamination pathways across LLM benchmarks and highlights mitigation gaps. | https://arxiv.org/abs/2406.04244 |
 | 2023 | NLP Evaluation Data Contamination | Data Contamination | Position paper warns that LLMs trained on benchmark test splits can inflate reported scores. | https://arxiv.org/abs/2310.18018 |
 | 2022 | MLPerf Participation Issues | Cherry-picking | MLPerf faced inconsistent vendor participation; selective scenario submissions led to biased performance representations. | http://web.archive.org/web/20250813110435/https://www.nextplatform.com/2022/04/08/the-performance-of-mlperf-as-a-ubiquitous-benchmark-is-lacking/ |
@@ -186,7 +187,7 @@ Total: 11 categories, 95 validity issues - all protected by the harness.
 | Invalid Ground Truth | 2 (ImageNet Labels, MMLU) | GoldenOutputCache + validate_result | OK |
 | Benchmark Overfitting | 4 (Underspecification, Epic Sepsis, HumanEval, Berkeley) | Fresh-input checks + jitter | OK |
 | Data Contamination | 2 (LLM Survey 2024, NLP Contamination 2023) | Data contamination checks + fresh inputs | OK |
-| Metric Gaming | 3 (AI Benchmarks 2025, GLUE 2024, MLPerf 2019) | Standardized metric definitions | OK |
+| Metric Gaming | 4 (Measuring What Matters 2025, Medical LLM Benchmarks 2025, GLUE 2024, MLPerf 2019) | Standardized metric definitions | OK |
 | Cherry-picking | 2 (Chatbot Arena, MLPerf 2022) | All-iteration reporting | OK |
 | Train/Test Overlap | 1 (Computational Biology) | Dataset isolation + holdout enforcement | OK |
 | Missing Holdout Sets | 2 (AI Agent Shortcuts, Microsoft Tay) | Held-out evaluation data | OK |
