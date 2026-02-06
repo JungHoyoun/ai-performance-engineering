@@ -28,6 +28,8 @@ $(addsuffix $(SUFFIX), $(BASE_TARGETS)): %$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
 	     [ "$*" = "baseline_cutlass_gemm_fp16" ] || [ "$*" = "optimized_cutlass_gemm_fp16" ] || \
 	     [ "$*" = "baseline_cutlass_gemm_fp8" ] || [ "$*" = "optimized_cutlass_gemm_fp8" ] || \
 	     [ "$*" = "baseline_cutlass_gemm_fp4" ] || [ "$*" = "optimized_cutlass_gemm_fp4" ] || \
+	     [ "$*" = "baseline_cutlass_gemm_fp4_all_concepts" ] || [ "$*" = "optimized_cutlass_gemm_fp4_all_concepts" ] || \
+	     [ "$*" = "baseline_cute_dsl_nvfp4_gemm" ] || [ "$*" = "optimized_cute_dsl_nvfp4_gemm" ] || \
 	     [ "$*" = "baseline_cutlass_gemm_fp4_perchannel" ] || [ "$*" = "optimized_cutlass_gemm_fp4_perchannel" ]; then \
 		$(NVCC) $(NVCC_FLAGS) $(CUTLASS_INCLUDES) -lcuda -o $@ $< $(CUDA_NVTX_LDFLAGS); \
 	elif [ "$*" = "baseline_cublaslt_gemm" ] || [ "$*" = "optimized_cublaslt_gemm" ] || \
@@ -48,6 +50,8 @@ $(VERIFY_TARGETS): %_verify$(SUFFIX): %.cu $(CUDA_NVTX_DEPS)
 	     [ "$*" = "baseline_cutlass_gemm_fp16" ] || [ "$*" = "optimized_cutlass_gemm_fp16" ] || \
 	     [ "$*" = "baseline_cutlass_gemm_fp8" ] || [ "$*" = "optimized_cutlass_gemm_fp8" ] || \
 	     [ "$*" = "baseline_cutlass_gemm_fp4" ] || [ "$*" = "optimized_cutlass_gemm_fp4" ] || \
+	     [ "$*" = "baseline_cutlass_gemm_fp4_all_concepts" ] || [ "$*" = "optimized_cutlass_gemm_fp4_all_concepts" ] || \
+	     [ "$*" = "baseline_cute_dsl_nvfp4_gemm" ] || [ "$*" = "optimized_cute_dsl_nvfp4_gemm" ] || \
 	     [ "$*" = "baseline_cutlass_gemm_fp4_perchannel" ] || [ "$*" = "optimized_cutlass_gemm_fp4_perchannel" ]; then \
 		$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 $(CUTLASS_INCLUDES) -lcuda -o $@ $< $(CUDA_NVTX_LDFLAGS); \
 	elif [ "$*" = "baseline_cublaslt_gemm" ] || [ "$*" = "optimized_cublaslt_gemm" ] || \

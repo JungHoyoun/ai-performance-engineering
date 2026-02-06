@@ -640,6 +640,7 @@ def ai_tools(_: Dict[str, Any]) -> Dict[str, Any]:
             "benchmark_triage",
             "benchmark_variants",
             "benchmark_deep_dive_compare",
+            "benchmark_explore",
             "benchmark_llm_patch_loop",
             "benchmark_data",
             "benchmark_overview",

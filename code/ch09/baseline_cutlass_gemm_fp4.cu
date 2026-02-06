@@ -29,10 +29,11 @@
 
 using namespace cute;
 
-constexpr int kM = 4096;
-constexpr int kN = 4096;
-constexpr int kK = 4096;
-constexpr int kIterations = 10;
+// GPU Mode NVFP4 challenge shape (M, N, K) with a fixed iteration count.
+constexpr int kM = 128;
+constexpr int kN = 7168;
+constexpr int kK = 16384;
+constexpr int kIterations = 50;
 constexpr int kSwizzle = 0;
 
 struct Options {
@@ -118,7 +119,7 @@ using ElementAccumulator = float;
 using ArchTag = cutlass::arch::Sm100;
 using OperatorClass = cutlass::arch::OpClassBlockScaledTensorOp;
 
-using MmaTileShape = Shape<_64, _64, _256>;
+using MmaTileShape = Shape<_128, _64, _256>;
 using ClusterShape = Shape<_1, _1, _1>;
 
 using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBuilder<

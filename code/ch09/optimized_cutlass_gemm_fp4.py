@@ -10,7 +10,7 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from core.harness.benchmark_harness import BaseBenchmark
+from core.harness.benchmark_harness import BaseBenchmark, ExecutionMode
 from core.benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
 
 
@@ -27,16 +27,29 @@ class OptimizedCutlassGemmFp4Benchmark(CudaBinaryBenchmark):
             warmup=5,
             timeout_seconds=180,
             workload_params={
-                "M": 4096,
-                "N": 4096,
-                "K": 4096,
-                "kIterations": 10,
+                "M": 128,
+                "N": 7168,
+                "K": 16384,
+                "kIterations": 50,
                 "dtype": "nvfp4",
             },
         )
 
     def get_custom_metrics(self) -> Optional[dict]:
         return None
+
+    def get_config(self):
+        config = super().get_config()
+        # Match baseline config and avoid subprocess isolation here; subprocess
+        # mode intermittently hits BrokenPipe for this binary in the harness.
+        config.use_subprocess = False
+        config.execution_mode = ExecutionMode.THREAD
+        # Match explicit CLI intent: keep NCU minimal and stable for this binary.
+        config.ncu_metric_set = "minimal"
+        config.ncu_replay_mode = "kernel"
+        config.ncu_replay_mode_override = True
+        config._sync_execution_mode()
+        return config
 
 
 def get_benchmark() -> BaseBenchmark:

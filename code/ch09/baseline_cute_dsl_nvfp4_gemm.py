@@ -1,4 +1,4 @@
-"""Python harness wrapper for baseline_cutlass_gemm_fp4.cu."""
+"""Python harness wrapper for baseline_cute_dsl_nvfp4_gemm.cu."""
 
 from __future__ import annotations
 from typing import Optional
@@ -14,15 +14,15 @@ from core.harness.benchmark_harness import BaseBenchmark, ExecutionMode
 from core.benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
 
 
-class BaselineCutlassGemmFp4Benchmark(CudaBinaryBenchmark):
+class BaselineCuteDslNvfp4GemmBenchmark(CudaBinaryBenchmark):
     """Wraps the baseline CUDA binary."""
 
     def __init__(self) -> None:
         chapter_dir = Path(__file__).parent
         super().__init__(
             chapter_dir=chapter_dir,
-            binary_name="baseline_cutlass_gemm_fp4",
-            friendly_name="Baseline Cutlass Gemm Fp4",
+            binary_name="baseline_cute_dsl_nvfp4_gemm",
+            friendly_name="Baseline Cute DSL Nvfp4 Gemm",
             iterations=5,
             warmup=5,
             timeout_seconds=180,
@@ -40,11 +40,11 @@ class BaselineCutlassGemmFp4Benchmark(CudaBinaryBenchmark):
 
     def get_config(self):
         config = super().get_config()
-        # Avoid subprocess isolation here; the cutlass fp4 binary is stable
-        # but subprocess mode intermittently hits BrokenPipe in the harness.
+        # Subprocess isolation intermittently hits BrokenPipe under profiling;
+        # use thread mode for stable benchmark runs.
         config.use_subprocess = False
         config.execution_mode = ExecutionMode.THREAD
-        # Match explicit CLI intent: keep NCU minimal and stable for this binary.
+        # Keep NCU capture overhead low and stable for this binary benchmark.
         config.ncu_metric_set = "minimal"
         config.ncu_replay_mode = "kernel"
         config.ncu_replay_mode_override = True
@@ -53,7 +53,7 @@ class BaselineCutlassGemmFp4Benchmark(CudaBinaryBenchmark):
 
 
 def get_benchmark() -> BaseBenchmark:
-    return BaselineCutlassGemmFp4Benchmark()
+    return BaselineCuteDslNvfp4GemmBenchmark()
 
 
 if __name__ == "__main__":

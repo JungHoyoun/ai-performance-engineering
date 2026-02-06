@@ -2391,34 +2391,60 @@ def profile_python_benchmark_torch(
     benchmark_name = output_stem or benchmark_path.stem
     torch_output = output_dir / f"{benchmark_name}__{variant}_torch_trace.json"
     
-    try:
-        # Warmup
-        for _ in range(5):
-            benchmark.benchmark_fn()
-        
-        # Profile execution with PyTorch profiler
-        with torch.profiler.profile(
-            activities=[
-                torch.profiler.ProfilerActivity.CPU,
-                torch.profiler.ProfilerActivity.CUDA,
-            ],
-            record_shapes=True,
-            profile_memory=True,
-            with_stack=True,
-            with_flops=True,
-            with_modules=True,
-        ) as prof:
-            benchmark.benchmark_fn()
-            prof.step()
-        
-        # Export Chrome trace
-        prof.export_chrome_trace(str(torch_output))
-        
-        if torch_output.exists():
-            return torch_output
-        return None
-    except Exception:
-        return None
+    log_base = output_dir / f"{benchmark_name}__{variant}__torch"
+
+    def _run_profile(profile_kwargs: dict, label: str) -> Optional[Path]:
+        try:
+            # Warmup
+            for _ in range(5):
+                benchmark.benchmark_fn()
+
+            # Profile execution with PyTorch profiler
+            with torch.profiler.profile(
+                activities=[
+                    torch.profiler.ProfilerActivity.CPU,
+                    torch.profiler.ProfilerActivity.CUDA,
+                ],
+                **profile_kwargs,
+            ) as prof:
+                benchmark.benchmark_fn()
+                prof.step()
+
+            prof.export_chrome_trace(str(torch_output))
+            if torch_output.exists():
+                return torch_output
+            return None
+        except Exception as exc:
+            log_base.with_suffix(".stderr.log").write_text(
+                f"[{label}] torch profiler failed: {exc}\n"
+            )
+            return None
+
+    # First try: full-featured profiler
+    torch_path = _run_profile(
+        {
+            "record_shapes": True,
+            "profile_memory": True,
+            "with_stack": True,
+            "with_flops": True,
+            "with_modules": True,
+        },
+        "full",
+    )
+    if torch_path:
+        return torch_path
+
+    # Fallback: minimal profiler settings
+    return _run_profile(
+        {
+            "record_shapes": False,
+            "profile_memory": False,
+            "with_stack": False,
+            "with_flops": False,
+            "with_modules": False,
+        },
+        "minimal",
+    )
 
 
 def ensure_cuda_executables_built(chapter_dir: Path) -> Tuple[bool, Optional[str]]:

@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence
@@ -44,6 +45,37 @@ ARCH_SUFFIX = {
     "sm_121": "_sm121",
 }
 
+
+def _run_subprocess_capture(
+    args: Sequence[str],
+    *,
+    cwd: Path,
+    timeout: int,
+) -> subprocess.CompletedProcess[str]:
+    """Run a subprocess while capturing stdout/stderr without pipe breakage.
+
+    Use temporary files instead of PIPE to avoid BrokenPipe when the parent
+    stdout is detached (e.g., queue runner sessions).
+    """
+    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+        completed = subprocess.run(
+            list(args),
+            cwd=cwd,
+            check=False,
+            stdout=stdout_file,
+            stderr=stderr_file,
+            timeout=timeout,
+        )
+        stdout_file.seek(0)
+        stderr_file.seek(0)
+        stdout = stdout_file.read().decode("utf-8", errors="replace")
+        stderr = stderr_file.read().decode("utf-8", errors="replace")
+        return subprocess.CompletedProcess(
+            args=completed.args,
+            returncode=completed.returncode,
+            stdout=stdout,
+            stderr=stderr,
+        )
 
 def detect_supported_arch() -> str:
     """Infer the CUDA architecture for building binaries from the active GPU."""
@@ -155,12 +187,9 @@ class CudaBinaryBenchmark(VerificationPayloadMixin, BaseBenchmark):
             build_cmd.append("VERIFY=1")
         
         try:
-            completed = subprocess.run(
+            completed = _run_subprocess_capture(
                 build_cmd,
                 cwd=self.chapter_dir,
-                check=False,
-                capture_output=True,
-                text=True,
                 timeout=60,  # 60 second timeout - CUDA compilation can take time for complex kernels
             )
         except subprocess.TimeoutExpired:
@@ -204,12 +233,9 @@ class CudaBinaryBenchmark(VerificationPayloadMixin, BaseBenchmark):
             raise RuntimeError("Verify binary not built (call _build_binary_verify first)")
         
         try:
-            completed = subprocess.run(
+            completed = _run_subprocess_capture(
                 [str(self._verify_exec_path), *self.run_args],
                 cwd=self.chapter_dir,
-                check=False,
-                capture_output=True,
-                text=True,
                 timeout=self.timeout_seconds,
             )
         except subprocess.TimeoutExpired:
@@ -278,12 +304,9 @@ class CudaBinaryBenchmark(VerificationPayloadMixin, BaseBenchmark):
             raise RuntimeError("Executable path not set (build step missing)")
         
         try:
-            completed = subprocess.run(
+            completed = _run_subprocess_capture(
                 [str(self.exec_path), *self.run_args],
                 cwd=self.chapter_dir,
-                check=False,
-                capture_output=True,
-                text=True,
                 timeout=self.timeout_seconds,
             )
         except subprocess.TimeoutExpired:

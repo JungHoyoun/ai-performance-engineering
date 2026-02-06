@@ -172,6 +172,22 @@ def _validate_profile_type(profile: str | None) -> str:
     return normalized
 
 
+def _validate_deep_dive_mode(mode: str | None) -> str:
+    if mode is None:
+        return "auto"
+    normalized = mode.strip().lower()
+    valid = {"auto", "always", "never"}
+    if normalized not in valid:
+        message = (
+            f"Invalid deep-dive mode '{mode}'. "
+            "Choose from 'auto', 'always', or 'never'."
+        )
+        if TYPER_AVAILABLE and typer is not None:
+            raise typer.BadParameter(message)
+        raise ValueError(message)
+    return normalized
+
+
 def _parse_target_extra_args(entries: Optional[List[str]]) -> Dict[str, List[str]]:
     """Parse --target-extra-arg entries of the form target="--flag value"."""
     parsed: Dict[str, List[str]] = {}
@@ -812,6 +828,79 @@ if TYPER_AVAILABLE:
             use_llm_cache=not no_llm_cache,
             llm_explain=llm_explain,
         )
+
+    @app.command("explore")
+    def explore(
+        path: Path = Option(
+            ...,
+            "--path",
+            "-p",
+            help=(
+                "Baseline wrapper path (baseline_*.py) or baseline_*.cu. "
+                "If the wrapper is missing, the tool will attempt to auto-generate one. "
+                "The tool then copies the wrapper and runs variants on the copy."
+            ),
+        ),
+        copy_tag: str = Option("mcp_copy", "--copy-tag", help="Suffix tag for copied baseline files (default: mcp_copy)."),
+        copy_cu: bool = Option(True, "--copy-cu/--no-copy-cu", help="Copy matching baseline_*.cu file if present."),
+        max_variants: int = Option(3, "--max-variants", help="Max number of LLM variants to report (clamped to 1-3)."),
+        deep_dive: str = Option("auto", "--deep-dive", help="Deep-dive mode: auto, always, or never.", callback=_validate_deep_dive_mode),
+        deep_dive_speedup_threshold: float = Option(1.05, "--deep-dive-speedup-threshold", help="Speedup threshold below which deep_dive is triggered in auto mode."),
+        artifacts_dir: Optional[str] = Option(None, "--artifacts-dir", help="Base directory for run artifacts (default: ./artifacts/runs)."),
+        run_id: Optional[str] = Option(None, "--run-id", help="Run ID for artifacts (default: <timestamp>__explore__<label>)."),
+        iterations: Optional[int] = Option(None, "--iterations", help="Override benchmark iterations for minimal profiling run."),
+        warmup: Optional[int] = Option(None, "--warmup", help="Override warmup iterations for minimal profiling run."),
+        timeout_seconds: Optional[int] = Option(0, "--timeout-seconds", help="Max runtime for minimal profiling run (0 disables timeout)."),
+        deep_dive_iterations: int = Option(1, "--deep-dive-iterations", help="Override iterations for deep_dive run (default: 1)."),
+        deep_dive_warmup: int = Option(5, "--deep-dive-warmup", help="Override warmup iterations for deep_dive run (default: 5)."),
+        deep_dive_timeout_seconds: Optional[int] = Option(0, "--deep-dive-timeout-seconds", help="Max runtime for deep_dive run (0 disables timeout)."),
+        update_expectations: bool = Option(True, "--update-expectations/--no-update-expectations", help="Force-write observed metrics into expectation files (recommended)."),
+        allow_invalid_environment: bool = Option(
+            False,
+            "--allow-invalid-environment",
+            help=(
+                "Allow running benchmarks even if validate_environment() reports errors. "
+                "Still emits warnings; results may be invalid. Intended only for diagnostics."
+            ),
+            is_flag=True,
+        ),
+        allow_virtualization: bool = Option(
+            True,
+            "--allow-virtualization/--disallow-virtualization",
+            help=(
+                "Allow running in a virtualized environment (VM/hypervisor) by downgrading ONLY the "
+                "virtualization check to a loud warning. Default is allow (virtualization is warned)."
+            ),
+        ),
+        async_run: bool = Option(False, "--async", help="Run in background and return job_id; poll with job_status.", is_flag=True),
+    ):
+        """Copy a baseline benchmark, run LLM variants with profiling, and compare utilization."""
+        from mcp.mcp_server import tool_benchmark_explore
+
+        params: Dict[str, Any] = {
+            "path": str(path),
+            "copy_tag": copy_tag,
+            "copy_cu": copy_cu,
+            "max_variants": max_variants,
+            "deep_dive": deep_dive,
+            "deep_dive_speedup_threshold": deep_dive_speedup_threshold,
+            "artifacts_dir": artifacts_dir,
+            "run_id": run_id,
+            "iterations": iterations,
+            "warmup": warmup,
+            "timeout_seconds": timeout_seconds,
+            "deep_dive_iterations": deep_dive_iterations,
+            "deep_dive_warmup": deep_dive_warmup,
+            "deep_dive_timeout_seconds": deep_dive_timeout_seconds,
+            "update_expectations": update_expectations,
+            "allow_invalid_environment": allow_invalid_environment,
+            "allow_virtualization": allow_virtualization,
+            "async": async_run,
+        }
+        result = tool_benchmark_explore(params)
+        typer.echo(json.dumps(result, indent=2))
+        if result.get("success") is False:
+            raise typer.Exit(code=1)
 
     @app.command("verify")
     def verify(

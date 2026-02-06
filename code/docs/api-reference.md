@@ -79,6 +79,7 @@ aisp profile nsys python train.py
 gpu_info          - Get GPU hardware info
 analyze_bottlenecks - Identify performance issues
 optimize          - Run quick LLM benchmark variants from a target or file path
+benchmark_explore - Copy a baseline benchmark, run LLM variants, compare utilization
 recommend         - Get optimization recommendations
 ask              - Ask performance questions
 ```
@@ -283,6 +284,7 @@ Benchmark execution, history tracking, and result comparison.
 |-----------|-------------|-----|----------|
 | `run(targets, profile)` | Run benchmarks | `aisp bench run` | `run_benchmarks` |
 | `targets()` | List benchmark targets | `aisp bench list-targets` | `benchmark_targets` |
+| `explore(path, ...)` | Copy baseline, run LLM variants w/ profiling | `aisp bench explore` | `benchmark_explore` |
 | `history()` | Historical benchmark runs | - | `benchmark_history` |
 | `data()` | Load benchmark results (filtered/paged) | - | `benchmark_data` |
 | `overview()` | Summary of latest results | - | `benchmark_overview` |
@@ -290,6 +292,8 @@ Benchmark execution, history tracking, and result comparison.
 | `compare(params)` | Compare two benchmark runs (dashboard-style diff) | - | `benchmark_compare` |
 | `compare_runs(baseline, candidate)` | Compare two benchmark runs (bench CLI diff) | `aisp bench compare-runs` | `benchmark_compare_runs` |
 | `speed_test()` | Quick speed tests (diagnostic) | `aisp benchmark speed` | `hw_speed` |
+
+**Explore workflow:** `aisp bench explore` / `benchmark_explore` copies a `baseline_*.py` (or a `baseline_*.cu` with auto-generated wrapper), runs minimal profiling with LLM patch variants, compares utilization deltas, and triggers deep_dive when minimal results are inconclusive.
 
 **Python API:**
 ```python

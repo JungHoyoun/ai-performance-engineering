@@ -70,12 +70,13 @@ DOMAIN TOOLS (organized by 10-domain model):
         inference_vllm, inference_quantization,
         inference_deploy, inference_estimate
 
-    Benchmark (15 tools):
+    Benchmark (16 tools):
         run_benchmarks, list_chapters, benchmark_targets, benchmark_report,
         benchmark_export, benchmark_compare_runs, benchmark_triage,
         benchmark_data, benchmark_overview, benchmark_history,
         benchmark_trends, benchmark_compare,
         benchmark_variants, benchmark_deep_dive_compare,
+        benchmark_explore,
         benchmark_llm_patch_loop
 
     AI (4 tools):
@@ -116,6 +117,7 @@ import traceback
 import time
 import threading
 import uuid
+import re
 from collections import defaultdict, deque
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -130,6 +132,42 @@ if str(CODE_ROOT) not in sys.path:
 from core.analysis.tool_router import DEFAULT_SUGGEST_RULES, suggest_tools_auto
 from core.harness.progress import ProgressEvent, ProgressRecorder
 from core.jobs import JobStore
+
+
+def _load_mcp_env() -> None:
+    """Load .env and .env.local so MCP has access to API keys."""
+    env_path = CODE_ROOT / ".env"
+    env_local_path = CODE_ROOT / ".env.local"
+    try:
+        from dotenv import load_dotenv  # type: ignore
+    except Exception:
+        load_dotenv = None  # type: ignore
+
+    if load_dotenv:
+        load_dotenv(env_path, override=False)
+        load_dotenv(env_local_path, override=True)
+        return
+
+    for env_file in (env_path, env_local_path):
+        if not env_file.exists():
+            continue
+        with env_file.open("r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                if key.startswith("export "):
+                    key = key.replace("export", "", 1).strip()
+                value = value.strip().strip('"').strip("'")
+                if not key:
+                    continue
+                if env_file.name == ".env.local" or key not in os.environ:
+                    os.environ[key] = value
+
+
+_load_mcp_env()
 
 # MCP Protocol Types
 @dataclass
@@ -1892,6 +1930,23 @@ def tool_system_network(params: Dict[str, Any]) -> Dict[str, Any]:
                 "description": "Override Nsight Compute timeout in seconds (default from BenchmarkDefaults).",
                 "default": None
             },
+            "ncu_metric_set": {
+                "type": "string",
+                "description": (
+                    "Nsight Compute metric preset: auto, minimal, deep_dive, or roofline. "
+                    "If auto, the profile type governs metric selection."
+                ),
+                "enum": ["auto", "minimal", "deep_dive", "roofline"],
+                "default": "auto",
+            },
+            "ncu_replay_mode": {
+                "type": "string",
+                "description": (
+                    "Nsight Compute replay mode: kernel or application. "
+                    "When set, overrides the minimal preset replay mode."
+                ),
+                "enum": ["kernel", "application"],
+            },
             "allow_invalid_environment": {
                 "type": "boolean",
                 "description": (
@@ -1913,6 +1968,14 @@ def tool_system_network(params: Dict[str, Any]) -> Dict[str, Any]:
                 "description": (
                     "Allow expectation updates when provenance differs (commit/hardware/profile mismatch) without "
                     "forcing updates. Does NOT accept regressions (use accept_regressions/update_expectations)."
+                ),
+                "default": False,
+            },
+            "update_expectations": {
+                "type": "boolean",
+                "description": (
+                    "Force-write observed metrics into expectation files (overrides regressions). "
+                    "Useful for refreshing baselines on new hardware."
                 ),
                 "default": False,
             },
@@ -1968,9 +2031,12 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
     timeout_multiplier = params.get("timeout_multiplier")
     nsys_timeout_seconds = params.get("nsys_timeout_seconds")
     ncu_timeout_seconds = params.get("ncu_timeout_seconds")
+    ncu_metric_set = params.get("ncu_metric_set", "auto")
+    ncu_replay_mode = params.get("ncu_replay_mode")
     allow_invalid_environment = bool(params.get("allow_invalid_environment", False))
     allow_virtualization = bool(params.get("allow_virtualization", True))
     allow_mixed_provenance = bool(params.get("allow_mixed_provenance", False))
+    update_expectations = bool(params.get("update_expectations", False))
     only_python = bool(params.get("only_python", False))
     only_cuda = bool(params.get("only_cuda", False))
     auto_analyze = bool(params.get("auto_analyze", True))
@@ -2076,12 +2142,18 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
         args.extend(["--nsys-timeout-seconds", str(int(nsys_timeout_seconds))])
     if ncu_timeout_seconds is not None:
         args.extend(["--ncu-timeout-seconds", str(int(ncu_timeout_seconds))])
+    if ncu_metric_set is not None:
+        args.extend(["--ncu-metric-set", str(ncu_metric_set)])
+    if ncu_replay_mode is not None:
+        args.extend(["--ncu-replay-mode", str(ncu_replay_mode)])
     if allow_invalid_environment:
         args.append("--allow-invalid-environment")
     if allow_virtualization:
         args.append("--allow-virtualization")
     if allow_mixed_provenance:
         args.append("--allow-mixed-provenance")
+    if update_expectations:
+        args.append("--update-expectations")
     if only_python:
         args.append("--only-python")
     if only_cuda:
@@ -2735,6 +2807,831 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
     result["run_id"] = run_id
     if progress_path:
         result["progress_path"] = str(progress_path)
+    return attach_context_if_requested(result, include_context, context_level)
+
+
+def _parse_speedup_value(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    if isinstance(value, str):
+        match = re.search(r"([0-9]+(?:\.[0-9]+)?)", value)
+        if match:
+            try:
+                return float(match.group(1))
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _resolve_profile_path(path_value: Optional[str]) -> Optional[Path]:
+    if not path_value:
+        return None
+    path = Path(str(path_value))
+    if not path.is_absolute():
+        path = (CODE_ROOT / path).resolve()
+    return path
+
+
+def _extract_profile_metrics(
+    ncu_path: Optional[Path],
+    nsys_path: Optional[Path],
+) -> Tuple[Dict[str, float], List[str]]:
+    metrics: Dict[str, float] = {}
+    errors: List[str] = []
+    try:
+        from core.profiling.metrics_extractor import extract_ncu_metrics, extract_nsys_metrics
+    except Exception as exc:
+        return metrics, [f"metrics_extractor_unavailable: {exc}"]
+
+    if nsys_path and nsys_path.exists():
+        try:
+            nsys_metrics = extract_nsys_metrics(nsys_path)
+            if hasattr(nsys_metrics, "to_dict"):
+                metrics.update(nsys_metrics.to_dict())
+        except Exception as exc:
+            errors.append(f"nsys_metrics_error: {exc}")
+    elif nsys_path:
+        errors.append(f"nsys_profile_missing: {nsys_path}")
+
+    if ncu_path and ncu_path.exists():
+        try:
+            ncu_metrics = extract_ncu_metrics(ncu_path)
+            if hasattr(ncu_metrics, "to_dict"):
+                metrics.update(ncu_metrics.to_dict())
+        except Exception as exc:
+            errors.append(f"ncu_metrics_error: {exc}")
+    elif ncu_path:
+        errors.append(f"ncu_profile_missing: {ncu_path}")
+
+    return metrics, errors
+
+
+def _summarize_variant_profiles(
+    bench_entry: Dict[str, Any],
+    *,
+    max_variants: int = 3,
+) -> Dict[str, Any]:
+    max_variants = max(1, min(int(max_variants), 3))
+    baseline_time = float(bench_entry.get("baseline_time_ms") or 0.0)
+    baseline_nsys = _resolve_profile_path(bench_entry.get("baseline_nsys_rep"))
+    baseline_ncu = _resolve_profile_path(bench_entry.get("baseline_ncu_rep"))
+    baseline_metrics, baseline_errors = _extract_profile_metrics(baseline_ncu, baseline_nsys)
+
+    baseline_entry = {
+        "name": "baseline",
+        "time_ms": baseline_time,
+        "speedup": 1.0,
+        "profiles": {
+            "nsys": str(baseline_nsys) if baseline_nsys else None,
+            "ncu": str(baseline_ncu) if baseline_ncu else None,
+        },
+        "metrics": baseline_metrics,
+        "metric_errors": baseline_errors,
+    }
+
+    variants: List[Dict[str, Any]] = []
+    patch_entries = bench_entry.get("llm_patches") or []
+    for patch in patch_entries:
+        if not isinstance(patch, dict):
+            continue
+        rebench = patch.get("rebenchmark_result") or {}
+        if not isinstance(rebench, dict) or not rebench.get("success"):
+            continue
+        time_ms = rebench.get("median_ms") or rebench.get("time_ms")
+        if time_ms is None:
+            continue
+        actual_speedup = _parse_speedup_value(patch.get("actual_speedup"))
+        if actual_speedup is None and baseline_time > 0:
+            try:
+                actual_speedup = float(baseline_time) / float(time_ms)
+            except Exception:
+                actual_speedup = None
+        expected_speedup = _parse_speedup_value(patch.get("expected_speedup"))
+
+        nsys_profile = _resolve_profile_path(rebench.get("nsys_profile"))
+        ncu_profile = _resolve_profile_path(rebench.get("ncu_profile"))
+        metrics, metric_errors = _extract_profile_metrics(ncu_profile, nsys_profile)
+
+        variants.append(
+            {
+                "name": patch.get("variant_name") or Path(str(rebench.get("patched_file") or "")).stem,
+                "description": patch.get("description"),
+                "expected_speedup": expected_speedup,
+                "actual_speedup": actual_speedup,
+                "time_ms": float(time_ms),
+                "profiles": {
+                    "nsys": str(nsys_profile) if nsys_profile else None,
+                    "ncu": str(ncu_profile) if ncu_profile else None,
+                },
+                "metrics": metrics,
+                "metric_errors": metric_errors,
+                "patched_file": rebench.get("patched_file"),
+            }
+        )
+
+    variants.sort(key=lambda v: v.get("actual_speedup") or 0.0, reverse=True)
+    selected_variants = variants[:max_variants]
+    best_variant = selected_variants[0] if selected_variants else None
+
+    return {
+        "baseline": baseline_entry,
+        "variants": selected_variants,
+        "variant_count": len(variants),
+        "best_variant": best_variant,
+    }
+
+
+def _summarize_utilization_deltas(
+    baseline_metrics: Dict[str, float],
+    variant_metrics: Dict[str, float],
+) -> Dict[str, Dict[str, float]]:
+    keys = [
+        "ncu_sm_throughput_pct",
+        "ncu_dram_throughput_pct",
+        "ncu_l2_throughput_pct",
+        "ncu_occupancy_pct",
+        "ncu_kernel_time_ms",
+        "nsys_total_gpu_time_ms",
+    ]
+    deltas: Dict[str, Dict[str, float]] = {}
+    for key in keys:
+        base_val = baseline_metrics.get(key)
+        var_val = variant_metrics.get(key)
+        if base_val is None or var_val is None:
+            continue
+        delta = var_val - base_val
+        delta_pct = (delta / base_val * 100.0) if base_val else 0.0
+        deltas[key] = {"baseline": float(base_val), "variant": float(var_val), "delta": delta, "delta_pct": delta_pct}
+    return deltas
+
+
+def _should_run_deep_dive(
+    summary: Dict[str, Any],
+    *,
+    mode: str,
+    speedup_threshold: float,
+    require_nsys: bool,
+    require_ncu: bool,
+) -> Tuple[bool, List[str]]:
+    reasons: List[str] = []
+    normalized = (mode or "auto").strip().lower()
+    if normalized == "always":
+        return True, ["forced"]
+    if normalized == "never":
+        return False, ["disabled"]
+
+    best_variant = summary.get("best_variant")
+    if not best_variant:
+        reasons.append("no_variants")
+    else:
+        best_speedup = _parse_speedup_value(best_variant.get("actual_speedup")) or 0.0
+        if speedup_threshold and best_speedup < speedup_threshold:
+            reasons.append(f"speedup_below_{speedup_threshold:.2f}x")
+
+        if require_nsys:
+            if not summary.get("baseline", {}).get("profiles", {}).get("nsys"):
+                reasons.append("baseline_missing_nsys")
+            if not best_variant.get("profiles", {}).get("nsys"):
+                reasons.append("variant_missing_nsys")
+        if require_ncu:
+            if not summary.get("baseline", {}).get("profiles", {}).get("ncu"):
+                reasons.append("baseline_missing_ncu")
+            if not best_variant.get("profiles", {}).get("ncu"):
+                reasons.append("variant_missing_ncu")
+
+    return bool(reasons), reasons
+
+
+def _copy_baseline_benchmark(
+    baseline_path: Path,
+    tag: str,
+    *,
+    copy_cu: bool = True,
+) -> Dict[str, Any]:
+    import shutil
+    from core.benchmark.artifact_manager import slugify
+
+    if baseline_path.suffix != ".py" or not baseline_path.name.startswith("baseline_"):
+        raise ValueError("baseline path must be a baseline_*.py wrapper")
+    if not baseline_path.exists():
+        raise FileNotFoundError(f"Baseline path not found: {baseline_path}")
+
+    chapter_dir = baseline_path.parent
+    example_name = baseline_path.stem.replace("baseline_", "")
+    tag_slug = slugify(tag or "mcp_copy")
+    base_candidate = f"{example_name}_{tag_slug}" if tag_slug else f"{example_name}_copy"
+
+    candidate = base_candidate
+    counter = 2
+    while (chapter_dir / f"baseline_{candidate}.py").exists() or (chapter_dir / f"baseline_{candidate}.cu").exists():
+        candidate = f"{base_candidate}_{counter}"
+        counter += 1
+
+    new_example_name = candidate
+    new_baseline_py = chapter_dir / f"baseline_{new_example_name}.py"
+    shutil.copy2(baseline_path, new_baseline_py)
+
+    new_cu_path = None
+    original_cu = chapter_dir / f"baseline_{example_name}.cu"
+    if copy_cu and original_cu.exists():
+        new_cu_path = chapter_dir / f"baseline_{new_example_name}.cu"
+        shutil.copy2(original_cu, new_cu_path)
+
+    content = new_baseline_py.read_text(encoding="utf-8")
+    new_binary_name = f"baseline_{new_example_name}"
+    binary_pattern = re.compile(r"(binary_name\s*=\s*)(['\"])([^'\"]+)(['\"])")
+    content, replaced = binary_pattern.subn(rf"\1\2{new_binary_name}\4", content, count=1)
+
+    friendly_pattern = re.compile(r"(friendly_name\s*=\s*)(['\"])([^'\"]+)(['\"])")
+    if friendly_pattern.search(content):
+        def _friendly_repl(match: re.Match) -> str:
+            label = match.group(3)
+            if "MCP Copy" in label:
+                return match.group(0)
+            return f"{match.group(1)}{match.group(2)}{label} (MCP Copy){match.group(4)}"
+        content = friendly_pattern.sub(_friendly_repl, content, count=1)
+
+    if replaced:
+        new_baseline_py.write_text(content, encoding="utf-8")
+
+    return {
+        "chapter_dir": str(chapter_dir),
+        "example_name": example_name,
+        "new_example_name": new_example_name,
+        "baseline_py": str(new_baseline_py),
+        "baseline_cu": str(new_cu_path) if new_cu_path else None,
+        "binary_name": new_binary_name if replaced else None,
+    }
+
+
+def _evaluate_cu_int_expression(expr: str, constants: Dict[str, int]) -> Optional[int]:
+    import ast
+
+    cleaned = expr.strip()
+    if not cleaned:
+        return None
+    cleaned = re.sub(r"/\*.*?\*/", "", cleaned)
+    cleaned = cleaned.split("//", 1)[0].strip()
+    cleaned = re.sub(r"sizeof\s*\(\s*float\s*\)", "4", cleaned)
+    cleaned = re.sub(r"sizeof\s*\(\s*double\s*\)", "8", cleaned)
+    cleaned = re.sub(r"sizeof\s*\(\s*(?:half|__half)\s*\)", "2", cleaned)
+    cleaned = re.sub(r"sizeof\s*\(\s*(?:__nv_bfloat16|nv_bfloat16)\s*\)", "2", cleaned)
+    cleaned = re.sub(r"([0-9]+)(?:ULL|UL|LL|U|L)", r"\1", cleaned)
+
+    try:
+        node = ast.parse(cleaned, mode="eval")
+    except SyntaxError:
+        return None
+
+    def _eval(n: ast.AST) -> int:
+        if isinstance(n, ast.Expression):
+            return _eval(n.body)
+        if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)):
+            return int(n.value)
+        if isinstance(n, ast.UnaryOp) and isinstance(n.op, (ast.UAdd, ast.USub)):
+            value = _eval(n.operand)
+            return value if isinstance(n.op, ast.UAdd) else -value
+        if isinstance(n, ast.Name):
+            if n.id in constants:
+                return int(constants[n.id])
+            raise ValueError(f"unknown constant {n.id}")
+        if isinstance(n, ast.BinOp) and isinstance(
+            n.op,
+            (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.LShift, ast.RShift, ast.Mod),
+        ):
+            left = _eval(n.left)
+            right = _eval(n.right)
+            if isinstance(n.op, ast.Add):
+                return left + right
+            if isinstance(n.op, ast.Sub):
+                return left - right
+            if isinstance(n.op, ast.Mult):
+                return left * right
+            if isinstance(n.op, (ast.Div, ast.FloorDiv)):
+                return left // right
+            if isinstance(n.op, ast.LShift):
+                return left << right
+            if isinstance(n.op, ast.RShift):
+                return left >> right
+            if isinstance(n.op, ast.Mod):
+                return left % right
+        raise ValueError("unsupported expression")
+
+    try:
+        return _eval(node)
+    except Exception:
+        return None
+
+
+def _extract_workload_params_from_cu(cu_path: Path) -> Dict[str, int]:
+    text = cu_path.read_text(encoding="utf-8")
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    lines = [line.split("//", 1)[0] for line in text.splitlines()]
+
+    const_pattern = re.compile(
+        r"\b(?:static\s+)?(?:constexpr|const)\s+(?:unsigned\s+)?"
+        r"(?:long\s+long|long|int|size_t|std::size_t|uint32_t|uint64_t|int32_t|int64_t)"
+        r"\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);"
+    )
+
+    constants: Dict[str, int] = {}
+    for line in lines:
+        match = const_pattern.search(line)
+        if not match:
+            continue
+        name = match.group(1)
+        expr = match.group(2)
+        value = _evaluate_cu_int_expression(expr, constants)
+        if value is None:
+            continue
+        constants[name] = int(value)
+
+    if not constants:
+        return {}
+
+    selected: Dict[str, int] = {}
+    selector = re.compile(
+        r"(batch|batches|seq|tile|block|thread|warp|element|size|dim|head|hidden|"
+        r"iter|num|m|n|k)",
+        re.I,
+    )
+    for name, value in constants.items():
+        if selector.search(name):
+            selected[name] = int(value)
+
+    return selected or constants
+
+
+def _infer_dtype_from_cu(cu_path: Path) -> str:
+    text = cu_path.read_text(encoding="utf-8")
+    if re.search(r"\\b(__nv_bfloat16|nv_bfloat16)\\b", text):
+        return "bfloat16"
+    if re.search(r"\\b(__half|half)\\b", text):
+        return "float16"
+    if re.search(r"\\bdouble\\b", text):
+        return "float64"
+    return "float32"
+
+
+def _camelize_identifier(name: str) -> str:
+    parts = re.split(r"[^A-Za-z0-9]+", name)
+    return "".join(part.capitalize() for part in parts if part)
+
+
+def _generate_baseline_wrapper_from_cu(cu_path: Path) -> Path:
+    chapter_dir = cu_path.parent
+    example_name = cu_path.stem.replace("baseline_", "")
+    wrapper_path = chapter_dir / f"baseline_{example_name}.py"
+
+    workload_params = _extract_workload_params_from_cu(cu_path)
+    if not workload_params:
+        raise ValueError(
+            "Unable to infer workload parameters from CUDA source. "
+            "Create a baseline_*.py wrapper with explicit workload_params."
+        )
+    workload_params["dtype"] = _infer_dtype_from_cu(cu_path)
+
+    class_name = f"Baseline{_camelize_identifier(example_name)}Benchmark"
+    friendly_title = example_name.replace("_", " ").strip().title()
+    binary_name = f"baseline_{example_name}"
+    params_lines = ",\n                ".join(
+        f"{key!r}: {value!r}" for key, value in sorted(workload_params.items())
+    )
+    params_block = "{\n                " + params_lines + "\n            }"
+
+    wrapper = f'''"""Auto-generated Python harness wrapper for {cu_path.name}."""
+
+from __future__ import annotations
+from typing import Optional
+
+import sys
+from pathlib import Path
+
+repo_root = Path(__file__).parent.parent
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
+
+from core.harness.benchmark_harness import BaseBenchmark
+from core.benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
+
+
+class {class_name}(CudaBinaryBenchmark):
+    """Auto-generated wrapper for {cu_path.name}."""
+
+    def __init__(self) -> None:
+        chapter_dir = Path(__file__).parent
+        super().__init__(
+            chapter_dir=chapter_dir,
+            binary_name="{binary_name}",
+            friendly_name="Baseline {friendly_title} (Auto)",
+            iterations=5,
+            warmup=5,
+            timeout_seconds=180,
+            workload_params={params_block},
+        )
+
+    def get_custom_metrics(self) -> Optional[dict]:
+        return None
+
+
+def get_benchmark() -> BaseBenchmark:
+    return {class_name}()
+
+
+if __name__ == "__main__":
+    from core.harness.benchmark_harness import benchmark_main
+
+    benchmark_main(get_benchmark)
+'''
+    wrapper_path.write_text(wrapper, encoding="utf-8")
+    return wrapper_path
+
+
+def _resolve_baseline_wrapper_path(path: Path) -> Path:
+    if path.suffix == ".py":
+        if not path.name.startswith("baseline_"):
+            raise ValueError("path must be a baseline_*.py wrapper (or a matching baseline_*.cu).")
+        return path
+    if path.suffix == ".cu":
+        if not path.name.startswith("baseline_"):
+            raise ValueError("path must be a baseline_*.cu file (or a baseline_*.py wrapper).")
+        wrapper = path.with_suffix(".py")
+        if wrapper.exists():
+            return wrapper
+        return _generate_baseline_wrapper_from_cu(path)
+    raise ValueError("path must be a baseline_*.py wrapper or baseline_*.cu file.")
+
+
+@register_tool(
+    "benchmark_explore",
+    "Tags: benchmark, variants, llm, profiling, compare, workflow. "
+    "Copy a baseline_*.py (or baseline_*.cu; auto-generates wrapper if missing), run minimal profiling with LLM patch variants, "
+    "compare resource utilization across variants, and optionally run deep_dive profiling when minimal "
+    "results are inconclusive. "
+    "USE when: You want an end-to-end baseline→variants→compare workflow for a specific benchmark file. "
+    "NOT FOR: General recommendations (use recommend) or pure profiling (use profile_*). "
+    "Outputs progress via run_progress.json; poll with job_status if async.",
+    {
+        "type": "object",
+        "properties": with_context_params(
+            {
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Baseline wrapper path (baseline_*.py) or baseline_*.cu. "
+                        "If the wrapper is missing, the tool will attempt to auto-generate one. "
+                        "The tool then copies the wrapper and runs variants on the copy."
+                    ),
+                },
+                "copy_tag": {
+                    "type": "string",
+                    "description": "Suffix tag for copied baseline files (default: mcp_copy).",
+                    "default": "mcp_copy",
+                },
+                "copy_cu": {
+                    "type": "boolean",
+                    "description": "Copy matching baseline_*.cu file if present.",
+                    "default": True,
+                },
+                "max_variants": {
+                    "type": "integer",
+                    "description": "Max number of LLM variants to report (clamped to 1-3).",
+                    "default": 3,
+                },
+                "deep_dive": {
+                    "type": "string",
+                    "description": "Deep-dive mode: auto (default), always, or never.",
+                    "enum": ["auto", "always", "never"],
+                    "default": "auto",
+                },
+                "deep_dive_speedup_threshold": {
+                    "type": "number",
+                    "description": "Speedup threshold below which deep_dive is triggered in auto mode.",
+                    "default": 1.05,
+                },
+                "artifacts_dir": {
+                    "type": "string",
+                    "description": "Base directory for run artifacts (default: ./artifacts/runs).",
+                },
+                "run_id": {
+                    "type": "string",
+                    "description": "Run ID for artifacts (default: <timestamp>__explore__<label>).",
+                },
+                "iterations": {
+                    "type": "integer",
+                    "description": "Override benchmark iterations for minimal profiling run.",
+                },
+                "warmup": {
+                    "type": "integer",
+                    "description": "Override warmup iterations for minimal profiling run.",
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "description": "Max runtime for minimal profiling run (0/null = no timeout).",
+                    "default": 0,
+                },
+                "deep_dive_iterations": {
+                    "type": "integer",
+                    "description": "Override iterations for deep_dive run (default: 1).",
+                    "default": 1,
+                },
+                "deep_dive_warmup": {
+                    "type": "integer",
+                    "description": "Override warmup iterations for deep_dive run (default: 5).",
+                    "default": 5,
+                },
+                "deep_dive_timeout_seconds": {
+                    "type": "integer",
+                    "description": "Max runtime for deep_dive run (0/null = no timeout).",
+                    "default": 0,
+                },
+                "update_expectations": {
+                    "type": "boolean",
+                    "description": "Force-write observed metrics into expectation files (recommended).",
+                    "default": True,
+                },
+                "allow_invalid_environment": {
+                    "type": "boolean",
+                    "description": (
+                        "Allow running benchmarks even if validate_environment() reports errors. "
+                        "Still emits warnings; results may be invalid. Intended for diagnostics only."
+                    ),
+                    "default": False,
+                },
+                "allow_virtualization": {
+                    "type": "boolean",
+                    "description": (
+                        "Allow running in a virtualized environment (VM/hypervisor) by downgrading ONLY the "
+                        "virtualization check to a loud warning. Results are still invalid; bare metal is required."
+                    ),
+                    "default": True,
+                },
+                "async": {
+                    "type": "boolean",
+                    "description": "Run in background and return job_id; poll with job_status.",
+                    "default": False,
+                },
+            }
+        ),
+        "required": ["path"],
+    },
+)
+def tool_benchmark_explore(params: Dict[str, Any]) -> Dict[str, Any]:
+    include_context, context_level = extract_context_opts(params)
+    path = params.get("path")
+    if not path or not isinstance(path, str):
+        return make_error("path is required and must be a string.", include_context, context_level)
+
+    artifacts_dir = params.get("artifacts_dir") or "artifacts/runs"
+    base_dir = Path(artifacts_dir)
+    if not base_dir.is_absolute():
+        base_dir = (CODE_ROOT / base_dir).resolve()
+
+    run_id_param = params.get("run_id")
+    run_id = run_id_param.strip() if isinstance(run_id_param, str) else run_id_param
+    if not run_id:
+        label = f"explore-{Path(path).stem}"
+        run_id = _default_run_id("explore", label, base_dir)
+
+    progress_path = _progress_path_in_dir(base_dir, str(run_id))
+    progress_recorder = ProgressRecorder(run_id=str(run_id), progress_path=progress_path)
+
+    def _emit(step: str, detail: str, percent: float) -> None:
+        _emit_progress_safe(
+            progress_recorder,
+            ProgressEvent(
+                phase="explore",
+                phase_index=1,
+                total_phases=1,
+                step=step,
+                step_detail=detail,
+                percent_complete=percent,
+            ),
+        )
+
+    def _run() -> Dict[str, Any]:
+        from core.discovery import chapter_slug, get_bench_roots
+        from core.harness.run_benchmarks import check_nsys_available, check_ncu_available
+
+        _emit("copy", "starting copy", 2.0)
+        baseline_path = Path(path)
+        if not baseline_path.is_absolute():
+            baseline_path = (CODE_ROOT / baseline_path).resolve()
+        try:
+            baseline_path = _resolve_baseline_wrapper_path(baseline_path)
+        except Exception as exc:
+            return {"success": False, "error": f"path_invalid: {exc}"}
+        try:
+            copy_info = _copy_baseline_benchmark(
+                baseline_path,
+                params.get("copy_tag") or "mcp_copy",
+                copy_cu=bool(params.get("copy_cu", True)),
+            )
+        except Exception as exc:
+            return {"success": False, "error": f"copy_failed: {exc}"}
+
+        chapter_dir = Path(copy_info["chapter_dir"])
+        new_example = copy_info["new_example_name"]
+        roots = get_bench_roots(repo_root=CODE_ROOT)
+        bench_root = roots[0] if roots else CODE_ROOT
+        target = f"{chapter_slug(chapter_dir, CODE_ROOT, bench_root=bench_root)}:{new_example}"
+
+        _emit("minimal", "running minimal profiling + LLM patches", 10.0)
+        minimal_run_id = f"{run_id}__minimal"
+        minimal_params = {
+            "targets": [target],
+            "profile": "minimal",
+            "artifacts_dir": str(base_dir),
+            "run_id": minimal_run_id,
+            "iterations": params.get("iterations"),
+            "warmup": params.get("warmup"),
+            "timeout_seconds": params.get("timeout_seconds"),
+            "llm_analysis": True,
+            "force_llm": True,
+            "apply_patches": True,
+            "rebenchmark_llm_patches": True,
+            "llm_explain": False,
+            "allow_invalid_environment": bool(params.get("allow_invalid_environment", False)),
+            "allow_virtualization": bool(params.get("allow_virtualization", True)),
+            "update_expectations": bool(params.get("update_expectations", True)),
+        }
+        minimal_result = tool_run_benchmarks(minimal_params)
+        minimal_result = _normalize_result(minimal_result)
+        if minimal_result.get("success") is False:
+            minimal_result.setdefault("error", "minimal_run_failed")
+            return {
+                "success": False,
+                "error": minimal_result.get("error", "minimal_run_failed"),
+                "minimal": minimal_result,
+                "copy": copy_info,
+                "target": target,
+                "run_id": run_id,
+                "progress_path": str(progress_path),
+            }
+
+        results_json = minimal_result.get("results_json")
+        if not results_json:
+            return {
+                "success": False,
+                "error": "minimal_run_missing_results_json",
+                "minimal": minimal_result,
+                "copy": copy_info,
+                "target": target,
+                "run_id": run_id,
+                "progress_path": str(progress_path),
+            }
+
+        results_path = _resolve_artifact_path(results_json)
+        if not results_path or not results_path.exists():
+            return {
+                "success": False,
+                "error": f"results_json_not_found: {results_json}",
+                "minimal": minimal_result,
+                "copy": copy_info,
+                "target": target,
+                "run_id": run_id,
+                "progress_path": str(progress_path),
+            }
+
+        data = json.loads(results_path.read_text())
+        bench_entry = None
+        for chapter_entry in data.get("results", []) or []:
+            for bench in chapter_entry.get("benchmarks", []) or []:
+                if bench.get("example") == new_example:
+                    bench_entry = bench
+                    break
+            if bench_entry:
+                break
+
+        if not bench_entry:
+            return {
+                "success": False,
+                "error": f"example_not_found_in_results: {new_example}",
+                "minimal": minimal_result,
+                "copy": copy_info,
+                "target": target,
+                "run_id": run_id,
+                "progress_path": str(progress_path),
+            }
+
+        _emit("analyze", "summarizing minimal results", 55.0)
+        summary = _summarize_variant_profiles(
+            bench_entry,
+            max_variants=params.get("max_variants", 3),
+        )
+
+        # Compute utilization deltas vs baseline for reported variants.
+        baseline_metrics = summary.get("baseline", {}).get("metrics", {}) or {}
+        for variant in summary.get("variants", []):
+            variant_metrics = variant.get("metrics", {}) or {}
+            variant["utilization_deltas"] = _summarize_utilization_deltas(
+                baseline_metrics,
+                variant_metrics,
+            )
+
+        require_nsys = check_nsys_available()
+        require_ncu = check_ncu_available()
+        deep_dive_needed, deep_dive_reasons = _should_run_deep_dive(
+            summary,
+            mode=params.get("deep_dive", "auto"),
+            speedup_threshold=float(params.get("deep_dive_speedup_threshold", 1.05) or 0.0),
+            require_nsys=require_nsys,
+            require_ncu=require_ncu,
+        )
+
+        deep_dive_result = None
+        deep_dive_summary = None
+        if deep_dive_needed:
+            _emit("deep_dive", "running deep_dive profiling + LLM patches", 70.0)
+            deep_run_id = f"{run_id}__deep_dive"
+            deep_params = {
+                "targets": [target],
+                "profile": "deep_dive",
+                "artifacts_dir": str(base_dir),
+                "run_id": deep_run_id,
+                "iterations": params.get("deep_dive_iterations", 1),
+                "warmup": params.get("deep_dive_warmup", 5),
+                "timeout_seconds": params.get("deep_dive_timeout_seconds"),
+                "llm_analysis": True,
+                "force_llm": True,
+                "apply_patches": True,
+                "rebenchmark_llm_patches": True,
+                "llm_explain": False,
+                "allow_invalid_environment": bool(params.get("allow_invalid_environment", False)),
+                "allow_virtualization": bool(params.get("allow_virtualization", True)),
+                "update_expectations": bool(params.get("update_expectations", True)),
+            }
+            deep_dive_result = tool_run_benchmarks(deep_params)
+            deep_dive_result = _normalize_result(deep_dive_result)
+            if deep_dive_result.get("success") is False:
+                deep_dive_result.setdefault("error", "deep_dive_failed")
+            else:
+                deep_results_json = deep_dive_result.get("results_json")
+                deep_path = _resolve_artifact_path(deep_results_json) if deep_results_json else None
+                if deep_path and deep_path.exists():
+                    deep_data = json.loads(deep_path.read_text())
+                    deep_entry = None
+                    for chapter_entry in deep_data.get("results", []) or []:
+                        for bench in chapter_entry.get("benchmarks", []) or []:
+                            if bench.get("example") == new_example:
+                                deep_entry = bench
+                                break
+                        if deep_entry:
+                            break
+                    if deep_entry:
+                        deep_dive_summary = _summarize_variant_profiles(
+                            deep_entry,
+                            max_variants=params.get("max_variants", 3),
+                        )
+                        baseline_metrics = deep_dive_summary.get("baseline", {}).get("metrics", {}) or {}
+                        for variant in deep_dive_summary.get("variants", []):
+                            variant_metrics = variant.get("metrics", {}) or {}
+                            variant["utilization_deltas"] = _summarize_utilization_deltas(
+                                baseline_metrics,
+                                variant_metrics,
+                            )
+
+        _emit("complete", "variant study complete", 100.0)
+
+        return {
+            "success": True,
+            "run_id": run_id,
+            "target": target,
+            "copy": copy_info,
+            "minimal": {
+                "run_id": minimal_run_id,
+                "results_json": str(results_path),
+                "summary": summary,
+            },
+            "deep_dive": {
+                "requested": bool(deep_dive_needed),
+                "reasons": deep_dive_reasons,
+                "result": deep_dive_result,
+                "summary": deep_dive_summary,
+            },
+            "progress_path": str(progress_path),
+        }
+
+    run_async = bool(params.get("async", False))
+    if run_async:
+        job_id = f"benchmark_explore-{uuid.uuid4().hex[:10]}"
+        run_metadata = {
+            "run_id": run_id,
+            "progress_path": str(progress_path),
+            "target_path": path,
+        }
+        queued = _queue_job("benchmark_explore", _run, params, run_metadata=run_metadata, job_id=job_id)
+        queued["run_id"] = run_id
+        queued["progress_path"] = str(progress_path)
+        queued["note"] = "Background variant study started; poll with job_status using job_id."
+        return queued
+
+    result = _run()
     return attach_context_if_requested(result, include_context, context_level)
 
 

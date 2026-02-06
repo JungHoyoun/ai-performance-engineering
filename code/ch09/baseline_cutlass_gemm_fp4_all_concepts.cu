@@ -1,4 +1,8 @@
-// optimized_cutlass_gemm_fp4.cu -- CUTLASS NVFP4 GEMM optimized (larger tile).
+// baseline_cutlass_gemm_fp4_all_concepts.cu -- CUTLASS NVFP4 GEMM schedule baseline.
+//
+// Uses CUTLASS auto scheduling at the GPU Mode NVFP4 challenge shape. This
+// pairs with optimized_cutlass_gemm_fp4_all_concepts.cu (explicit warp-specialized
+// schedule) to isolate scheduling impact.
 
 #include <cuda_runtime.h>
 
@@ -284,7 +288,7 @@ int run_cutlass(const Options& options) {
 
     const float elapsed_ms = timer.elapsed_millis();
     const float avg_ms = elapsed_ms / static_cast<float>(options.iterations);
-    std::cout << "CUTLASS NVFP4 GEMM (optimized): " << avg_ms << " ms" << std::endl;
+    std::cout << "CUTLASS NVFP4 GEMM (all-concepts baseline): " << avg_ms << " ms" << std::endl;
 
 #ifdef VERIFY
     block_D.sync_host();

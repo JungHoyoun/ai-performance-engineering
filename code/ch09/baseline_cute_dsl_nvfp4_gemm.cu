@@ -1,4 +1,8 @@
-// optimized_cutlass_gemm_fp4.cu -- CUTLASS NVFP4 GEMM optimized (larger tile).
+// baseline_cute_dsl_nvfp4_gemm.cu -- CuTe-DSL-inspired NVFP4 GEMM baseline.
+//
+// Targets the GPU Mode NVFP4 competition shapes with a simple blockscaled
+// schedule (no TMA warp specialization). Inspired by:
+// https://obolensky.xyz/blog/nvfp4_gemm_kernel_explanation/
 
 #include <cuda_runtime.h>
 
@@ -16,6 +20,7 @@
 #include "cutlass/epilogue/collective/collective_builder.hpp"
 #include "cutlass/gemm/collective/collective_builder.hpp"
 #include "cutlass/gemm/device/gemm_universal_adapter.h"
+#include "cutlass/gemm/dispatch_policy.hpp"
 #include "cutlass/gemm/kernel/gemm_universal.hpp"
 #include "cutlass/gemm/kernel/tile_scheduler_params.h"
 #include "cutlass/util/host_tensor.h"
@@ -29,7 +34,6 @@
 
 using namespace cute;
 
-// GPU Mode NVFP4 challenge shape (M, N, K) with a fixed iteration count.
 constexpr int kM = 128;
 constexpr int kN = 7168;
 constexpr int kK = 16384;
@@ -119,8 +123,9 @@ using ElementAccumulator = float;
 using ArchTag = cutlass::arch::Sm100;
 using OperatorClass = cutlass::arch::OpClassBlockScaledTensorOp;
 
-using MmaTileShape = Shape<_128, _128, _256>;
+using MmaTileShape = Shape<_128, _64, _256>;
 using ClusterShape = Shape<_1, _1, _1>;
+using MainloopSchedule = cutlass::gemm::collective::KernelScheduleAuto;
 
 using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBuilder<
     ArchTag, OperatorClass,
@@ -138,8 +143,8 @@ using CollectiveMainloop = typename cutlass::gemm::collective::CollectiveBuilder
     ElementB, LayoutBTag, AlignmentB,
     ElementAccumulator,
     MmaTileShape, ClusterShape,
-    cutlass::gemm::collective::StageCountAutoCarveout<static_cast<int>(sizeof(typename CollectiveEpilogue::SharedStorage))>,
-    cutlass::gemm::collective::KernelScheduleAuto
+    cutlass::gemm::collective::StageCount<1>,
+    MainloopSchedule
   >::CollectiveOp;
 
 using GemmKernel = cutlass::gemm::kernel::GemmUniversal<
@@ -284,7 +289,7 @@ int run_cutlass(const Options& options) {
 
     const float elapsed_ms = timer.elapsed_millis();
     const float avg_ms = elapsed_ms / static_cast<float>(options.iterations);
-    std::cout << "CUTLASS NVFP4 GEMM (optimized): " << avg_ms << " ms" << std::endl;
+    std::cout << "CuTe DSL NVFP4 GEMM (baseline): " << avg_ms << " ms" << std::endl;
 
 #ifdef VERIFY
     block_D.sync_host();

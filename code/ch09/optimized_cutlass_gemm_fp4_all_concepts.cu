@@ -1,4 +1,8 @@
-// optimized_cutlass_gemm_fp4.cu -- CUTLASS NVFP4 GEMM optimized (larger tile).
+// optimized_cutlass_gemm_fp4_all_concepts.cu -- CUTLASS NVFP4 GEMM (all-concepts).
+//
+// Combines CUTLASS' blockscaled NVFP4 mainloop with the explicit TMA warp-specialized
+// schedule described in the CuTe DSL NVFP4 walkthrough:
+// https://obolensky.xyz/blog/nvfp4_gemm_kernel_explanation/
 
 #include <cuda_runtime.h>
 
@@ -16,6 +20,7 @@
 #include "cutlass/epilogue/collective/collective_builder.hpp"
 #include "cutlass/gemm/collective/collective_builder.hpp"
 #include "cutlass/gemm/device/gemm_universal_adapter.h"
+#include "cutlass/gemm/dispatch_policy.hpp"
 #include "cutlass/gemm/kernel/gemm_universal.hpp"
 #include "cutlass/gemm/kernel/tile_scheduler_params.h"
 #include "cutlass/util/host_tensor.h"
@@ -121,6 +126,7 @@ using OperatorClass = cutlass::arch::OpClassBlockScaledTensorOp;
 
 using MmaTileShape = Shape<_128, _128, _256>;
 using ClusterShape = Shape<_1, _1, _1>;
+using MainloopSchedule = cutlass::gemm::KernelTmaWarpSpecialized1SmNvf4Sm100;
 
 using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBuilder<
     ArchTag, OperatorClass,
@@ -139,7 +145,7 @@ using CollectiveMainloop = typename cutlass::gemm::collective::CollectiveBuilder
     ElementAccumulator,
     MmaTileShape, ClusterShape,
     cutlass::gemm::collective::StageCountAutoCarveout<static_cast<int>(sizeof(typename CollectiveEpilogue::SharedStorage))>,
-    cutlass::gemm::collective::KernelScheduleAuto
+    MainloopSchedule
   >::CollectiveOp;
 
 using GemmKernel = cutlass::gemm::kernel::GemmUniversal<
@@ -284,7 +290,7 @@ int run_cutlass(const Options& options) {
 
     const float elapsed_ms = timer.elapsed_millis();
     const float avg_ms = elapsed_ms / static_cast<float>(options.iterations);
-    std::cout << "CUTLASS NVFP4 GEMM (optimized): " << avg_ms << " ms" << std::endl;
+    std::cout << "CUTLASS NVFP4 GEMM (all-concepts optimized): " << avg_ms << " ms" << std::endl;
 
 #ifdef VERIFY
     block_D.sync_host();
@@ -335,3 +341,4 @@ int main() {
     return 3;
 #endif
 }
+
