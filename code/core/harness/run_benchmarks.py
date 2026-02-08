@@ -1045,73 +1045,62 @@ def reset_cuda_state():
 
 def clean_build_directories(chapter_dir: Path) -> None:
     """Clean build directories to prevent stale lock issues.
-    
-    Removes stale lock files and cleans torch extensions cache for the chapter.
-    This prevents hangs from build locks left by crashed processes.
+
+    IMPORTANT: Do not aggressively delete lock files.
+    PyTorch CUDA extension builds use a file-baton lock (a plain `lock` file).
+    Unlinking that lock while a build is in progress can crash the builder on
+    release and break subsequent benchmark runs.
     """
-    import shutil
-    
+
     try:
         from core.utils.build_utils import ensure_clean_build_directory
     except ImportError:
-        ensure_clean_build_directory = None
+        return
 
-    unlink_failure_count = 0
-    unlink_failures: List[str] = []
-    max_failures_to_log = 10
+    # Be conservative: treat only very old locks as stale.
+    # CUDA extension compiles can take minutes; a too-small threshold will kill
+    # legitimate in-progress builds if another run overlaps.
+    max_lock_age_seconds = 300
 
-    def _try_unlink(lock_path: Path) -> None:
-        nonlocal unlink_failure_count
+    # Clean chapter-local build roots (and their direct children, which are
+    # commonly extension build directories like build/<ext_name>/).
+    build_root = chapter_dir / "build"
+    if build_root.exists():
+        candidates: list[Path] = [build_root]
         try:
-            lock_path.unlink()
-        except Exception as exc:
-            unlink_failure_count += 1
-            if len(unlink_failures) < max_failures_to_log:
-                unlink_failures.append(f"{lock_path}: {exc}")
-    
-    # Clean chapter build directory - more aggressive: remove lock files directly
-    build_dir = chapter_dir / "build"
-    if build_dir.exists():
-        # Remove all lock files first
-        for lock_file in build_dir.glob("**/*.lock"):
-            _try_unlink(lock_file)
-        for lock_file in build_dir.glob("**/lock"):
-            _try_unlink(lock_file)
-        for lock_file in build_dir.glob("**/.ninja_lock"):
-            _try_unlink(lock_file)
-        # Then run the standard cleanup
-        if ensure_clean_build_directory:
+            candidates.extend([p for p in build_root.iterdir() if p.is_dir()])
+        except Exception:
+            pass
+
+        for build_dir in candidates:
             try:
-                ensure_clean_build_directory(build_dir, max_lock_age_seconds=30)
-            except Exception as e:
-                logger.warning(f"Failed to clean build directory {build_dir}: {e}")
-    
-    # Clean torch extensions cache for this chapter
-    torch_ext_dir = Path(os.environ.get("TORCH_EXTENSIONS_DIR", Path.home() / ".cache" / "torch_extensions"))
+                ensure_clean_build_directory(build_dir, max_lock_age_seconds=max_lock_age_seconds)
+            except Exception as exc:
+                logger.warning("Failed to clean build directory %s: %s", build_dir, exc)
+
+    # Clean torch extensions cache for this chapter.
+    torch_ext_dir = Path(
+        os.environ.get(
+            "TORCH_EXTENSIONS_DIR",
+            Path.home() / ".cache" / "torch_extensions",
+        )
+    )
     chapter_name = chapter_dir.name
     for ext_dir in torch_ext_dir.glob(f"py*/{chapter_name}*"):
-        # Remove all lock files
-        for lock_file in ext_dir.glob("**/*.lock"):
-            _try_unlink(lock_file)
-        for lock_file in ext_dir.glob("**/lock"):
-            _try_unlink(lock_file)
-        if ensure_clean_build_directory:
-            try:
-                ensure_clean_build_directory(ext_dir, max_lock_age_seconds=30)
-            except Exception as e:
-                logger.warning(f"Failed to clean torch extensions directory {ext_dir}: {e}")
-    
-    # Also clean torch inductor cache locks
+        if not ext_dir.is_dir():
+            continue
+        try:
+            ensure_clean_build_directory(ext_dir, max_lock_age_seconds=max_lock_age_seconds)
+        except Exception as exc:
+            logger.warning("Failed to clean torch extensions directory %s: %s", ext_dir, exc)
+
+    # Also clean torch inductor cache locks (best-effort).
     inductor_cache = Path(os.environ.get("TORCHINDUCTOR_CACHE_DIR", ".torch_inductor"))
     if inductor_cache.exists():
-        for lock_file in inductor_cache.glob("**/*.lock"):
-            _try_unlink(lock_file)
-
-    if unlink_failure_count:
-        preview = "; ".join(unlink_failures)
-        if unlink_failure_count > len(unlink_failures):
-            preview = f"{preview}; ... (+{unlink_failure_count - len(unlink_failures)} more)"
-        logger.warning("Failed to remove %d build lock file(s): %s", unlink_failure_count, preview)
+        try:
+            ensure_clean_build_directory(inductor_cache, max_lock_age_seconds=max_lock_age_seconds)
+        except Exception as exc:
+            logger.warning("Failed to clean torch inductor cache %s: %s", inductor_cache, exc)
 
 
 def is_distributed_benchmark(file_path: Path) -> bool:
@@ -1942,7 +1931,10 @@ import torch
 if torch.cuda.is_available():
     torch.cuda.synchronize()
 
-benchmark.benchmark_fn()
+from core.profiling.nvtx_helper import nvtx_range
+_nvtx_label = ({nvtx_includes!r} or ["benchmark_fn"])[0]
+with nvtx_range(_nvtx_label, enable=True):
+    benchmark.benchmark_fn()
 
 if torch.cuda.is_available():
     torch.cuda.synchronize()
@@ -2132,7 +2124,21 @@ def profile_python_benchmark_ncu(
     chapter_name = chapter_dir.name
     if chapter_name.startswith("ch") and chapter_name[2:].isdigit():
         chapter_num = int(chapter_name[2:])
-    metrics_override = resolve_ncu_metrics(config.ncu_metric_set, chapter=chapter_num)
+    metric_set = str(getattr(config, "ncu_metric_set", "auto") or "auto").lower()
+    # "auto" follows the active profiling preset:
+    # - minimal -> MINIMAL_METRICS (speed-of-light)
+    # - roofline -> ROOFLINE_METRICS
+    # - deep_dive -> chapter-specific metrics (when available)
+    if metric_set == "auto":
+        preset = str(getattr(config, "profile_type", None) or "minimal").lower()
+        if preset in {"minimal", "roofline"}:
+            metrics_override = resolve_ncu_metrics(preset, chapter=None)
+        elif preset == "deep_dive":
+            metrics_override = resolve_ncu_metrics("auto", chapter=chapter_num)
+        else:
+            metrics_override = resolve_ncu_metrics("deep_dive", chapter=None)
+    else:
+        metrics_override = resolve_ncu_metrics(metric_set, chapter=chapter_num)
 
     # Create a temporary wrapper script that runs the benchmark
     wrapper_script = tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False)
@@ -2176,7 +2182,10 @@ import torch
 if torch.cuda.is_available():
     torch.cuda.synchronize()
 
-benchmark.benchmark_fn()
+from core.profiling.nvtx_helper import nvtx_range
+_nvtx_label = ({nvtx_includes!r} or ["benchmark_fn"])[0]
+with nvtx_range(_nvtx_label, enable=True):
+    benchmark.benchmark_fn()
 
 if torch.cuda.is_available():
     torch.cuda.synchronize()
@@ -2297,7 +2306,18 @@ def profile_cuda_executable_ncu(
     chapter_name = chapter_dir.name
     if chapter_name.startswith("ch") and chapter_name[2:].isdigit():
         chapter_num = int(chapter_name[2:])
-    metrics_override = resolve_ncu_metrics(config.ncu_metric_set, chapter=chapter_num)
+    metric_set = str(getattr(config, "ncu_metric_set", "auto") or "auto").lower()
+    # Keep CLI's "auto" behavior aligned with the profiling preset (see above).
+    if metric_set == "auto":
+        preset = str(getattr(config, "profile_type", None) or "minimal").lower()
+        if preset in {"minimal", "roofline"}:
+            metrics_override = resolve_ncu_metrics(preset, chapter=None)
+        elif preset == "deep_dive":
+            metrics_override = resolve_ncu_metrics("auto", chapter=chapter_num)
+        else:
+            metrics_override = resolve_ncu_metrics("deep_dive", chapter=None)
+    else:
+        metrics_override = resolve_ncu_metrics(metric_set, chapter=chapter_num)
     ncu_command = profiler_config.get_ncu_command_for_target(
         str(ncu_output.with_suffix("")),
         [str(executable)],
@@ -2982,6 +3002,10 @@ def _test_chapter_impl(
 
     measurement_timeout_default = getattr(_defaults_obj, "measurement_timeout_seconds", 1200) if _defaults_obj else 1200
     setup_timeout_default = getattr(_defaults_obj, "setup_timeout_seconds", 300) if _defaults_obj else 300
+    # BenchmarkHarness has an internal profiling runner (enable_profiling/enable_nsys/enable_ncu),
+    # but this script already performs explicit per-variant nsys+ncu captures after timing.
+    # Keep a single profiling path to avoid duplicate captures and accidental "full" NCU runs.
+    harness_internal_profiling = False
     config_kwargs: Dict[str, Any] = dict(
         iterations=iterations,
         warmup=warmup,
@@ -2989,9 +3013,9 @@ def _test_chapter_impl(
         setup_timeout_seconds=setup_timeout_default,
         timeout_multiplier=timeout_multiplier,  # Apply timeout multiplier from CLI
         enable_memory_tracking=True,  # Enable memory metrics display
-        enable_profiling=enable_profiling,  # Respect profiling flag (opt-in via CLI)
-        enable_nsys=enable_profiling,  # nsys profiling (gracefully degrades if unavailable)
-        enable_ncu=enable_profiling,  # ncu profiling (gracefully degrades if unavailable)
+        enable_profiling=harness_internal_profiling,
+        enable_nsys=harness_internal_profiling,
+        enable_ncu=harness_internal_profiling,
         single_gpu=single_gpu,
         seed=42 if reproducible else None,  # Set seed for reproducibility
         deterministic=reproducible,  # Enable deterministic algorithms for reproducibility

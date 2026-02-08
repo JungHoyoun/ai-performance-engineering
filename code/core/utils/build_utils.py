@@ -79,7 +79,7 @@ def _kill_processes_using_directory(directory: Path) -> None:
         pass  # Fail silently if we can't check processes
 
 
-def cleanup_stale_so_builds(build_dir: Path) -> bool:
+def cleanup_stale_so_builds(build_dir: Path, max_age_seconds: int = 300) -> bool:
     """Remove stale build artifacts if .so is missing but build.ninja exists.
     
     This handles the case where a previous compilation failed, leaving
@@ -100,9 +100,40 @@ def cleanup_stale_so_builds(build_dir: Path) -> bool:
     ninja_file = build_dir / "build.ninja"
     so_files = list(build_dir.glob("*.so"))
     
-    # If ninja exists but no .so files, the build failed - clean up
+    # If ninja exists but no .so files, the build may have failed OR may still be running.
+    # Be conservative: do not delete an actively-building directory.
     if ninja_file.exists() and not so_files:
+        now = time.time()
+
+        # If any lock looks "fresh", assume an in-progress build and do nothing.
+        lock_candidates = [build_dir / "lock", build_dir / ".ninja_lock"]
+        lock_candidates.extend(build_dir.glob("*.lock"))
+        for lock_file in lock_candidates:
+            if not lock_file.exists():
+                continue
+            try:
+                if now - lock_file.stat().st_mtime < max_age_seconds:
+                    return False
+            except OSError:
+                return False
+
+        # If build.ninja itself is recent, also assume a build is in progress.
         try:
+            if now - ninja_file.stat().st_mtime < max_age_seconds:
+                return False
+        except OSError:
+            return False
+
+        try:
+            # Avoid deleting the current working directory (can break subsequent shell/ninja calls).
+            try:
+                cwd = Path.cwd().resolve()
+                bd = build_dir.resolve()
+                if cwd == bd or bd in cwd.parents:
+                    os.chdir(str(build_dir.parent))
+            except Exception:
+                pass
+
             shutil.rmtree(build_dir)
             build_dir.mkdir(parents=True, exist_ok=True)
             return True
@@ -125,7 +156,7 @@ def ensure_clean_build_directory(build_dir: Path, max_lock_age_seconds: int = 30
         max_lock_age_seconds: Consider locks older than this stale
     """
     # First, check for stale builds (ninja exists but .so missing)
-    cleanup_stale_so_builds(build_dir)
+    cleanup_stale_so_builds(build_dir, max_age_seconds=max_lock_age_seconds)
     
     # Then clean stale locks
     cleanup_stale_build_locks(build_dir, max_lock_age_seconds)
@@ -141,4 +172,3 @@ def ensure_clean_build_directory(build_dir: Path, max_lock_age_seconds: int = 30
                         obj_file.unlink()
                 except OSError:
                     pass
-

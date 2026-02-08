@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "cutlass/cutlass.h"
-#include "cutlass/bfloat16.h"
+#include "cutlass/half.h"
 #include "cutlass/float_subbyte.h"
 #include "cutlass/detail/sm100_blockscaled_layout.hpp"
 #include "cutlass/epilogue/collective/collective_builder.hpp"
@@ -34,11 +34,20 @@
 
 using namespace cute;
 
-constexpr int kM = 128;
-constexpr int kN = 7168;
-constexpr int kK = 16384;
+// GPU Mode NVFP4 GEMM leaderboard uses the geometric mean over these 3 shapes.
+// Source of truth: gpu-mode/reference-kernels `problems/nvidia/nvfp4_gemm/task.yml`.
+struct Nvfp4GemmShape {
+    int m;
+    int n;
+    int k;
+};
+constexpr Nvfp4GemmShape kBenchShapes[] = {
+    {128, 7168, 16384},
+    {128, 4096, 7168},
+    {128, 7168, 2048},
+};
 constexpr int kIterations = 50;
-constexpr int kSwizzle = 0;
+constexpr int kSwizzle = 1;
 
 struct Options {
     int m;
@@ -112,8 +121,8 @@ using ElementB = cutlass::nv_float4_t<cutlass::float_e2m1_t>;
 using LayoutBTag = cutlass::layout::ColumnMajor;
 constexpr int AlignmentB = 32;
 
-using ElementC = cutlass::bfloat16_t;
-using ElementD = cutlass::bfloat16_t;
+using ElementC = cutlass::half_t;
+using ElementD = cutlass::half_t;
 using LayoutCTag = cutlass::layout::RowMajor;
 using LayoutDTag = cutlass::layout::RowMajor;
 constexpr int AlignmentC = 128 / cutlass::sizeof_bits<ElementC>::value;
@@ -264,7 +273,7 @@ typename Gemm::Arguments args_from_options(const Options& options) {
     return arguments;
 }
 
-int run_cutlass(const Options& options) {
+float run_cutlass(const Options& options, double* checksum_accum = nullptr) {
     initialize(options);
 
     Gemm gemm;
@@ -280,30 +289,33 @@ int run_cutlass(const Options& options) {
 
     GpuTimer timer;
     timer.start();
-    for (int iter = 0; iter < options.iterations; ++iter) {
+    {
+        // Avoid per-iteration NVTX pushes/pops in microsecond-scale loops.
         NVTX_RANGE("compute_math:cutlass_fp4");
-        CUTLASS_CHECK(gemm.initialize(arguments, workspace.get()));
-        CUTLASS_CHECK(gemm.run());
+        for (int iter = 0; iter < options.iterations; ++iter) {
+            CUTLASS_CHECK(gemm.run());
+        }
     }
     timer.stop();
 
     const float elapsed_ms = timer.elapsed_millis();
     const float avg_ms = elapsed_ms / static_cast<float>(options.iterations);
-    std::cout << "CuTe DSL NVFP4 GEMM (baseline): " << avg_ms << " ms" << std::endl;
 
 #ifdef VERIFY
-    block_D.sync_host();
-    const size_t elements = static_cast<size_t>(options.m) * options.n;
-    double checksum = 0.0;
-    const ElementD* h_out = block_D.host_data();
-    for (size_t i = 0; i < elements; ++i) {
+    if (checksum_accum) {
         NVTX_RANGE("verify");
-        checksum += std::abs(static_cast<float>(h_out[i]));
+        block_D.sync_host();
+        const size_t elements = static_cast<size_t>(options.m) * options.n;
+        double checksum = 0.0;
+        const ElementD* h_out = block_D.host_data();
+        for (size_t i = 0; i < elements; ++i) {
+            checksum += std::abs(static_cast<float>(h_out[i]));
+        }
+        *checksum_accum += checksum;
     }
-    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
 #endif
 
-    return 0;
+    return avg_ms;
 }
 
 #endif  // CUTLASS_ARCH_MMA_SM100_SUPPORTED
@@ -325,16 +337,60 @@ int main() {
     }
 
     Options options{};
-    options.m = kM;
-    options.n = kN;
-    options.k = kK;
     options.iterations = kIterations;
+    if (const char* profile_iters = std::getenv("AISP_NCU_PROFILE_ITERS")) {
+        const int iters = std::atoi(profile_iters);
+        if (iters > 0) {
+            // Keep NCU kernel replay bounded. This affects only profiling runs
+            // where the wrapper sets AISP_NCU_PROFILE_ITERS; timing runs keep
+            // the full kIterations loop for stability.
+            options.iterations = (iters < options.iterations) ? iters : options.iterations;
+        }
+    }
     options.alpha = 1.0f;
     options.beta = 0.0f;
     options.swizzle = kSwizzle;
 
 #if defined(CUTLASS_ARCH_MMA_SM100_SUPPORTED)
-    return run_cutlass(options);
+    std::vector<double> times_ms;
+    times_ms.reserve(sizeof(kBenchShapes) / sizeof(kBenchShapes[0]));
+
+#ifdef VERIFY
+    double checksum_accum = 0.0;
+    double* checksum_ptr = &checksum_accum;
+#else
+    double* checksum_ptr = nullptr;
+#endif
+
+    for (const auto& s : kBenchShapes) {
+        options.m = s.m;
+        options.n = s.n;
+        options.k = s.k;
+
+        const float t_ms = run_cutlass(options, checksum_ptr);
+        times_ms.push_back(static_cast<double>(t_ms));
+        std::cout << "CuTe DSL NVFP4 GEMM (baseline) shape=("
+                  << s.m << "," << s.n << "," << s.k << ") TIME_MS: " << t_ms << std::endl;
+    }
+
+    // Geometric mean over leaderboard shapes.
+    double log_sum = 0.0;
+    for (double t : times_ms) {
+        if (!(t > 0.0)) {
+            std::cerr << "Invalid timing (non-positive) encountered for geomean." << std::endl;
+            return 2;
+        }
+        log_sum += std::log(t);
+    }
+    const double geom_ms = std::exp(log_sum / static_cast<double>(times_ms.size()));
+    std::cout << "CuTe DSL NVFP4 GEMM (baseline) GEOMEAN_MS: " << geom_ms << " ms" << std::endl;
+    std::cout << "TIME_MS: " << geom_ms << std::endl;
+
+#ifdef VERIFY
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum_accum));
+#endif
+
+    return 0;
 #else
     std::cerr << "SKIPPED: CUTLASS SM100 blockscaled support not compiled." << std::endl;
     return 3;

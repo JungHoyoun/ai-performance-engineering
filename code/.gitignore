@@ -3,6 +3,7 @@ third_party/TransformerEngine-src/
 third_party/wheels/
 third_party/cutlass/
 artifacts_tmp/
+queue_runner.pid
 .cuda_env/
 file_inventory.csv
 third_party/wheels/torch-*.whl

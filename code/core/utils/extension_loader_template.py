@@ -532,6 +532,10 @@ def load_cuda_extension(
         # Check if cached build matches current inputs; invalidate if not
         # This prevents stale cache issues when include paths or flags change
         _check_and_invalidate_cache(build_dir, source_path, ordered_includes, cuda_flags)
+
+        # torch.utils.cpp_extension.load uses a file lock under build_directory.
+        # Ensure the directory exists even if cache invalidation deleted it.
+        build_dir.mkdir(parents=True, exist_ok=True)
         
         # Clean stale locks before building to prevent hangs
         ensure_clean_build_directory(build_dir)

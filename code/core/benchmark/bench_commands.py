@@ -88,7 +88,9 @@ from core.benchmark.artifact_manager import (
     build_bench_run_label,
     build_run_id,
 )
-from core.benchmark.defaults import BenchmarkDefaults, get_defaults
+from dataclasses import replace
+
+from core.benchmark.defaults import BenchmarkDefaults, get_defaults, set_defaults
 from core.benchmark.run_manifest import get_gpu_state
 from core.harness.progress import ProgressEvent, ProgressRecorder
 from core.profiling import profiler_config as profiler_config_mod
@@ -333,6 +335,8 @@ def _execute_benchmarks(
     iterations: Optional[int] = None,
     warmup: Optional[int] = None,
     force_pipeline: bool = False,
+    gpu_sm_clock_mhz: Optional[int] = None,
+    gpu_mem_clock_mhz: Optional[int] = None,
     artifacts_dir: Optional[str] = None,
     run_id: Optional[str] = None,
     log_level: str = "INFO",
@@ -464,6 +468,16 @@ def _execute_benchmarks(
         )
     )
     defaults = get_defaults() or BenchmarkDefaults()
+    # Optional per-run GPU clock overrides. These become defaults for all BenchmarkConfig
+    # instances created during this run (including in subprocess isolation).
+    clock_overrides = {}
+    if gpu_sm_clock_mhz is not None:
+        clock_overrides["gpu_sm_clock_mhz"] = int(gpu_sm_clock_mhz)
+    if gpu_mem_clock_mhz is not None:
+        clock_overrides["gpu_mem_clock_mhz"] = int(gpu_mem_clock_mhz)
+    if clock_overrides:
+        defaults = replace(defaults, **clock_overrides)
+        set_defaults(defaults)
     gpu_state = get_gpu_state()
     emit_event(
         event_logger,
@@ -658,6 +672,22 @@ if TYPER_AVAILABLE:
         iterations: Optional[int] = Option(None, "--iterations", help="Number of benchmark iterations (default: chapter-specific)"),
         warmup: Optional[int] = Option(None, "--warmup", help="Number of warmup iterations (default: chapter-specific)"),
         force_pipeline: bool = Option(False, "--force-pipeline", help="Force enable CUDA Pipeline API even on compute capability 12.0+ (may cause instability on Blackwell GPUs)"),
+        gpu_sm_clock_mhz: Optional[int] = Option(
+            None,
+            "--gpu-sm-clock-mhz",
+            help=(
+                "Lock the SM application clock (MHz) for this run (requires clock locking to be enabled). "
+                "Recommended for SOL comparisons, e.g. --gpu-sm-clock-mhz 1500 on B200/B200."
+            ),
+        ),
+        gpu_mem_clock_mhz: Optional[int] = Option(
+            None,
+            "--gpu-mem-clock-mhz",
+            help=(
+                "Lock the GPU memory (HBM) application clock (MHz) for this run (requires clock locking to be enabled). "
+                "If omitted, the harness will lock memory to the max supported clock."
+            ),
+        ),
         artifacts_dir: Optional[str] = Option(
             None,
             "--artifacts-dir",
@@ -773,6 +803,8 @@ if TYPER_AVAILABLE:
                 "allow_virtualization": allow_virtualization,
                 "allow_mixed_provenance": allow_mixed_provenance,
                 "force_sync": force_sync,
+                "gpu_sm_clock_mhz": gpu_sm_clock_mhz,
+                "gpu_mem_clock_mhz": gpu_mem_clock_mhz,
                 "nsys_timeout_seconds": nsys_timeout_seconds,
                 "ncu_timeout_seconds": ncu_timeout_seconds,
             }
@@ -793,6 +825,8 @@ if TYPER_AVAILABLE:
             iterations=iterations,
             warmup=warmup,
             force_pipeline=force_pipeline,
+            gpu_sm_clock_mhz=gpu_sm_clock_mhz,
+            gpu_mem_clock_mhz=gpu_mem_clock_mhz,
             artifacts_dir=artifacts_dir,
             run_id=run_id,
             log_level=log_level,

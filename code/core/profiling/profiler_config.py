@@ -139,6 +139,8 @@ MINIMAL_METRICS = [
     "gpu__time_duration.avg",
     "sm__throughput.avg.pct_of_peak_sustained_elapsed",
     "gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed",
+    "lts__throughput.avg.pct_of_peak_sustained_elapsed",
+    "sm__warps_active.avg.pct_of_peak_sustained_active",
 ]
 
 # Comprehensive metrics set - everything for deep analysis
@@ -503,16 +505,23 @@ class ProfilerConfig:
         """Generate ncu command for an arbitrary target command."""
         preset = (self.preset or "minimal").lower()
         metric_set = self.metric_set or "deep_dive"
+        metric_set_norm = str(metric_set).lower()
         if metrics is None:
-            if metric_set == "roofline":
+            # "auto" should follow the active profiling preset when the caller did not
+            # supply an explicit metrics list.
+            if metric_set_norm == "auto":
+                if preset == "minimal":
+                    metrics = MINIMAL_METRICS
+                elif preset == "roofline":
+                    metrics = ROOFLINE_METRICS
+                else:
+                    metrics = DEEP_DIVE_METRICS
+            elif metric_set_norm == "roofline":
                 metrics = ROOFLINE_METRICS
-            elif metric_set == "deep_dive":
-                metrics = DEEP_DIVE_METRICS
-            elif metric_set == "minimal":
+            elif metric_set_norm == "minimal":
                 metrics = MINIMAL_METRICS
             else:
                 metrics = DEEP_DIVE_METRICS
-        metric_set_norm = str(metric_set).lower()
         if metric_set_norm == "auto":
             minimal_allow = set(MINIMAL_METRICS)
             minimal_allow.update(

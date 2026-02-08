@@ -160,6 +160,36 @@ _QUICK_WINS_CONFIGURED = False
 _SDPA_KERNEL_CONTEXT = None
 
 
+def _is_nvidia_smi_permission_error(exc: subprocess.CalledProcessError) -> bool:
+    # Common failure mode when not root: `nvidia-smi` returns exit status 4 and
+    # prints "Insufficient Permissions" in stdout/stderr (we redirect stderr).
+    try:
+        out = exc.output or b""
+        out_s = out.decode(errors="ignore")
+    except Exception:
+        out_s = ""
+    return exc.returncode == 4 or ("Insufficient Permissions" in out_s)
+
+
+def _nvidia_smi(args: Sequence[str]) -> bytes:
+    """Run `nvidia-smi` and retry once with `sudo -n` on permission failure."""
+    cmd = ["nvidia-smi", *args]
+    try:
+        return subprocess.check_output(cmd, stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError as exc:
+        if not _is_nvidia_smi_permission_error(exc):
+            raise
+        try:
+            sudo_cmd = ["sudo", "-n", "nvidia-smi", *args]
+            out = subprocess.check_output(sudo_cmd, stderr=subprocess.STDOUT)
+            if LOGGER_AVAILABLE:
+                logger.info("nvidia-smi required sudo for: %s", " ".join(shlex.quote(x) for x in cmd))
+            return out
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            # Keep the original error so callers see the true underlying failure.
+            raise
+
+
 def _resolve_physical_device_index(device_index: int) -> int:
     visible = os.environ.get("CUDA_VISIBLE_DEVICES")
     if not visible:
@@ -253,48 +283,9 @@ def lock_gpu_clocks(device: int = 0, sm_clock_mhz: Optional[int] = None, mem_clo
         raise RuntimeError("lock_gpu_clocks requires CUDA")
     props = torch.cuda.get_device_properties(device)
     physical_index = _resolve_physical_device_index(device)
-    try:
-        # Enable persistence mode
-        subprocess.check_output(["nvidia-smi", "-i", str(physical_index), "-pm", "1"], stderr=subprocess.STDOUT)
-        
-        # Get max clocks if not specified
-        if sm_clock_mhz is None or mem_clock_mhz is None:
-            cmd = ["nvidia-smi", "-i", str(physical_index), "--query-gpu=clocks.max.sm,clocks.max.memory", "--format=csv,noheader,nounits"]
-            out = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
-            max_sm, max_mem = [int(x.strip()) for x in out.decode().split(',')]
-            sm_clock_mhz = sm_clock_mhz or max_sm
-            mem_clock_mhz = mem_clock_mhz or max_mem
-        
-        if sm_clock_mhz is None or mem_clock_mhz is None:
-            raise RuntimeError("Unable to determine target SM/memory clocks for lock_gpu_clocks")
-        
-        lock_error: Optional[Exception] = None
-        try:
-            # Lock GPU clocks
-            subprocess.check_output(
-                [
-                    "nvidia-smi",
-                    "-i",
-                    str(physical_index),
-                    f"--lock-gpu-clocks={sm_clock_mhz},{sm_clock_mhz}",
-                ],
-                stderr=subprocess.STDOUT,
-            )
 
-            # Lock memory clocks
-            subprocess.check_output(
-                [
-                    "nvidia-smi",
-                    "-i",
-                    str(physical_index),
-                    f"--lock-memory-clocks={mem_clock_mhz},{mem_clock_mhz}",
-                ],
-                stderr=subprocess.STDOUT,
-            )
-        except subprocess.CalledProcessError as exc:
-            lock_error = exc
-        
-        # Verify application clocks via NVML (current clocks may be lower when idle)
+    def _query_nvml_clocks() -> tuple[int, int, int, int]:
+        """Return (app_sm, app_mem, cur_sm, cur_mem) for the physical GPU index."""
         try:
             import pynvml
         except ImportError as exc:
@@ -306,6 +297,7 @@ def lock_gpu_clocks(device: int = 0, sm_clock_mhz: Optional[int] = None, mem_clo
             app_mem = int(pynvml.nvmlDeviceGetApplicationsClock(handle, pynvml.NVML_CLOCK_MEM))
             cur_sm = int(pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_SM))
             cur_mem = int(pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_MEM))
+            return app_sm, app_mem, cur_sm, cur_mem
         except Exception as exc:
             raise RuntimeError(f"Failed to query NVML clocks: {exc}") from exc
         finally:
@@ -313,31 +305,110 @@ def lock_gpu_clocks(device: int = 0, sm_clock_mhz: Optional[int] = None, mem_clo
                 pynvml.nvmlShutdown()
             except Exception:
                 pass
-        
-        if abs(app_sm - sm_clock_mhz) > 50 or abs(app_mem - mem_clock_mhz) > 50:
-            if lock_error is not None:
-                raise RuntimeError(
-                    f"GPU clock lock failed: requested SM={sm_clock_mhz}MHz Mem={mem_clock_mhz}MHz, "
-                    f"applications SM={app_sm}MHz Mem={app_mem}MHz (lock error: {lock_error})"
-                ) from lock_error
-            raise RuntimeError(
-                f"GPU clock lock failed: requested SM={sm_clock_mhz}MHz Mem={mem_clock_mhz}MHz, "
+
+    def _apply_clock_lock(target_sm: int, target_mem: int, *, retry_attempts: int = 1) -> tuple[int, int, int, int]:
+        """Best-effort lock using application clocks, then hard locks as fallback.
+
+        Returns the NVML-observed clocks after locking (app_sm, app_mem, cur_sm, cur_mem).
+        Raises RuntimeError if the application clocks do not match the requested target.
+        """
+        lock_error: Optional[Exception] = None
+        last_exc: Optional[BaseException] = None
+        for _attempt in range(max(1, int(retry_attempts))):
+            lock_error = None
+            try:
+                _nvidia_smi(
+                    [
+                        "-i",
+                        str(physical_index),
+                        f"--applications-clocks={target_mem},{target_sm}",
+                    ]
+                )
+            except subprocess.CalledProcessError as exc:
+                # Fallback to hard locks for platforms that do not support applications clocks.
+                lock_error = exc
+                try:
+                    _nvidia_smi(
+                        [
+                            "-i",
+                            str(physical_index),
+                            f"--lock-gpu-clocks={target_sm},{target_sm}",
+                        ]
+                    )
+                    _nvidia_smi(
+                        [
+                            "-i",
+                            str(physical_index),
+                            f"--lock-memory-clocks={target_mem},{target_mem}",
+                        ]
+                    )
+                    lock_error = None
+                except subprocess.CalledProcessError as exc2:
+                    lock_error = exc2
+
+            app_sm, app_mem, cur_sm, cur_mem = _query_nvml_clocks()
+            if abs(app_sm - target_sm) <= 50 and abs(app_mem - target_mem) <= 50:
+                if lock_error is not None and LOGGER_AVAILABLE:
+                    logger.warning(
+                        "GPU clock lock command failed (%s) but application clocks already match target; proceeding.",
+                        lock_error,
+                    )
+                if LOGGER_AVAILABLE and (abs(cur_sm - target_sm) > 50 or abs(cur_mem - target_mem) > 50):
+                    logger.info(
+                        "GPU current clocks below locked target (idle/throttled): "
+                        "current SM=%dMHz Mem=%dMHz, target SM=%dMHz Mem=%dMHz",
+                        cur_sm,
+                        cur_mem,
+                        target_sm,
+                        target_mem,
+                    )
+                return app_sm, app_mem, cur_sm, cur_mem
+
+            last_exc = RuntimeError(
+                f"GPU clock lock mismatch: requested SM={target_sm}MHz Mem={target_mem}MHz, "
                 f"applications SM={app_sm}MHz Mem={app_mem}MHz"
+                + (f" (lock error: {lock_error})" if lock_error is not None else "")
             )
-        if lock_error is not None and LOGGER_AVAILABLE:
-            logger.warning(
-                "GPU clock lock command failed (%s) but application clocks already match target; proceeding.",
-                lock_error,
+            # Brief pause and retry. This helps when another process flips app clocks
+            # while the harness is between targets.
+            time.sleep(0.15)
+
+        assert last_exc is not None
+        raise last_exc
+
+    def _reassert_clock_lock(config_sm: Optional[int], config_mem: Optional[int]) -> tuple[int, int, int, int]:
+        """Re-apply requested application clocks and verify they stick.
+
+        This is intentionally called right before measurement. We have observed rare cases
+        where application clocks drift (or are reset) between targets, which invalidates
+        baseline-vs-optimized comparisons. Reasserting here keeps the manifest + telemetry honest.
+        """
+        if config_sm is None or config_mem is None:
+            return _query_nvml_clocks()
+        return _apply_clock_lock(int(config_sm), int(config_mem), retry_attempts=3)
+    try:
+        # Enable persistence mode
+        _nvidia_smi(["-i", str(physical_index), "-pm", "1"])
+        
+        # Get max clocks if not specified
+        if sm_clock_mhz is None or mem_clock_mhz is None:
+            out = _nvidia_smi(
+                [
+                    "-i",
+                    str(physical_index),
+                    "--query-gpu=clocks.max.sm,clocks.max.memory",
+                    "--format=csv,noheader,nounits",
+                ]
             )
-        if LOGGER_AVAILABLE and (abs(cur_sm - sm_clock_mhz) > 50 or abs(cur_mem - mem_clock_mhz) > 50):
-            logger.info(
-                "GPU current clocks below locked target (idle/throttled): "
-                "current SM=%dMHz Mem=%dMHz, target SM=%dMHz Mem=%dMHz",
-                cur_sm,
-                cur_mem,
-                sm_clock_mhz,
-                mem_clock_mhz,
-            )
+            max_sm, max_mem = [int(x.strip()) for x in out.decode().split(',')]
+            sm_clock_mhz = sm_clock_mhz or max_sm
+            mem_clock_mhz = mem_clock_mhz or max_mem
+        
+        if sm_clock_mhz is None or mem_clock_mhz is None:
+            raise RuntimeError("Unable to determine target SM/memory clocks for lock_gpu_clocks")
+        
+        # Apply and verify. Use a couple retries to guard against rare clock drift between targets.
+        app_sm, app_mem, cur_sm, cur_mem = _reassert_clock_lock(sm_clock_mhz, mem_clock_mhz)
         
         # Calculate theoretical performance at these clocks using device properties
         sm_count = props.multi_processor_count
@@ -350,7 +421,7 @@ def lock_gpu_clocks(device: int = 0, sm_clock_mhz: Optional[int] = None, mem_clo
             # DDR: multiply by 2
             theoretical_gbps = mem_clock_hz * (bus_width_bits / 8) * 2 / 1e9
         
-        logger.info(f"GPU clocks locked: SM={sm_clock_mhz}MHz, Mem={mem_clock_mhz}MHz")
+        logger.info(f"GPU clocks locked: SM={int(sm_clock_mhz)}MHz, Mem={int(mem_clock_mhz)}MHz")
         if theoretical_tflops > 0:
             logger.info(
                 "Theoretical peak: %.1f TFLOPS (FP16), %.0f GB/s (bus=%dbit)",
@@ -366,9 +437,10 @@ def lock_gpu_clocks(device: int = 0, sm_clock_mhz: Optional[int] = None, mem_clo
     finally:
         # Reset clocks
         try:
-            subprocess.check_output(["nvidia-smi", "-i", str(physical_index), "-rgc"], stderr=subprocess.STDOUT)
-            subprocess.check_output(["nvidia-smi", "-i", str(physical_index), "-rmc"], stderr=subprocess.STDOUT)
-            subprocess.check_output(["nvidia-smi", "-i", str(physical_index), "-pm", "0"], stderr=subprocess.STDOUT)
+            _nvidia_smi(["-i", str(physical_index), "-rgc"])
+            _nvidia_smi(["-i", str(physical_index), "-rmc"])
+            _nvidia_smi(["-i", str(physical_index), "-rac"])
+            _nvidia_smi(["-i", str(physical_index), "-pm", "0"])
             logger.info("GPU clocks reset to default")
         except (subprocess.CalledProcessError, FileNotFoundError):
             pass  # Best effort cleanup
@@ -2351,6 +2423,47 @@ class BenchmarkHarness:
         
         # Run benchmark
         result = self.benchmark(benchmark)
+
+        # The harness locks application clocks during timing. The manifest created above
+        # captures pre-lock state, so patch it with the telemetry captured while clocks
+        # were locked to keep the run manifest honest (app_clock must match telemetry/logs).
+        try:
+            locked = getattr(result, "gpu_metrics", None)
+            hw = getattr(manifest, "hardware", None)
+            if isinstance(locked, dict) and hw is not None:
+                def _maybe_int(v: Any) -> Optional[int]:
+                    if v is None:
+                        return None
+                    try:
+                        return int(float(v))
+                    except (TypeError, ValueError):
+                        return None
+
+                def _maybe_float(v: Any) -> Optional[float]:
+                    if v is None:
+                        return None
+                    try:
+                        return float(v)
+                    except (TypeError, ValueError):
+                        return None
+
+                hw.gpu_clock_mhz = _maybe_int(locked.get("graphics_clock_mhz")) or hw.gpu_clock_mhz
+                hw.memory_clock_mhz = _maybe_int(locked.get("memory_clock_mhz")) or hw.memory_clock_mhz
+                hw.gpu_app_clock_mhz = _maybe_int(locked.get("applications_clock_sm_mhz")) or hw.gpu_app_clock_mhz
+                hw.memory_app_clock_mhz = (
+                    _maybe_int(locked.get("applications_clock_memory_mhz")) or hw.memory_app_clock_mhz
+                )
+                hw.power_draw_w = _maybe_float(locked.get("power_draw_w")) or hw.power_draw_w
+                hw.temperature_gpu_c = _maybe_float(locked.get("temperature_gpu_c")) or hw.temperature_gpu_c
+                hw.temperature_memory_c = _maybe_float(locked.get("temperature_memory_c")) or hw.temperature_memory_c
+                hw.fan_speed_pct = _maybe_float(locked.get("fan_speed_pct")) or hw.fan_speed_pct
+                hw.utilization_gpu_pct = _maybe_float(locked.get("utilization_gpu_pct")) or hw.utilization_gpu_pct
+                hw.utilization_memory_pct = (
+                    _maybe_float(locked.get("utilization_memory_pct")) or hw.utilization_memory_pct
+                )
+        except Exception:
+            # Manifest patching is best-effort and should never fail the benchmark run.
+            pass
         
         # Finalize manifest
         end_time = datetime.now()
@@ -2496,6 +2609,7 @@ class BenchmarkHarness:
         inference_timing_data: Optional[Dict[str, List[float]]] = None
         seed_metadata = copy.deepcopy(getattr(self, "_seed_info", None))
         child_custom_metrics: Optional[Dict[str, float]] = None
+        child_gpu_metrics: Optional[Dict[str, Optional[float | str]]] = None
         stage_watchdog: Dict[str, Dict[str, Any]] = {
             "setup": {"status": "pending"},
             "warmup": {"status": "pending"},
@@ -2695,6 +2809,7 @@ class BenchmarkHarness:
                         # Deserialize Pydantic BenchmarkResult from JSON
                         result_json_str = result_dict["result_json"]
                         benchmark_result = PydanticBenchmarkResult.model_validate_json(result_json_str)
+                        child_gpu_metrics = getattr(benchmark_result, "gpu_metrics", None)
                         
                         # Extract timing data
                         if benchmark_result.timing.raw_times_ms:
@@ -2954,6 +3069,8 @@ class BenchmarkHarness:
         
         # Compute statistics
         result = self._compute_stats(times_ms, config)
+        if child_gpu_metrics is not None:
+            result.gpu_metrics = child_gpu_metrics
         if child_custom_metrics is not None:
             result.custom_metrics = child_custom_metrics
         else:
@@ -3071,6 +3188,7 @@ class BenchmarkHarness:
         times_ms = cast(List[float], [])
         inference_timing_data = None
         seed_metadata = copy.deepcopy(getattr(self, "_seed_info", None))
+        locked_gpu_metrics: Optional[Dict[str, Optional[float | str]]] = None
         
         # Get benchmark name for error messages (same as subprocess path)
         benchmark_class = benchmark.__class__.__name__
@@ -3162,7 +3280,7 @@ class BenchmarkHarness:
         
         def run_benchmark_internal():
             """Internal benchmark execution function."""
-            nonlocal times_ms, memory_peak_mb, memory_allocated_mb, profiling_outputs, errors, nsys_metrics, ncu_metrics, timeout_result_storage, inference_timing_data
+            nonlocal times_ms, memory_peak_mb, memory_allocated_mb, profiling_outputs, errors, nsys_metrics, ncu_metrics, timeout_result_storage, inference_timing_data, locked_gpu_metrics
             
             with execution_lock:  # Acquire lock during execution
                 lock_stack = ExitStack()
@@ -3324,8 +3442,55 @@ class BenchmarkHarness:
                     
                     if getattr(config, "lock_gpu_clocks", False) and self.device.type == "cuda":
                         device_index = self.device.index if self.device.index is not None else 0
+                        # Re-assert application clocks right before measurement. We've observed rare cases where
+                        # application clocks drift between targets (or get reset) which invalidates results.
+                        # This is a best-effort repair, but if we still cannot reach the requested clocks,
+                        # fail fast to avoid recording an invalid run.
+                        target_sm = getattr(config, "gpu_sm_clock_mhz", None)
+                        target_mem = getattr(config, "gpu_mem_clock_mhz", None)
+                        if target_sm is not None and target_mem is not None:
+                            target_sm_i = int(target_sm)
+                            target_mem_i = int(target_mem)
+                            physical_index = _resolve_physical_device_index(device_index)
+
+                            def _read_app_clocks() -> tuple[int, int]:
+                                snap = query_gpu_telemetry(device_index=device_index, force_refresh=True)
+                                app_sm = int(float(snap.get("applications_clock_sm_mhz") or -1))
+                                app_mem = int(float(snap.get("applications_clock_memory_mhz") or -1))
+                                return app_sm, app_mem
+
+                            app_sm, app_mem = _read_app_clocks()
+                            if abs(app_sm - target_sm_i) > 50 or abs(app_mem - target_mem_i) > 50:
+                                last_app = (app_sm, app_mem)
+                                for _attempt in range(3):
+                                    try:
+                                        _nvidia_smi(["-i", str(physical_index), "-pm", "1"])
+                                        _nvidia_smi(
+                                            [
+                                                "-i",
+                                                str(physical_index),
+                                                f"--applications-clocks={target_mem_i},{target_sm_i}",
+                                            ]
+                                        )
+                                    except Exception:
+                                        pass
+                                    time.sleep(0.05)
+                                    app_sm, app_mem = _read_app_clocks()
+                                    last_app = (app_sm, app_mem)
+                                    if abs(app_sm - target_sm_i) <= 50 and abs(app_mem - target_mem_i) <= 50:
+                                        break
+                                else:
+                                    raise RuntimeError(
+                                        "GPU clock lock invalid at measurement start: "
+                                        f"requested SM={target_sm_i}MHz Mem={target_mem_i}MHz, "
+                                        f"applications SM={last_app[0]}MHz Mem={last_app[1]}MHz"
+                                    )
+
                         # Short ramp to bring current clocks up to the locked application clocks.
                         ramp_gpu_clocks(device=device_index, duration_ms=10.0, max_iters=40)
+                        # Capture telemetry while clocks are locked so the run manifest reflects
+                        # the real measurement environment (not the post-reset state).
+                        locked_gpu_metrics = query_gpu_telemetry(device_index=device_index, force_refresh=True)
 
                     # Memory tracking: Use context manager to track peak memory during benchmark execution
                     start_stage('measurement')
@@ -3638,6 +3803,8 @@ class BenchmarkHarness:
         
         # Compute statistics
         result = self._compute_stats(times_ms, config)
+        if locked_gpu_metrics is not None:
+            result.gpu_metrics = locked_gpu_metrics
         result.seeds = copy.deepcopy(seed_metadata)
 
         # Attach benchmark-specific metrics and throughput (parity with subprocess path)

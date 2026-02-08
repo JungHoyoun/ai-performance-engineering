@@ -1874,6 +1874,20 @@ def tool_system_network(params: Dict[str, Any]) -> Dict[str, Any]:
                 "description": "Force a device-wide synchronize immediately after benchmark_fn() (opt-in safeguard).",
                 "default": False,
             },
+            "gpu_sm_clock_mhz": {
+                "type": "integer",
+                "description": (
+                    "Lock the SM application clock (MHz) for this run (recommended for SOL comparisons). "
+                    "Example: 1500 for B200/B200. Requires clock locking to be enabled in the harness."
+                ),
+            },
+            "gpu_mem_clock_mhz": {
+                "type": "integer",
+                "description": (
+                    "Lock the GPU memory (HBM) application clock (MHz) for this run. "
+                    "If omitted, the harness will lock memory to the max supported clock."
+                ),
+            },
             "llm_analysis": {
                 "type": "boolean",
                 "description": "Enable LLM-powered analysis for benchmarks with <1.1x speedup. DISABLED BY DEFAULT (false) to avoid API costs. Only set to true when user explicitly requests: 'with LLM analysis', 'use AI insights', 'analyze with AI', 'get AI recommendations', or similar phrases. If user doesn't mention LLM/AI analysis, leave this false.",
@@ -2028,6 +2042,8 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
     iterations_param = params.get("iterations")
     warmup_param = params.get("warmup")
     force_sync = bool(params.get("force_sync", False))
+    gpu_sm_clock_mhz = params.get("gpu_sm_clock_mhz")
+    gpu_mem_clock_mhz = params.get("gpu_mem_clock_mhz")
     timeout_multiplier = params.get("timeout_multiplier")
     nsys_timeout_seconds = params.get("nsys_timeout_seconds")
     ncu_timeout_seconds = params.get("ncu_timeout_seconds")
@@ -2136,6 +2152,10 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
         args.extend(["--warmup", str(int(warmup_param))])
     if force_sync:
         args.append("--force-sync")
+    if gpu_sm_clock_mhz is not None:
+        args.extend(["--gpu-sm-clock-mhz", str(int(gpu_sm_clock_mhz))])
+    if gpu_mem_clock_mhz is not None:
+        args.extend(["--gpu-mem-clock-mhz", str(int(gpu_mem_clock_mhz))])
     if timeout_multiplier is not None:
         args.extend(["--timeout-multiplier", str(float(timeout_multiplier))])
     if nsys_timeout_seconds is not None:

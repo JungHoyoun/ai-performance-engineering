@@ -211,7 +211,9 @@ def get_gpu_state() -> GpuStateDict:
     
     try:
         if torch.cuda.is_available():
-            telemetry = query_gpu_telemetry()
+            # Force refresh so app_clock is accurate when benchmarks lock clocks
+            # and we capture state immediately after the lock is applied.
+            telemetry = query_gpu_telemetry(force_refresh=True)
             if telemetry:
                 if telemetry.get("graphics_clock_mhz") is not None:
                     try:

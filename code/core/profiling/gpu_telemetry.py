@@ -76,7 +76,9 @@ def _coerce_metric_value(value: object) -> Optional[float | str]:
         return str(value)
 
 
-def query_gpu_telemetry(device_index: Optional[int] = None) -> Dict[str, Optional[float | str]]:
+def query_gpu_telemetry(
+    device_index: Optional[int] = None, *, force_refresh: bool = False
+) -> Dict[str, Optional[float | str]]:
     """Return a snapshot of GPU telemetry (temperature, power, utilization, errors).
 
     Args:
@@ -127,7 +129,12 @@ def query_gpu_telemetry(device_index: Optional[int] = None) -> Dict[str, Optiona
     cache_key = int(logical_index)
     cached = _TELEMETRY_CACHE.get(cache_key)
     now = time.monotonic()
-    if cached and _TELEMETRY_TTL_SEC > 0 and (now - cached[0]) < _TELEMETRY_TTL_SEC:
+    if (
+        (not force_refresh)
+        and cached
+        and _TELEMETRY_TTL_SEC > 0
+        and (now - cached[0]) < _TELEMETRY_TTL_SEC
+    ):
         return dict(cached[1])
 
     nvml_metrics = _query_via_nvml(logical_index)
