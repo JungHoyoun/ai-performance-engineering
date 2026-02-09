@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import time
 from pathlib import Path
 from typing import Dict, Optional
 from types import ModuleType
@@ -335,6 +336,31 @@ def _compute_multi_source_fingerprint(
     return hasher.hexdigest()[:16]
 
 
+def _is_missing_lock_race(exc: Exception) -> bool:
+    """Detect torch cpp_extension lock-file races during concurrent builds."""
+    msg = str(exc)
+    return "No such file or directory" in msg and "/lock" in msg
+
+
+def _load_with_lock_retry(load_fn, load_kwargs: dict, build_dir: Path, retries: int = 2):
+    """Retry once on lock-file races to tolerate concurrent compile/import flows."""
+    last_exc: Optional[Exception] = None
+    for attempt in range(retries):
+        try:
+            return load_fn(**load_kwargs)
+        except Exception as exc:
+            last_exc = exc
+            if attempt + 1 >= retries or not _is_missing_lock_race(exc):
+                raise
+            # Recreate build dir and retry once; a peer process may have won the lock race.
+            build_dir.mkdir(parents=True, exist_ok=True)
+            ensure_clean_build_directory(build_dir, max_lock_age_seconds=1800)
+            time.sleep(0.2 * (attempt + 1))
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("CUDA extension load failed without an exception")
+
+
 def load_cuda_extension_v2(
     name: str,
     sources: list[Path],
@@ -432,7 +458,7 @@ def load_cuda_extension_v2(
         load_kwargs["extra_ldflags"] = ldflags
     
     try:
-        _EXTENSIONS[name] = load(**load_kwargs)
+        _EXTENSIONS[name] = _load_with_lock_retry(load, load_kwargs, build_dir)
         
         # Save fingerprint after successful build
         fingerprint_file.write_text(json.dumps({
@@ -550,9 +576,7 @@ def load_cuda_extension(
         if extra_ldflags:
             load_kwargs["extra_ldflags"] = extra_ldflags
 
-        _EXTENSIONS[extension_name] = load(
-            **load_kwargs
-        )
+        _EXTENSIONS[extension_name] = _load_with_lock_retry(load, load_kwargs, build_dir)
         
         # Save fingerprint after successful build
         _save_build_fingerprint(build_dir, source_path, ordered_includes, cuda_flags)

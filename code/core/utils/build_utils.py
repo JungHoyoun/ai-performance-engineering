@@ -35,15 +35,63 @@ def cleanup_stale_build_locks(build_dir: Path, max_lock_age_seconds: int = 300) 
             # Check if lock file is stale
             lock_age = time.time() - lock_file.stat().st_mtime
             if lock_age > max_lock_age_seconds:
-                # Lock is stale - try to find and kill the process
-                _kill_processes_using_directory(build_dir)
-                # Remove stale lock
+                # Be conservative: never remove locks while a live build appears active.
+                # Long nvcc/ninja builds can legitimately keep the same lock for minutes.
+                if _has_active_build_process(build_dir):
+                    continue
                 try:
                     lock_file.unlink()
                 except OSError:
                     pass  # May be locked by another process
         except OSError:
             pass  # File may have been deleted
+
+
+def _has_active_build_process(directory: Path) -> bool:
+    """Best-effort check for an active compiler/build process touching directory."""
+    if not PSUTIL_AVAILABLE:
+        return False
+
+    try:
+        directory_str = str(directory.resolve())
+    except Exception:
+        return False
+
+    keywords = (
+        "ninja",
+        "nvcc",
+        "ptxas",
+        "cpp_extension",
+        "load_inline",
+        "torch_extensions",
+    )
+
+    for proc in psutil.process_iter(["name", "cmdline", "cwd"]):
+        try:
+            name = (proc.info.get("name") or "").lower()
+            cmdline = proc.info.get("cmdline") or []
+            cmd = " ".join(cmdline).lower()
+            cwd = proc.info.get("cwd") or ""
+
+            if not cmd and not name:
+                continue
+            if not any(k in name or k in cmd for k in keywords):
+                continue
+            if directory_str in cmd:
+                return True
+            if cwd:
+                try:
+                    cwd_path = str(Path(cwd).resolve())
+                except Exception:
+                    cwd_path = cwd
+                if cwd_path == directory_str or cwd_path.startswith(directory_str + os.sep):
+                    return True
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+        except Exception:
+            continue
+
+    return False
 
 
 def _kill_processes_using_directory(directory: Path) -> None:
