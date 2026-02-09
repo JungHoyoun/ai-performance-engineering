@@ -1,10 +1,4 @@
-"""Optimized NVFP4 grouped GEMM (competition case 0).
-
-Best measured credible path in-harness:
-- CUTLASS 2SM grouped kernel
-- tuned scheduler knobs (cluster/raster/PDL)
-- fused-request persistent preparation to reduce launch overhead
-"""
+"""CUTLASS NVFP4 grouped GEMM (competition case 0) - persistent graph chunking + group-major order."""
 
 from __future__ import annotations
 
@@ -17,14 +11,16 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 os.environ["AISP_NVFP4_GROUP_GEMM_CLUSTER_M"] = "2"
-os.environ["AISP_NVFP4_GROUP_GEMM_CLUSTER_N"] = "1"
+os.environ["AISP_NVFP4_GROUP_GEMM_CLUSTER_N"] = "2"
 os.environ["AISP_NVFP4_GROUP_GEMM_RASTER_ORDER"] = "2"
 os.environ["AISP_NVFP4_GROUP_GEMM_USE_PDL"] = "1"
+os.environ["AISP_NVFP4_GROUP_GEMM_PERSISTENT_REQUEST_CHUNK"] = "3"
+os.environ["AISP_NVFP4_GROUP_GEMM_PERSISTENT_TASK_ORDER"] = "group_major"
 
 from core.harness.benchmark_harness import BaseBenchmark
 from labs.nvfp4_group_gemm.cutlass_submission_cached import (
     custom_kernel_cutlass_cached,
-    prepare_cutlass_cached_2sm_persistent,
+    prepare_cutlass_cached_2sm_n64_persistent_graph,
 )
 from labs.nvfp4_group_gemm.nvfp4_group_gemm_common import (
     COMPETITION_CASES,
@@ -38,10 +34,13 @@ def get_benchmark() -> BaseBenchmark:
     bench = NVFP4GroupGemmBenchmark(
         case=case,
         custom_kernel=custom_kernel_cutlass_cached,
-        prepare=prepare_cutlass_cached_2sm_persistent,
+        prepare=prepare_cutlass_cached_2sm_n64_persistent_graph,
         inputs_per_iteration=15,
         capture_iter_graph=False,
-        name=f"nvfp4_group_gemm_{case.name}_optimized_cutlass_cached_2sm_cm2_cn1_ro2_pdl1_persistent",
+        name=(
+            f"nvfp4_group_gemm_{case.name}_optimized_cutlass_cached_2sm_n64_"
+            "cm2_cn2_ro2_pdl1_persistent_graph_chunk3_gmaj"
+        ),
     )
     return attach_benchmark_metadata(bench, __file__)
 
@@ -50,3 +49,4 @@ if __name__ == "__main__":
     from core.harness.benchmark_harness import benchmark_main
 
     benchmark_main(get_benchmark)
+

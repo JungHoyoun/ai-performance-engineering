@@ -283,7 +283,7 @@ torch::Tensor pack_to_cuda_u8_tensor(const std::vector<T>& host, int64_t count) 
   TORCH_CHECK(static_cast<int64_t>(host.size()) == count, "host vector size mismatch");
   auto opts = torch::TensorOptions().dtype(torch::kUInt8).device(torch::kCUDA);
   torch::Tensor out = torch::empty({count, static_cast<int64_t>(sizeof(T))}, opts);
-  auto stream = c10::cuda::getDefaultCUDAStream();
+  auto stream = c10::cuda::getCurrentCUDAStream();
   cudaError_t err = cudaMemcpyAsync(
       out.data_ptr(),
       host.data(),
@@ -306,7 +306,8 @@ std::vector<torch::Tensor> build_metadata_impl(
     torch::Tensor problem_sizes_mnkl_cpu,
     int64_t cluster_m,
     int64_t cluster_n,
-    int64_t raster_order) {
+    int64_t raster_order,
+    int64_t max_swizzle_size) {
   using Traits = GemmTraits<GemmT>;
   TORCH_CHECK(problem_sizes_mnkl_cpu.device().is_cpu(), "problem_sizes must be a CPU tensor");
   TORCH_CHECK(problem_sizes_mnkl_cpu.scalar_type() == torch::kInt32, "problem_sizes must be int32");
@@ -377,6 +378,7 @@ std::vector<torch::Tensor> build_metadata_impl(
 
   typename GemmT::GemmKernel::TileSchedulerArguments scheduler;
   scheduler.raster_order = static_cast<decltype(scheduler.raster_order)>(raster_order);
+  scheduler.max_swizzle_size = static_cast<decltype(scheduler.max_swizzle_size)>(max_swizzle_size);
 
   typename GemmT::Arguments args_ref;
   decltype(args_ref.epilogue.thread) fusion_args;
@@ -450,6 +452,7 @@ void run_gemm_impl(
     int64_t raster_order,
     int64_t cluster_m,
     int64_t cluster_n,
+    int64_t max_swizzle_size,
     bool use_pdl) {
   using Traits = GemmTraits<GemmT>;
   TORCH_CHECK(problem_shapes_u8.is_cuda(), "problem_shapes must be CUDA");
@@ -470,7 +473,7 @@ void run_gemm_impl(
 
   // Ensure we're on the correct device for all pointers.
   c10::cuda::CUDAGuard guard(ptr_a_i64.get_device());
-  auto stream = c10::cuda::getDefaultCUDAStream();
+  auto stream = c10::cuda::getCurrentCUDAStream();
   cudaStream_t cuda_stream = stream.stream();
 
   cutlass::KernelHardwareInfo hw_info;
@@ -481,6 +484,7 @@ void run_gemm_impl(
 
   typename GemmT::GemmKernel::TileSchedulerArguments scheduler;
   scheduler.raster_order = static_cast<decltype(scheduler.raster_order)>(raster_order);
+  scheduler.max_swizzle_size = static_cast<decltype(scheduler.max_swizzle_size)>(max_swizzle_size);
 
   typename GemmT::Arguments args_ref;
   decltype(args_ref.epilogue.thread) fusion_args;
@@ -557,6 +561,7 @@ class GemmPlanT {
       int64_t raster_order,
       int64_t cluster_m,
       int64_t cluster_n,
+      int64_t max_swizzle_size,
       bool use_pdl)
       : problem_shapes_u8_(std::move(problem_shapes_u8)),
         stride_a_u8_(std::move(stride_a_u8)),
@@ -601,6 +606,7 @@ class GemmPlanT {
 
     typename GemmT::GemmKernel::TileSchedulerArguments scheduler;
     scheduler.raster_order = static_cast<decltype(scheduler.raster_order)>(raster_order);
+    scheduler.max_swizzle_size = static_cast<decltype(scheduler.max_swizzle_size)>(max_swizzle_size);
 
     typename GemmT::Arguments args_ref;
     decltype(args_ref.epilogue.thread) fusion_args;
@@ -648,7 +654,7 @@ class GemmPlanT {
 
   void run() {
     c10::cuda::CUDAGuard guard(ptr_a_i64_.get_device());
-    auto stream = c10::cuda::getDefaultCUDAStream();
+    auto stream = c10::cuda::getCurrentCUDAStream();
     cudaStream_t cuda_stream = stream.stream();
     TORCH_CHECK(
         gemm_.run(cuda_stream, /* cuda_adapter = */ nullptr, /* launch_with_pdl = */ use_pdl_) ==
@@ -687,87 +693,99 @@ std::vector<torch::Tensor> build_metadata_1sm(
     torch::Tensor problem_sizes_mnkl_cpu,
     int64_t cluster_m,
     int64_t cluster_n,
-    int64_t raster_order) {
-  return build_metadata_impl<Gemm1SM>(std::move(problem_sizes_mnkl_cpu), cluster_m, cluster_n, raster_order);
+    int64_t raster_order,
+    int64_t max_swizzle_size) {
+  return build_metadata_impl<Gemm1SM>(
+      std::move(problem_sizes_mnkl_cpu), cluster_m, cluster_n, raster_order, max_swizzle_size);
 }
 
 std::vector<torch::Tensor> build_metadata_1sm_n128(
     torch::Tensor problem_sizes_mnkl_cpu,
     int64_t cluster_m,
     int64_t cluster_n,
-    int64_t raster_order) {
-  return build_metadata_impl<Gemm1SMN128>(std::move(problem_sizes_mnkl_cpu), cluster_m, cluster_n, raster_order);
+    int64_t raster_order,
+    int64_t max_swizzle_size) {
+  return build_metadata_impl<Gemm1SMN128>(
+      std::move(problem_sizes_mnkl_cpu), cluster_m, cluster_n, raster_order, max_swizzle_size);
 }
 
 std::vector<torch::Tensor> build_metadata_1sm_n64(
     torch::Tensor problem_sizes_mnkl_cpu,
     int64_t cluster_m,
     int64_t cluster_n,
-    int64_t raster_order) {
-  return build_metadata_impl<Gemm1SMN64>(std::move(problem_sizes_mnkl_cpu), cluster_m, cluster_n, raster_order);
+    int64_t raster_order,
+    int64_t max_swizzle_size) {
+  return build_metadata_impl<Gemm1SMN64>(
+      std::move(problem_sizes_mnkl_cpu), cluster_m, cluster_n, raster_order, max_swizzle_size);
 }
 
 std::vector<torch::Tensor> build_metadata_2sm(
     torch::Tensor problem_sizes_mnkl_cpu,
     int64_t cluster_m,
     int64_t cluster_n,
-    int64_t raster_order) {
-  return build_metadata_impl<Gemm2SM>(std::move(problem_sizes_mnkl_cpu), cluster_m, cluster_n, raster_order);
+    int64_t raster_order,
+    int64_t max_swizzle_size) {
+  return build_metadata_impl<Gemm2SM>(
+      std::move(problem_sizes_mnkl_cpu), cluster_m, cluster_n, raster_order, max_swizzle_size);
 }
 
 std::vector<torch::Tensor> build_metadata_2sm_n128(
     torch::Tensor problem_sizes_mnkl_cpu,
     int64_t cluster_m,
     int64_t cluster_n,
-    int64_t raster_order) {
-  return build_metadata_impl<Gemm2SMN128>(std::move(problem_sizes_mnkl_cpu), cluster_m, cluster_n, raster_order);
+    int64_t raster_order,
+    int64_t max_swizzle_size) {
+  return build_metadata_impl<Gemm2SMN128>(
+      std::move(problem_sizes_mnkl_cpu), cluster_m, cluster_n, raster_order, max_swizzle_size);
 }
 
 std::vector<torch::Tensor> build_metadata_2sm_n64(
     torch::Tensor problem_sizes_mnkl_cpu,
     int64_t cluster_m,
     int64_t cluster_n,
-    int64_t raster_order) {
-  return build_metadata_impl<Gemm2SMN64>(std::move(problem_sizes_mnkl_cpu), cluster_m, cluster_n, raster_order);
+    int64_t raster_order,
+    int64_t max_swizzle_size) {
+  return build_metadata_impl<Gemm2SMN64>(
+      std::move(problem_sizes_mnkl_cpu), cluster_m, cluster_n, raster_order, max_swizzle_size);
 }
 
 #else
 
-std::vector<torch::Tensor> build_metadata_1sm(torch::Tensor, int64_t, int64_t, int64_t) {
+std::vector<torch::Tensor> build_metadata_1sm(torch::Tensor, int64_t, int64_t, int64_t, int64_t) {
   TORCH_CHECK(false, "CUTLASS_ARCH_MMA_SM100_SUPPORTED is not defined (requires SM100 build)");
 }
 
-std::vector<torch::Tensor> build_metadata_1sm_n64(torch::Tensor, int64_t, int64_t, int64_t) {
+std::vector<torch::Tensor> build_metadata_1sm_n64(torch::Tensor, int64_t, int64_t, int64_t, int64_t) {
   TORCH_CHECK(false, "CUTLASS_ARCH_MMA_SM100_SUPPORTED is not defined (requires SM100 build)");
 }
 
-std::vector<torch::Tensor> build_metadata_1sm_n128(torch::Tensor, int64_t, int64_t, int64_t) {
+std::vector<torch::Tensor> build_metadata_1sm_n128(torch::Tensor, int64_t, int64_t, int64_t, int64_t) {
   TORCH_CHECK(false, "CUTLASS_ARCH_MMA_SM100_SUPPORTED is not defined (requires SM100 build)");
 }
 
-std::vector<torch::Tensor> build_metadata_2sm(torch::Tensor, int64_t, int64_t, int64_t) {
+std::vector<torch::Tensor> build_metadata_2sm(torch::Tensor, int64_t, int64_t, int64_t, int64_t) {
   TORCH_CHECK(false, "CUTLASS_ARCH_MMA_SM100_SUPPORTED is not defined (requires SM100 build)");
 }
 
 // NOTE: N=512 tiles are not supported for CUTLASS SM100 block-scaled NVFP4 schedules.
 
-std::vector<torch::Tensor> build_metadata_2sm_n64(torch::Tensor, int64_t, int64_t, int64_t) {
+std::vector<torch::Tensor> build_metadata_2sm_n64(torch::Tensor, int64_t, int64_t, int64_t, int64_t) {
   TORCH_CHECK(false, "CUTLASS_ARCH_MMA_SM100_SUPPORTED is not defined (requires SM100 build)");
 }
 
-std::vector<torch::Tensor> build_metadata_2sm_n128(torch::Tensor, int64_t, int64_t, int64_t) {
+std::vector<torch::Tensor> build_metadata_2sm_n128(torch::Tensor, int64_t, int64_t, int64_t, int64_t) {
   TORCH_CHECK(false, "CUTLASS_ARCH_MMA_SM100_SUPPORTED is not defined (requires SM100 build)");
 }
 
 void run_gemm_1sm(torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
                   torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
-                  torch::Tensor, torch::Tensor, double, double, int64_t, int64_t, int64_t, bool) {
+                  torch::Tensor, torch::Tensor, double, double, int64_t, int64_t, int64_t, int64_t, bool) {
   TORCH_CHECK(false, "CUTLASS_ARCH_MMA_SM100_SUPPORTED is not defined (requires SM100 build)");
 }
 
 void run_gemm_2sm(torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
                   torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
-                  torch::Tensor, torch::Tensor, double, double, int64_t, int64_t, int64_t, bool) {
+                  torch::Tensor, torch::Tensor, double, double, int64_t, int64_t, int64_t, int64_t, bool) {
   TORCH_CHECK(false, "CUTLASS_ARCH_MMA_SM100_SUPPORTED is not defined (requires SM100 build)");
 }
 
@@ -775,7 +793,7 @@ class GemmPlan1SM {
  public:
   GemmPlan1SM(torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
               torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
-              double, double, int64_t, int64_t, int64_t, bool) {
+              double, double, int64_t, int64_t, int64_t, int64_t, bool) {
     TORCH_CHECK(false, "CUTLASS_ARCH_MMA_SM100_SUPPORTED is not defined (requires SM100 build)");
   }
 
@@ -788,7 +806,7 @@ class GemmPlan1SMN64 {
  public:
   GemmPlan1SMN64(torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
                  torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
-                 double, double, int64_t, int64_t, int64_t, bool) {
+                 double, double, int64_t, int64_t, int64_t, int64_t, bool) {
     TORCH_CHECK(false, "CUTLASS_ARCH_MMA_SM100_SUPPORTED is not defined (requires SM100 build)");
   }
 
@@ -801,7 +819,7 @@ class GemmPlan1SMN128 {
  public:
   GemmPlan1SMN128(torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
                   torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
-                  double, double, int64_t, int64_t, int64_t, bool) {
+                  double, double, int64_t, int64_t, int64_t, int64_t, bool) {
     TORCH_CHECK(false, "CUTLASS_ARCH_MMA_SM100_SUPPORTED is not defined (requires SM100 build)");
   }
 
@@ -814,7 +832,7 @@ class GemmPlan2SM {
  public:
   GemmPlan2SM(torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
               torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
-              double, double, int64_t, int64_t, int64_t, bool) {
+              double, double, int64_t, int64_t, int64_t, int64_t, bool) {
     TORCH_CHECK(false, "CUTLASS_ARCH_MMA_SM100_SUPPORTED is not defined (requires SM100 build)");
   }
 
@@ -827,7 +845,7 @@ class GemmPlan2SMN64 {
  public:
   GemmPlan2SMN64(torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
                  torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
-                 double, double, int64_t, int64_t, int64_t, bool) {
+                 double, double, int64_t, int64_t, int64_t, int64_t, bool) {
     TORCH_CHECK(false, "CUTLASS_ARCH_MMA_SM100_SUPPORTED is not defined (requires SM100 build)");
   }
 
@@ -840,7 +858,7 @@ class GemmPlan2SMN128 {
  public:
   GemmPlan2SMN128(torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
                   torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
-                  double, double, int64_t, int64_t, int64_t, bool) {
+                  double, double, int64_t, int64_t, int64_t, int64_t, bool) {
     TORCH_CHECK(false, "CUTLASS_ARCH_MMA_SM100_SUPPORTED is not defined (requires SM100 build)");
   }
 
@@ -879,7 +897,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       py::arg("problem_sizes_mnkl_cpu"),
       py::arg("cluster_m") = 1,
       py::arg("cluster_n") = 1,
-      py::arg("raster_order") = 0);
+      py::arg("raster_order") = 0,
+      py::arg("max_swizzle_size") = 0);
 
   m.def(
       "build_metadata_1sm_n64",
@@ -888,7 +907,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       py::arg("problem_sizes_mnkl_cpu"),
       py::arg("cluster_m") = 1,
       py::arg("cluster_n") = 1,
-      py::arg("raster_order") = 0);
+      py::arg("raster_order") = 0,
+      py::arg("max_swizzle_size") = 0);
 
   m.def(
       "build_metadata_1sm_n128",
@@ -897,7 +917,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       py::arg("problem_sizes_mnkl_cpu"),
       py::arg("cluster_m") = 1,
       py::arg("cluster_n") = 1,
-      py::arg("raster_order") = 0);
+      py::arg("raster_order") = 0,
+      py::arg("max_swizzle_size") = 0);
 
   m.def(
       "build_metadata_2sm",
@@ -906,7 +927,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       py::arg("problem_sizes_mnkl_cpu"),
       py::arg("cluster_m") = 1,
       py::arg("cluster_n") = 1,
-      py::arg("raster_order") = 0);
+      py::arg("raster_order") = 0,
+      py::arg("max_swizzle_size") = 0);
 
   m.def(
       "build_metadata_2sm_n64",
@@ -915,7 +937,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       py::arg("problem_sizes_mnkl_cpu"),
       py::arg("cluster_m") = 1,
       py::arg("cluster_n") = 1,
-      py::arg("raster_order") = 0);
+      py::arg("raster_order") = 0,
+      py::arg("max_swizzle_size") = 0);
 
   m.def(
       "build_metadata_2sm_n128",
@@ -924,7 +947,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       py::arg("problem_sizes_mnkl_cpu"),
       py::arg("cluster_m") = 1,
       py::arg("cluster_n") = 1,
-      py::arg("raster_order") = 0);
+      py::arg("raster_order") = 0,
+      py::arg("max_swizzle_size") = 0);
 
   m.def(
       "create_plan_1sm",
@@ -947,6 +971,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
          int64_t raster_order,
          int64_t cluster_m,
          int64_t cluster_n,
+         int64_t max_swizzle_size,
          bool use_pdl) {
         return std::make_shared<GemmPlan1SM>(
             problem_shapes_u8,
@@ -968,6 +993,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
             raster_order,
             cluster_m,
             cluster_n,
+            max_swizzle_size,
             use_pdl);
       },
       "Create a pre-initialized plan for SM100 NVFP4 block-scaled grouped GEMM (CUDA) - 1SM MMA",
@@ -990,6 +1016,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       py::arg("raster_order") = 0,
       py::arg("cluster_m") = 1,
       py::arg("cluster_n") = 1,
+      py::arg("max_swizzle_size") = 0,
       py::arg("use_pdl") = false);
 
   m.def(
@@ -1013,6 +1040,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
          int64_t raster_order,
          int64_t cluster_m,
          int64_t cluster_n,
+         int64_t max_swizzle_size,
          bool use_pdl) {
         return std::make_shared<GemmPlan1SMN64>(
             problem_shapes_u8,
@@ -1034,6 +1062,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
             raster_order,
             cluster_m,
             cluster_n,
+            max_swizzle_size,
             use_pdl);
       },
       "Create a pre-initialized plan for SM100 NVFP4 block-scaled grouped GEMM (CUDA) - 1SM MMA, N=64 tile",
@@ -1056,6 +1085,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       py::arg("raster_order") = 0,
       py::arg("cluster_m") = 1,
       py::arg("cluster_n") = 1,
+      py::arg("max_swizzle_size") = 0,
       py::arg("use_pdl") = false);
 
   m.def(
@@ -1079,6 +1109,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
          int64_t raster_order,
          int64_t cluster_m,
          int64_t cluster_n,
+         int64_t max_swizzle_size,
          bool use_pdl) {
         return std::make_shared<GemmPlan1SMN128>(
             problem_shapes_u8,
@@ -1100,6 +1131,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
             raster_order,
             cluster_m,
             cluster_n,
+            max_swizzle_size,
             use_pdl);
       },
       "Create a pre-initialized plan for SM100 NVFP4 block-scaled grouped GEMM (CUDA) - 1SM MMA, N=128 tile",
@@ -1122,6 +1154,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       py::arg("raster_order") = 0,
       py::arg("cluster_m") = 1,
       py::arg("cluster_n") = 1,
+      py::arg("max_swizzle_size") = 0,
       py::arg("use_pdl") = false);
 
   m.def(
@@ -1145,6 +1178,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
          int64_t raster_order,
          int64_t cluster_m,
          int64_t cluster_n,
+         int64_t max_swizzle_size,
          bool use_pdl) {
         return std::make_shared<GemmPlan2SM>(
             problem_shapes_u8,
@@ -1166,6 +1200,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
             raster_order,
             cluster_m,
             cluster_n,
+            max_swizzle_size,
             use_pdl);
       },
       "Create a pre-initialized plan for SM100 NVFP4 block-scaled grouped GEMM (CUDA) - 2SM MMA",
@@ -1188,6 +1223,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       py::arg("raster_order") = 0,
       py::arg("cluster_m") = 1,
       py::arg("cluster_n") = 1,
+      py::arg("max_swizzle_size") = 0,
       py::arg("use_pdl") = false);
 
   m.def(
@@ -1211,6 +1247,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
          int64_t raster_order,
          int64_t cluster_m,
          int64_t cluster_n,
+         int64_t max_swizzle_size,
          bool use_pdl) {
         return std::make_shared<GemmPlan2SMN64>(
             problem_shapes_u8,
@@ -1232,6 +1269,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
             raster_order,
             cluster_m,
             cluster_n,
+            max_swizzle_size,
             use_pdl);
       },
       "Create a pre-initialized plan for SM100 NVFP4 block-scaled grouped GEMM (CUDA) - 2SM MMA, N=64 tile",
@@ -1254,6 +1292,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       py::arg("raster_order") = 0,
       py::arg("cluster_m") = 1,
       py::arg("cluster_n") = 1,
+      py::arg("max_swizzle_size") = 0,
       py::arg("use_pdl") = false);
 
   m.def(
@@ -1277,6 +1316,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
          int64_t raster_order,
          int64_t cluster_m,
          int64_t cluster_n,
+         int64_t max_swizzle_size,
          bool use_pdl) {
         return std::make_shared<GemmPlan2SMN128>(
             problem_shapes_u8,
@@ -1298,6 +1338,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
             raster_order,
             cluster_m,
             cluster_n,
+            max_swizzle_size,
             use_pdl);
       },
       "Create a pre-initialized plan for SM100 NVFP4 block-scaled grouped GEMM (CUDA) - 2SM MMA, N=128 tile",
@@ -1320,5 +1361,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       py::arg("raster_order") = 0,
       py::arg("cluster_m") = 1,
       py::arg("cluster_n") = 1,
+      py::arg("max_swizzle_size") = 0,
       py::arg("use_pdl") = false);
 }

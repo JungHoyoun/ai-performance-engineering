@@ -1,9 +1,12 @@
-"""Optimized NVFP4 grouped GEMM (competition case 0).
+"""CUTLASS NVFP4 grouped GEMM (competition case 1) - 2SM N64 persistent fused requests.
 
-Best measured credible path in-harness:
-- CUTLASS 2SM grouped kernel
-- tuned scheduler knobs (cluster/raster/PDL)
-- fused-request persistent preparation to reduce launch overhead
+Tuned schedule for fixed-clock apples-to-apples comparison:
+- variant=2sm_n64
+- cluster_m=2
+- cluster_n=1
+- raster_order=2
+- use_pdl=1
+- persistent_request_chunk=0 (fuse all requests into one grouped launch)
 """
 
 from __future__ import annotations
@@ -20,11 +23,12 @@ os.environ["AISP_NVFP4_GROUP_GEMM_CLUSTER_M"] = "2"
 os.environ["AISP_NVFP4_GROUP_GEMM_CLUSTER_N"] = "1"
 os.environ["AISP_NVFP4_GROUP_GEMM_RASTER_ORDER"] = "2"
 os.environ["AISP_NVFP4_GROUP_GEMM_USE_PDL"] = "1"
+os.environ["AISP_NVFP4_GROUP_GEMM_PERSISTENT_REQUEST_CHUNK"] = "0"
 
 from core.harness.benchmark_harness import BaseBenchmark
 from labs.nvfp4_group_gemm.cutlass_submission_cached import (
     custom_kernel_cutlass_cached,
-    prepare_cutlass_cached_2sm_persistent,
+    prepare_cutlass_cached_2sm_n64_persistent,
 )
 from labs.nvfp4_group_gemm.nvfp4_group_gemm_common import (
     COMPETITION_CASES,
@@ -34,14 +38,14 @@ from labs.nvfp4_group_gemm.nvfp4_group_gemm_common import (
 
 
 def get_benchmark() -> BaseBenchmark:
-    case = COMPETITION_CASES[0]
+    case = COMPETITION_CASES[1]
     bench = NVFP4GroupGemmBenchmark(
         case=case,
         custom_kernel=custom_kernel_cutlass_cached,
-        prepare=prepare_cutlass_cached_2sm_persistent,
+        prepare=prepare_cutlass_cached_2sm_n64_persistent,
         inputs_per_iteration=15,
         capture_iter_graph=False,
-        name=f"nvfp4_group_gemm_{case.name}_optimized_cutlass_cached_2sm_cm2_cn1_ro2_pdl1_persistent",
+        name=f"nvfp4_group_gemm_{case.name}_optimized_cutlass_cached_2sm_n64_cm2_cn1_ro2_pdl1_persistent",
     )
     return attach_benchmark_metadata(bench, __file__)
 

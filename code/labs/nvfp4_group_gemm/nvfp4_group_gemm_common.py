@@ -90,6 +90,7 @@ class NVFP4GroupGemmBenchmark(VerificationPayloadMixin, BaseBenchmark):
         custom_kernel: Callable[[input_t], output_t],
         prepare: Optional[Callable[[Sequence[input_t]], None]] = None,
         inputs_per_iteration: int = 15,
+        capture_iter_graph: bool = False,
         name: Optional[str] = None,
     ) -> None:
         super().__init__()
@@ -101,6 +102,9 @@ class NVFP4GroupGemmBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
         self.data_list: List[input_t] = []
         self._last_output: Optional[output_t] = None
+        self._iter_graph: Optional[torch.cuda.CUDAGraph] = None
+        self._iter_graph_last_output: Optional[output_t] = None
+        self._capture_iter_graph = bool(capture_iter_graph)
 
         # Workload invariant: competition eval averages 15 independent inputs per timing run.
         self._workload = WorkloadMetadata(requests_per_iteration=float(self.inputs_per_iteration))
@@ -112,6 +116,8 @@ class NVFP4GroupGemmBenchmark(VerificationPayloadMixin, BaseBenchmark):
         # Rebuild inputs on every setup() call because verify_runner reuses benchmark instances.
         self.data_list = []
         self._last_output = None
+        self._iter_graph = None
+        self._iter_graph_last_output = None
 
         # IMPORTANT: incorporate the harness-configured seed so fresh-input checks can validate
         # that different seeds produce different outputs (and to prevent accidental "constant
@@ -138,18 +144,49 @@ class NVFP4GroupGemmBenchmark(VerificationPayloadMixin, BaseBenchmark):
         # Avoid async work leaking into first measured iteration.
         self._synchronize()
 
+        # Optional: capture one CUDA graph for the full 15-request loop to reduce launch overhead.
+        # Workload remains identical (same inputs and same per-request kernels), but replay uses
+        # a single graph launch in benchmark_fn().
+        if self._capture_iter_graph:
+            try:
+                out = None
+                for data in self.data_list:
+                    out = self._custom_kernel(data)
+                self._synchronize()
+
+                graph = torch.cuda.CUDAGraph()
+                with torch.cuda.graph(graph):
+                    out = None
+                    for data in self.data_list:
+                        out = self._custom_kernel(data)
+
+                self._iter_graph = graph
+                self._iter_graph_last_output = out
+                self._synchronize()
+            except RuntimeError:
+                # Some tuned kernel schedules are not graph-capture safe on all shapes.
+                # Fall back to steady-state non-graph execution while keeping correctness.
+                self._iter_graph = None
+                self._iter_graph_last_output = None
+
     def benchmark_fn(self) -> None:
         if not self.data_list:
             raise RuntimeError("setup() did not create inputs")
 
-        out: Optional[output_t] = None
-        for data in self.data_list:
-            out = self._custom_kernel(data)
-        self._last_output = out
-        if self._last_output is None:
-            raise RuntimeError("custom_kernel did not produce output")
-
-        self._synchronize()
+        if self._iter_graph is not None:
+            self._iter_graph.replay()
+            self._last_output = self._iter_graph_last_output
+            if self._last_output is None:
+                raise RuntimeError("iter-graph capture did not produce output")
+        else:
+            out: Optional[output_t] = None
+            for data in self.data_list:
+                out = self._custom_kernel(data)
+            self._last_output = out
+            if self._last_output is None:
+                raise RuntimeError("custom_kernel did not produce output")
+        # BenchmarkHarness performs full-device synchronization around timed iterations.
+        # Avoiding an extra in-function sync reduces fixed per-iteration overhead.
 
     def capture_verification_payload(self) -> None:
         if not self.data_list or self._last_output is None:
@@ -175,6 +212,8 @@ class NVFP4GroupGemmBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def teardown(self) -> None:
         self.data_list = []
         self._last_output = None
+        self._iter_graph = None
+        self._iter_graph_last_output = None
         torch.cuda.empty_cache()
 
     def validate_result(self) -> Optional[str]:

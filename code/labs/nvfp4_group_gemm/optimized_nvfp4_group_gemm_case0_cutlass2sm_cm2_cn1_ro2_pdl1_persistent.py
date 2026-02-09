@@ -1,9 +1,7 @@
-"""Optimized NVFP4 grouped GEMM (competition case 0).
+"""CUTLASS NVFP4 grouped GEMM (competition case 0) - tuned 2SM + fused-request plan.
 
-Best measured credible path in-harness:
-- CUTLASS 2SM grouped kernel
-- tuned scheduler knobs (cluster/raster/PDL)
-- fused-request persistent preparation to reduce launch overhead
+This variant keeps the per-request group shapes unchanged, but prebuilds one grouped CUTLASS
+plan over all 15 requests so benchmark_fn() launches once per iteration.
 """
 
 from __future__ import annotations
@@ -50,3 +48,4 @@ if __name__ == "__main__":
     from core.harness.benchmark_harness import benchmark_main
 
     benchmark_main(get_benchmark)
+

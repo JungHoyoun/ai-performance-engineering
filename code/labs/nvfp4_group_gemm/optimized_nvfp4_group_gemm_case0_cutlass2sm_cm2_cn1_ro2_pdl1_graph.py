@@ -1,9 +1,10 @@
-"""Optimized NVFP4 grouped GEMM (competition case 0).
+"""CUTLASS NVFP4 grouped GEMM (competition case 0) - tuned 2SM + CUDA Graph replay.
 
-Best measured credible path in-harness:
-- CUTLASS 2SM grouped kernel
-- tuned scheduler knobs (cluster/raster/PDL)
-- fused-request persistent preparation to reduce launch overhead
+Hard-sets a candidate schedule for fixed-clock tuning:
+- cluster_m=2
+- cluster_n=1
+- raster_order=2
+- use_pdl=1
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ os.environ["AISP_NVFP4_GROUP_GEMM_USE_PDL"] = "1"
 from core.harness.benchmark_harness import BaseBenchmark
 from labs.nvfp4_group_gemm.cutlass_submission_cached import (
     custom_kernel_cutlass_cached,
-    prepare_cutlass_cached_2sm_persistent,
+    prepare_cutlass_cached_2sm_graph,
 )
 from labs.nvfp4_group_gemm.nvfp4_group_gemm_common import (
     COMPETITION_CASES,
@@ -38,10 +39,9 @@ def get_benchmark() -> BaseBenchmark:
     bench = NVFP4GroupGemmBenchmark(
         case=case,
         custom_kernel=custom_kernel_cutlass_cached,
-        prepare=prepare_cutlass_cached_2sm_persistent,
+        prepare=prepare_cutlass_cached_2sm_graph,
         inputs_per_iteration=15,
-        capture_iter_graph=False,
-        name=f"nvfp4_group_gemm_{case.name}_optimized_cutlass_cached_2sm_cm2_cn1_ro2_pdl1_persistent",
+        name=f"nvfp4_group_gemm_{case.name}_optimized_cutlass_cached_2sm_cm2_cn1_ro2_pdl1_graph",
     )
     return attach_benchmark_metadata(bench, __file__)
 
