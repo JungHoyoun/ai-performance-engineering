@@ -9,6 +9,7 @@ in setup() so the harness measures steady-state kernel runtime.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Sequence, Tuple
 
@@ -27,6 +28,27 @@ input_t = Tuple[
 ]
 
 output_t = List[torch.Tensor]
+
+
+def _resolve_inputs_per_iteration(default_value: int) -> int:
+    """Resolve inputs-per-iteration with an explicit env override.
+
+    This keeps the default benchmark behavior unchanged while allowing
+    competition-equivalent per-call measurements via:
+      AISP_NVFP4_GROUP_GEMM_INPUTS_PER_ITERATION=1
+    """
+    override = os.environ.get("AISP_NVFP4_GROUP_GEMM_INPUTS_PER_ITERATION")
+    if override is None or override.strip() == "":
+        return int(default_value)
+    try:
+        value = int(override)
+    except ValueError as exc:  # pragma: no cover - defensive validation
+        raise ValueError(
+            "AISP_NVFP4_GROUP_GEMM_INPUTS_PER_ITERATION must be an integer"
+        ) from exc
+    if value <= 0:
+        raise ValueError("AISP_NVFP4_GROUP_GEMM_INPUTS_PER_ITERATION must be > 0")
+    return value
 
 
 @dataclass(frozen=True)
@@ -98,7 +120,7 @@ class NVFP4GroupGemmBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._name = name or case.name
         self._custom_kernel = custom_kernel
         self._prepare = prepare
-        self.inputs_per_iteration = int(inputs_per_iteration)
+        self.inputs_per_iteration = _resolve_inputs_per_iteration(int(inputs_per_iteration))
 
         self.data_list: List[input_t] = []
         self._last_output: Optional[output_t] = None

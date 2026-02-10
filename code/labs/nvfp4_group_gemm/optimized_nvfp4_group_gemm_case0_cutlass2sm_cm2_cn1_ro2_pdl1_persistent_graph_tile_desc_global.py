@@ -1,4 +1,4 @@
-"""CUTLASS NVFP4 grouped GEMM (competition case 0) - persistent graph + tile-desc global task order."""
+"""CUTLASS NVFP4 grouped GEMM (competition case 0) - persistent graph + global tile-desc task order."""
 
 from __future__ import annotations
 
@@ -14,7 +14,11 @@ os.environ["AISP_NVFP4_GROUP_GEMM_CLUSTER_M"] = "2"
 os.environ["AISP_NVFP4_GROUP_GEMM_CLUSTER_N"] = "1"
 os.environ["AISP_NVFP4_GROUP_GEMM_RASTER_ORDER"] = "2"
 os.environ["AISP_NVFP4_GROUP_GEMM_USE_PDL"] = "1"
+os.environ["AISP_NVFP4_GROUP_GEMM_PERSISTENT_REQUEST_CHUNK"] = "0"
+os.environ["AISP_NVFP4_GROUP_GEMM_PERSISTENT_CONCURRENT_STREAMS"] = "1"
+os.environ["AISP_NVFP4_GROUP_GEMM_PERSISTENT_GROUP_ORDER"] = "none"
 os.environ["AISP_NVFP4_GROUP_GEMM_PERSISTENT_TASK_ORDER"] = "tile_desc_global"
+os.environ["AISP_NVFP4_GROUP_GEMM_MAX_SWIZZLE"] = "0"
 
 from core.harness.benchmark_harness import BaseBenchmark
 from labs.nvfp4_group_gemm.cutlass_submission_cached import (
