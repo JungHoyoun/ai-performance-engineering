@@ -14,10 +14,10 @@ def _build_cmd(**kwargs) -> list[str]:
     )
 
 
-def test_ncu_command_minimal_uses_speed_of_light():
+def test_ncu_command_minimal_uses_supported_lightweight_set():
     cmd = _build_cmd(metric_set="minimal")
     set_idx = cmd.index("--set")
-    assert cmd[set_idx + 1] == "speed-of-light"
+    assert cmd[set_idx + 1] in {"speed-of-light", "basic"}
     assert "--metrics" not in cmd
 
 

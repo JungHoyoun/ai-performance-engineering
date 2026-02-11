@@ -147,7 +147,11 @@ class JobStore:
         def _runner():
             try:
                 result = runner()
-                status = "completed"
+                result_is_error = (
+                    isinstance(result, dict)
+                    and (bool(result.get("error")) or result.get("success") is False)
+                )
+                status = "error" if result_is_error else "completed"
                 error = None
             except Exception as exc:  # pragma: no cover - defensive
                 status = "error"

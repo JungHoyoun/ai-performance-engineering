@@ -10,6 +10,7 @@ Provides automated profiling workflows with:
 
 import argparse
 import os
+import re
 import subprocess
 import json
 from pathlib import Path
@@ -75,8 +76,14 @@ class NsightAutomation:
         """
         self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.repo_root = Path(__file__).resolve().parents[2]
+        self.run_cwd = Path(
+            os.environ.get("AISP_PROFILE_WORKDIR", str(self.repo_root))
+        ).resolve()
         self.last_error: Optional[str] = None
         self.last_run: Dict[str, Any] = {}
+        self._ncu_sets_cache: Optional[set[str]] = None
+        self._last_resolved_ncu_set: Optional[str] = None
         
         # Check availability
         self.nsys_available = self._check_command("nsys")
@@ -92,6 +99,95 @@ class NsightAutomation:
             return True
         except (subprocess.CalledProcessError, FileNotFoundError):
             return False
+
+    def _available_ncu_sets(self) -> set[str]:
+        """Return available Nsight Compute set identifiers (best effort)."""
+        if self._ncu_sets_cache is not None:
+            return set(self._ncu_sets_cache)
+        if not self.ncu_available:
+            self._ncu_sets_cache = set()
+            return set()
+        try:
+            proc = subprocess.run(
+                ["ncu", "--list-sets"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+            sets: set[str] = set()
+            for raw_line in (proc.stdout or "").splitlines():
+                line = raw_line.strip()
+                if not line:
+                    continue
+                lower = line.lower()
+                if lower.startswith("identifier") or line.startswith("-"):
+                    continue
+                match = re.match(r"^([A-Za-z0-9._-]+)\s+", line)
+                if match:
+                    sets.add(match.group(1).lower())
+            self._ncu_sets_cache = sets
+            return set(sets)
+        except Exception:
+            # Keep this best-effort; validation falls back to alias defaults.
+            self._ncu_sets_cache = set()
+            return set()
+
+    def _resolve_ncu_set(self, metric_set: str) -> str:
+        """Resolve user-facing metric-set aliases to an installed NCU --set value."""
+        metric_set_norm = str(metric_set or "").strip().lower()
+        alias_candidates = {
+            "full": ["full"],
+            "roofline": ["roofline"],
+            # Nsight versions vary: some expose speed-of-light, others expose basic.
+            "speed-of-light": ["speed-of-light", "basic"],
+            "minimal": ["speed-of-light", "basic"],
+            "basic": ["basic", "speed-of-light"],
+        }
+        if metric_set_norm not in alias_candidates:
+            allowed = ", ".join(sorted(alias_candidates.keys()))
+            raise ValueError(f"Unsupported metric_set={metric_set!r}; expected one of: {allowed}")
+
+        available = self._available_ncu_sets()
+        candidates = alias_candidates[metric_set_norm]
+        if not available:
+            # If discovery fails, use the first candidate so command construction still works.
+            resolved = candidates[0]
+            self._last_resolved_ncu_set = resolved
+            return resolved
+
+        for candidate in candidates:
+            if candidate in available:
+                self._last_resolved_ncu_set = candidate
+                return candidate
+
+        available_display = ", ".join(sorted(available)) if available else "<unknown>"
+        raise ValueError(
+            f"Requested metric_set={metric_set!r} is not available on this Nsight Compute install. "
+            f"Available sets: {available_display}"
+        )
+
+    def _normalize_nvtx_includes(self, nvtx_includes: Optional[Sequence[str]]) -> List[str]:
+        """Normalize NVTX include filters for better push/pop range compatibility."""
+        normalized: List[str] = []
+        for raw in nvtx_includes or []:
+            tag = str(raw).strip()
+            if not tag:
+                continue
+            candidates = [tag]
+            # ncu plain include expressions often target start/end ranges only.
+            # Add push/pop-style variant when caller passed a simple range label.
+            if (
+                "/" not in tag
+                and "::" not in tag
+                and "@" not in tag
+                and not tag.endswith("/")
+            ):
+                candidates.append(f"{tag}/")
+            for candidate in candidates:
+                if candidate not in normalized:
+                    normalized.append(candidate)
+        return normalized
 
     def _build_env(self, force_lineinfo: bool = False) -> Dict[str, str]:
         """Build environment with repo root on PYTHONPATH for child commands."""
@@ -199,6 +295,7 @@ class NsightAutomation:
         self.last_run = {
             "tool": "nsys",
             "cmd": nsys_cmd,
+            "cwd": str(self.run_cwd),
             "timeout_seconds": timeout_seconds,
             "preset": preset_normalized,
         }
@@ -211,6 +308,7 @@ class NsightAutomation:
                 check=True,
                 timeout=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
                 env=self._build_env(force_lineinfo=force_lineinfo),
+                cwd=str(self.run_cwd),
             )
             logger.info(f"Nsight Systems trace saved to {output_path}")
             self.last_run.update(
@@ -272,16 +370,7 @@ class NsightAutomation:
         if workload_type not in self.METRIC_SETS:
             raise ValueError(f"Unsupported workload_type: {workload_type}")
         metrics = self.METRIC_SETS[workload_type]
-        metric_set_norm = str(metric_set).lower()
-        ncu_set_map = {
-            'full': 'full',
-            'speed-of-light': 'speed-of-light',
-            'roofline': 'roofline',
-            'minimal': 'speed-of-light',  # Minimal uses speed-of-light set
-        }
-        if metric_set_norm not in ncu_set_map:
-            raise ValueError(f"Unsupported metric_set: {metric_set}")
-        ncu_set = ncu_set_map[metric_set_norm]
+        ncu_set = self._resolve_ncu_set(metric_set)
         ncu_cmd = [
             'ncu',
             '--set', ncu_set,
@@ -298,7 +387,7 @@ class NsightAutomation:
             if kernel_name_base:
                 ncu_cmd.extend(['--kernel-name-base', str(kernel_name_base)])
             ncu_cmd.extend(['--kernel-name', kernel_filter])
-        nvtx_filters = [str(tag).strip() for tag in (nvtx_includes or []) if str(tag).strip()]
+        nvtx_filters = self._normalize_nvtx_includes(nvtx_includes)
         if nvtx_filters:
             ncu_cmd.append('--nvtx')
             for tag in nvtx_filters:
@@ -345,7 +434,7 @@ class NsightAutomation:
             nvtx_includes: Optional NVTX range include filters (requires NVTX ranges in target code)
             profile_from_start: Optional NCU profiling gate ('on' or 'off')
             sampling_interval: pm-sampling-interval value (cycles between samples)
-            metric_set: Metric set to use ('full', 'speed-of-light', 'roofline', 'minimal')
+            metric_set: Metric set to use ('full', 'roofline', 'minimal', 'speed-of-light', 'basic')
             launch_skip: Number of kernel launches to skip before profiling
             launch_count: Number of kernel launches to profile (None = all remaining)
             replay_mode: Replay mode ('application' or 'kernel')
@@ -357,13 +446,12 @@ class NsightAutomation:
             logger.error("Nsight Compute not available")
             return None
         self.last_error = None
-        
+        self._last_resolved_ncu_set = None
+
         output_path = self.output_dir / f"{output_name}.ncu-rep"
         if kernel_filter:
             # Auto-limit when a kernel filter is specified to avoid timeouts
             # on workloads with many launches; caller can override explicitly.
-            if launch_skip is None:
-                launch_skip = 100
             if launch_count is None:
                 launch_count = 1
         ncu_cmd = self.build_ncu_command(
@@ -385,10 +473,12 @@ class NsightAutomation:
         self.last_run = {
             "tool": "ncu",
             "cmd": ncu_cmd,
+            "cwd": str(self.run_cwd),
             "timeout_seconds": timeout_seconds,
             "workload_type": workload_type,
             "sampling_interval": sampling_interval,
             "metric_set": metric_set,
+            "metric_set_resolved": self._last_resolved_ncu_set,
             "launch_skip": launch_skip,
             "launch_count": launch_count,
             "replay_mode": replay_mode,
@@ -406,6 +496,7 @@ class NsightAutomation:
                 check=True,
                 timeout=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
                 env=self._build_env(force_lineinfo=force_lineinfo),
+                cwd=str(self.run_cwd),
             )
             logger.info(f"Nsight Compute report saved to {output_path}")
             self.last_run.update(
@@ -417,6 +508,32 @@ class NsightAutomation:
                     "output": str(output_path),
                 }
             )
+            output_text = f"{result.stdout}\n{result.stderr}"
+            capture_errors: List[str] = []
+            if "No kernels were profiled." in output_text:
+                capture_errors.append("Nsight Compute captured zero kernels.")
+            if "No metrics to collect found in sections." in output_text:
+                capture_errors.append(
+                    "Nsight Compute did not collect metrics for the selected --set/pages."
+                )
+            if not output_path.exists():
+                capture_errors.append(f"Expected report file missing: {output_path}")
+            if capture_errors:
+                hint_lines: List[str] = []
+                if nvtx_includes:
+                    hint_lines.append(
+                        "NVTX include filters were set. Verify filter syntax and use "
+                        "--profile-from-start off with cudaProfilerStart/Stop around the target region."
+                    )
+                if kernel_filter:
+                    hint_lines.append(
+                        "Kernel filter was set. Validate the filter against 'Available Kernels' shown by ncu output."
+                    )
+                if self._last_resolved_ncu_set:
+                    hint_lines.append(f"Resolved metric set: {self._last_resolved_ncu_set}")
+                self.last_error = " ".join(capture_errors + hint_lines)
+                logger.error(f"Nsight Compute capture invalid: {self.last_error}")
+                return None
             return output_path
         except subprocess.TimeoutExpired as e:
             self.last_error = f"Nsight Compute timed out after {timeout_seconds}s"

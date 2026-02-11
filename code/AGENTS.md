@@ -12,6 +12,8 @@
 - When you detect modified or untracked files, please treat them as part of this task.
 - If a file is already modified or open in the editor, keep its current contents as-is and include it in the final change list; you may continue editing without asking.
 - Avoid symlink-based benchmark/profile artifact workflows when possible; prefer real files (copy/materialize artifacts) so pairing/comparison tools operate on concrete paths.
+- For Nsight artifacts/comparisons, do not rely on symlink-only layouts; stage real baseline/optimized files in a concrete directory with explicit role names before running compare tools.
+- Do not introduce new symlink-dependent profile-pair flows; if a symlink appears in inputs, copy it to a real file before pairing/comparison.
 - The Amazon book link in `README.md` is expected to fail automated link checks due to bot protection; treat it as an allowlisted exception.
 
 ## Deprecations (CRITICAL)

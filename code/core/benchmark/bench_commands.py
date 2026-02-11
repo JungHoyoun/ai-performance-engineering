@@ -505,6 +505,144 @@ def _execute_benchmarks(
         memory_clock_mhz=gpu_state.get("memory_clock_mhz"),
     )
     heartbeat_stop = threading.Event()
+    stale_progress_seconds = max(60, int(os.environ.get("AISP_STALE_PROGRESS_SECONDS", "900")))
+    stale_phases = {
+        "baseline_nsys",
+        "optimized_nsys",
+        "baseline_ncu",
+        "optimized_ncu",
+        "baseline_torch",
+        "optimized_torch",
+    }
+    # Long high-iteration timing phases can legitimately run for extended periods
+    # without progress timestamp updates. Keep timing stale-abort as explicit opt-in.
+    if os.environ.get("AISP_STALE_WATCH_TIMING", "0").strip().lower() in {"1", "true", "yes", "on"}:
+        stale_phases.update({"baseline_timing", "optimized_timing"})
+
+    def _snapshot_process_table() -> Dict[int, Tuple[int, str]]:
+        try:
+            proc = subprocess.run(
+                ["ps", "-eo", "pid=,ppid=,cmd="],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+        except Exception:
+            return {}
+        rows: Dict[int, Tuple[int, str]] = {}
+        for line in (proc.stdout or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(None, 2)
+            if len(parts) < 2:
+                continue
+            try:
+                pid = int(parts[0])
+                ppid = int(parts[1])
+            except ValueError:
+                continue
+            cmd = parts[2] if len(parts) > 2 else ""
+            rows[pid] = (ppid, cmd)
+        return rows
+
+    def _descendants_of(root_pid: int, table: Dict[int, Tuple[int, str]]) -> List[Tuple[int, str]]:
+        children: Dict[int, List[int]] = {}
+        for pid, (ppid, _cmd) in table.items():
+            children.setdefault(ppid, []).append(pid)
+        out: List[Tuple[int, str]] = []
+        queue: List[int] = [root_pid]
+        seen: set[int] = set()
+        while queue:
+            current = queue.pop(0)
+            for child in children.get(current, []):
+                if child in seen:
+                    continue
+                seen.add(child)
+                cmd = table.get(child, (0, ""))[1]
+                out.append((child, cmd))
+                queue.append(child)
+        return out
+
+    def _is_profiler_process(cmd: str) -> bool:
+        lower = cmd.lower()
+        return any(
+            token in lower
+            for token in (
+                " ncu ",
+                "nsight-compute",
+                "/ncu",
+                " nsys ",
+                "nsight-systems",
+                "qdstrmimporter",
+                "nsys-tee",
+            )
+        )
+
+    def _is_build_process(cmd: str) -> bool:
+        lower = cmd.lower()
+        return any(
+            token in lower
+            for token in (
+                " nvcc ",
+                "/nvcc",
+                " ptxas ",
+                "/ptxas",
+                " ninja ",
+                "/ninja",
+                " gcc ",
+                " g++ ",
+                " cc1plus ",
+                " cicc ",
+                " fatbinary ",
+                " ld ",
+                " cmake ",
+            )
+        )
+
+    def _terminate_stalled_children() -> Tuple[List[int], List[int], List[int]]:
+        table = _snapshot_process_table()
+        descendants = _descendants_of(os.getpid(), table)
+        profiler_pids = [pid for pid, cmd in descendants if _is_profiler_process(cmd)]
+        build_pids = [pid for pid, cmd in descendants if _is_build_process(cmd)]
+        # Do not kill while profiling/build toolchains are actively running.
+        # These phases can legitimately run for extended periods without
+        # benchmark progress updates.
+        if profiler_pids or build_pids:
+            return [], profiler_pids, build_pids
+        kill_targets: List[int] = []
+        for pid, cmd in descendants:
+            lower = cmd.lower()
+            if "isolated_runner.py" in lower:
+                kill_targets.append(pid)
+        killed: List[int] = []
+        for pid in kill_targets:
+            try:
+                pgid = os.getpgid(pid)
+                os.killpg(pgid, signal.SIGTERM)
+                killed.append(pid)
+            except Exception:
+                continue
+        if killed:
+            time.sleep(1.0)
+            for pid in killed:
+                if not Path(f"/proc/{pid}").exists():
+                    continue
+                try:
+                    pgid = os.getpgid(pid)
+                    os.killpg(pgid, signal.SIGKILL)
+                except Exception:
+                    continue
+        return killed, profiler_pids, build_pids
+
+    stale_state: Dict[str, Any] = {
+        "fingerprint": None,
+        "since": time.time(),
+        "last_logged_sec": 0.0,
+        "abort_triggered": False,
+    }
+
     def _heartbeat_loop() -> None:
         while not heartbeat_stop.is_set():
             payload: Any = None
@@ -514,6 +652,90 @@ def _execute_benchmarks(
             except Exception as exc:
                 payload = {"error": str(exc)}
             current = payload.get("current") if isinstance(payload, dict) else None
+            now = time.time()
+            if isinstance(current, dict):
+                phase = str(current.get("phase") or "")
+                fingerprint = json.dumps(
+                    {
+                        "phase": phase,
+                        "step": current.get("step"),
+                        "step_detail": current.get("step_detail"),
+                        "timestamp": current.get("timestamp"),
+                    },
+                    sort_keys=True,
+                    default=str,
+                )
+                if stale_state["fingerprint"] != fingerprint:
+                    stale_state["fingerprint"] = fingerprint
+                    stale_state["since"] = now
+                    stale_state["abort_triggered"] = False
+                stagnant_for = now - float(stale_state["since"])
+                if phase in stale_phases and stagnant_for >= stale_progress_seconds:
+                    if now - float(stale_state["last_logged_sec"]) >= 30.0:
+                        stale_state["last_logged_sec"] = now
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "run_stale_progress",
+                            phase=phase,
+                            stagnant_seconds=stagnant_for,
+                            stale_threshold_seconds=stale_progress_seconds,
+                            step=current.get("step"),
+                            step_detail=current.get("step_detail"),
+                        )
+                    if not stale_state["abort_triggered"]:
+                        killed_pids, profiler_pids, build_pids = _terminate_stalled_children()
+                        if profiler_pids or build_pids:
+                            stale_state["since"] = now
+                            emit_event(
+                                event_logger,
+                                logger,
+                                "run_stale_deferred",
+                                phase=phase,
+                                stagnant_seconds=stagnant_for,
+                                stale_threshold_seconds=stale_progress_seconds,
+                                profiler_pids=profiler_pids,
+                                build_pids=build_pids,
+                                run_id=artifact_manager.run_id,
+                            )
+                            logger.error(
+                                "Stale progress detected for %.0fs in phase=%s, but active worker pids were found; defer auto-abort (profiler=%s, build=%s).",
+                                stagnant_for,
+                                phase,
+                                profiler_pids,
+                                build_pids,
+                            )
+                            continue
+                        stale_state["abort_triggered"] = True
+                        emit_event(
+                            event_logger,
+                            logger,
+                            "run_stale_abort",
+                            phase=phase,
+                            stagnant_seconds=stagnant_for,
+                            stale_threshold_seconds=stale_progress_seconds,
+                            killed_pids=killed_pids,
+                            profiler_pids=profiler_pids,
+                            build_pids=build_pids,
+                            run_id=artifact_manager.run_id,
+                        )
+                        if killed_pids:
+                            logger.error(
+                                "Stale progress detected for %.0fs in phase=%s; terminated child benchmark pids=%s.",
+                                stagnant_for,
+                                phase,
+                                killed_pids,
+                            )
+                        else:
+                            logger.error(
+                                "Stale progress detected for %.0fs in phase=%s with no killable child; terminating run process.",
+                                stagnant_for,
+                                phase,
+                            )
+                            try:
+                                os.kill(os.getpid(), signal.SIGTERM)
+                            except Exception:
+                                os._exit(143)
             emit_event(
                 event_logger,
                 logger,

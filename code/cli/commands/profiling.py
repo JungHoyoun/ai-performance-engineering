@@ -611,10 +611,11 @@ def ncu(args) -> None:
     launch_skip_used = last_run.get("launch_skip", launch_skip)
     launch_count_used = last_run.get("launch_count", launch_count)
     replay_mode_used = last_run.get("replay_mode", replay_mode)
+    metric_set_resolved = last_run.get("metric_set_resolved", metric_set)
     lines = [
         f"[green]✓[/green] NCU report: {output}",
         f"Workload type: {workload_type}",
-        f"Metric set: {metric_set}",
+        f"Metric set: {metric_set} (resolved: {metric_set_resolved})",
         f"Replay mode: {replay_mode_used}",
         f"Kernel filter: {kernel_filter or 'none'}",
         f"Kernel name base: {kernel_name_base or 'default'}",

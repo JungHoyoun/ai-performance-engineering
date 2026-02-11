@@ -162,7 +162,7 @@ Profiling with Nsight Systems, Nsight Compute, and torch.profiler.
 
 **MCP profiling captures include metrics JSON:** `profile_nsys` returns `nsys_metrics`, `profile_ncu` returns `ncu_metrics`, `profile_torch` returns `torch_metrics` (and `report` alias), and `profile_hta` includes `nsys_metrics`. Use these payloads to analyze regressions and bottleneck shifts.
 
-**Targeted NCU capture (CLI + MCP):** `profile_ncu` supports kernel scoping (`kernel_filter`, optional `kernel_name_base`) plus NVTX gating (`nvtx_include`, `profile_from_start='off'`) to isolate specific kernels and avoid setup-noise captures.
+**Targeted NCU capture (CLI + MCP):** `profile_ncu` supports kernel scoping (`kernel_filter`, optional `kernel_name_base`) plus NVTX gating (`nvtx_include`, `profile_from_start='off'`) to isolate specific kernels and avoid setup-noise captures. Captures now fail loudly when NCU profiles zero kernels or collects zero metrics, and `metric_set='minimal'` auto-resolves to `speed-of-light` or `basic` depending on Nsight Compute version. `compare_ncu` now flags rank-only kernel symbol alignment as low-confidence for tuning.
 
 **Python API:**
 ```python

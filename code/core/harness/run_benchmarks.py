@@ -1051,6 +1051,16 @@ def clean_build_directories(chapter_dir: Path) -> None:
     Unlinking that lock while a build is in progress can crash the builder on
     release and break subsequent benchmark runs.
     """
+    skip_raw = os.environ.get("AISP_SKIP_BUILD_CLEAN")
+    clean_raw = os.environ.get("AISP_CLEAN_BUILD_DIRS")
+    skip_enabled = False
+    if skip_raw is not None and str(skip_raw).strip().lower() in {"1", "true", "yes", "on", "skip"}:
+        skip_enabled = True
+    if clean_raw is not None and str(clean_raw).strip().lower() in {"0", "false", "no", "off"}:
+        skip_enabled = True
+    if skip_enabled:
+        logger.info("Skipping build directory cleanup (AISP_SKIP_BUILD_CLEAN/AISP_CLEAN_BUILD_DIRS override).")
+        return
 
     try:
         from core.utils.build_utils import ensure_clean_build_directory

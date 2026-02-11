@@ -645,7 +645,7 @@ if typer and profile_app is not None:
         metric_set: str = typer.Option(
             "full",
             "--metric-set",
-            help="NCU set: full, speed-of-light (minimal), roofline, minimal",
+            help="NCU set: full, roofline, minimal, speed-of-light, basic",
             show_default=True,
         ),
         replay_mode: str = typer.Option(

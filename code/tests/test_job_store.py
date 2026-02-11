@@ -58,3 +58,17 @@ def test_job_store_list_jobs_filter():
     tool_a_jobs = store.list_jobs(tool="tool_a")
     assert tool_a_jobs
     assert all(job["tool"] == "tool_a" for job in tool_a_jobs)
+
+
+def test_job_store_marks_error_status_when_runner_returns_error_payload():
+    store = JobStore(max_workers=1, ttl_seconds=60, max_entries=10, cleanup_interval_seconds=0)
+
+    def runner():
+        return {"success": False, "error": "boom"}
+
+    ticket = store.queue_job("tool_error", runner)
+    record = _wait_for_job(store, ticket["job_id"])
+    assert record is not None
+    assert record["status"] == "error"
+    assert isinstance(record.get("result"), dict)
+    assert record["result"].get("error") == "boom"

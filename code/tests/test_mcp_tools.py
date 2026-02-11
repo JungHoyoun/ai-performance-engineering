@@ -4,6 +4,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+import time
 from typing import Any, Dict, Iterable, List
 
 import pytest
@@ -65,6 +66,7 @@ CATEGORY_TOOLS: Dict[str, List[str]] = {
         "list_chapters",
         "run_benchmarks",
         "benchmark_variants",
+        "benchmark_explore",
         "benchmark_deep_dive_compare",
         "benchmark_llm_patch_loop",
         "benchmark_report",
@@ -200,6 +202,7 @@ BENCHMARK_SLOW_TOOLS = {
     "run_benchmarks",
     "optimize",
     "benchmark_variants",
+    "benchmark_explore",
     "benchmark_deep_dive_compare",
     "benchmark_llm_patch_loop",
 }
@@ -231,6 +234,13 @@ TOOL_PARAMS: Dict[str, Dict[str, Any]] = {
         "force_llm": False,
         "apply_patches": False,
         "rebenchmark_llm_patches": False,
+    },
+    "benchmark_explore": {
+        "path": "ch10/baseline_atomic_reduction.py",
+        "deep_dive": "never",
+        "iterations": 1,
+        "warmup": 5,
+        "timeout_seconds": 900,
     },
     "benchmark_report": {
         "data_file": str(BENCH_FILE),
@@ -397,6 +407,22 @@ def _call_with_timeout(server: mcp_server.MCPServer, case: ToolCase) -> mcp_serv
         return fut.result(timeout=case.timeout)
 
 
+def _wait_for_job_terminal_status(
+    server: mcp_server.MCPServer,
+    job_id: str,
+    timeout_seconds: float = 120.0,
+) -> Dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        result = server.call_tool("job_status", {"job_id": job_id})
+        payload = _payload_from_result(result)
+        record = payload.get("result", {})
+        if isinstance(record, dict) and record.get("status") in {"completed", "error", "not_found"}:
+            return record
+        time.sleep(0.1)
+    raise AssertionError(f"job {job_id} did not reach terminal state within {timeout_seconds}s")
+
+
 def _case_ids(cases: Iterable[ToolCase]) -> List[str]:
     return [case.name for case in cases]
 
@@ -405,7 +431,7 @@ def test_expected_tool_registration_matches_catalog():
     expected = {case.name for case in ALL_TOOL_CASES}
     registered = set(mcp_server.TOOLS.keys())
     assert expected == registered, "Tool catalog must mirror MCP server registry"
-    assert len(expected) == 96
+    assert len(expected) == 97
 
 
 def test_optimize_path_resolution():
@@ -415,6 +441,24 @@ def test_optimize_path_resolution():
     target, err = _resolve_benchmark_target_from_path(str(path))
     assert err is None
     assert target == "ch10:atomic_reduction"
+
+
+def test_profile_command_normalizes_repo_relative_script():
+    expected_script = REPO_ROOT / "tests" / "fixtures" / "mcp_torch_profile_target.py"
+    command, error = mcp_server._normalize_profile_command(  # type: ignore[attr-defined]
+        ["python", "tests/fixtures/mcp_torch_profile_target.py"]
+    )
+    assert error is None
+    assert command[1] == str(expected_script)
+
+
+def test_profile_command_rejects_missing_repo_relative_script():
+    command, error = mcp_server._normalize_profile_command(  # type: ignore[attr-defined]
+        ["python", "tests/fixtures/does_not_exist.py"]
+    )
+    assert command[1] == "tests/fixtures/does_not_exist.py"
+    assert error is not None
+    assert "command script not found" in error
 
 
 def test_tool_list_protocol_matches_registration(server: mcp_server.MCPServer):
@@ -618,3 +662,74 @@ def test_benchmark_export_runs_inprocess(server: mcp_server.MCPServer, tmp_path:
     assert payload["tool"] == "benchmark_export"
     assert payload["result"].get("output") == str(output_path)
     assert output_path.exists()
+
+
+def test_run_benchmarks_rejects_flag_like_targets(server: mcp_server.MCPServer):
+    result = server.call_tool("run_benchmarks", {"targets": ["--auto-analyze"]})
+    payload = _payload_from_result(result)
+    assert payload["tool"] == "run_benchmarks"
+    tool_result = payload["result"]
+    assert tool_result.get("success") is False
+    assert "Invalid benchmark target" in (tool_result.get("error") or "")
+
+
+def test_run_benchmarks_async_returns_job_ticket_immediately(server: mcp_server.MCPServer):
+    params = {
+        "targets": ["ch99:missing_target"],
+        "profile": "minimal",
+        "iterations": 1,
+        "warmup": 1,
+        "llm_analysis": False,
+        "auto_analyze": False,
+        "auto_report": False,
+        "async": True,
+        "timeout_seconds": 60,
+    }
+    started = time.monotonic()
+    result = server.call_tool("run_benchmarks", params)
+    elapsed = time.monotonic() - started
+
+    payload = _payload_from_result(result)
+    assert payload["tool"] == "run_benchmarks"
+    tool_result = payload["result"]
+    assert elapsed < 10.0
+    assert tool_result.get("job_id")
+    assert tool_result.get("status") == "started"
+
+    record = _wait_for_job_terminal_status(server, str(tool_result["job_id"]), timeout_seconds=90.0)
+    assert record.get("status") in {"completed", "error"}
+
+
+def test_benchmark_deep_dive_async_returns_job_ticket_immediately(server: mcp_server.MCPServer):
+    params = {
+        "targets": ["ch99:missing_target"],
+        "iterations": 1,
+        "warmup": 1,
+        "async": True,
+        "timeout_seconds": 60,
+    }
+    started = time.monotonic()
+    result = server.call_tool("benchmark_deep_dive_compare", params)
+    elapsed = time.monotonic() - started
+
+    payload = _payload_from_result(result)
+    assert payload["tool"] == "benchmark_deep_dive_compare"
+    tool_result = payload["result"]
+    assert elapsed < 10.0
+    assert tool_result.get("job_id")
+    assert tool_result.get("status") == "started"
+
+    record = _wait_for_job_terminal_status(server, str(tool_result["job_id"]), timeout_seconds=120.0)
+    assert record.get("status") in {"completed", "error"}
+
+
+def test_queue_active_run_filter_ignores_queue_helpers():
+    records = [
+        {"pid": 101, "ppid": 1, "cmd": "/usr/bin/bash /tmp/artifacts/parallel_runs/queued_cmd.ABC123.sh"},
+        {"pid": 102, "ppid": 1, "cmd": "/usr/bin/bash /tmp/artifacts/parallel_runs/queued_wrapper.DEF456.sh"},
+        {"pid": 103, "ppid": 1, "cmd": "/usr/bin/bash /tmp/artifacts/parallel_runs/run_queue.sh --run"},
+        {"pid": 104, "ppid": 1, "cmd": "/usr/bin/python -m cli.aisp bench run --targets ch10:atomic_reduction"},
+    ]
+    active = mcp_server._active_run_processes(records, ignore_pids=set())  # type: ignore[attr-defined]
+    assert len(active) == 1
+    assert active[0]["pid"] == 104

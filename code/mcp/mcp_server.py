@@ -118,14 +118,44 @@ import time
 import threading
 import uuid
 import re
+import contextlib
 from collections import defaultdict, deque
 from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypedDict, NotRequired
 
-# Ensure repository root is on sys.path for imports (e.g., analysis.advanced_analysis)
-CODE_ROOT = Path(__file__).resolve().parent.parent
+try:
+    import fcntl  # POSIX-only; optional for portability.
+except Exception:  # pragma: no cover - non-POSIX environments
+    fcntl = None  # type: ignore[assignment]
+
+# Ensure repository root is on sys.path for imports (e.g., analysis.advanced_analysis).
+# In some launch modes mcp_server can be invoked from outside the repo checkout,
+# so discover the real workspace root defensively instead of trusting __file__ only.
+def _discover_code_root() -> Path:
+    candidates: List[Path] = []
+    env_root = os.environ.get("AISP_CODE_ROOT")
+    if env_root:
+        candidates.append(Path(env_root).expanduser())
+    candidates.append(Path(__file__).resolve().parent.parent)
+    cwd = Path.cwd()
+    candidates.append(cwd)
+    candidates.extend(cwd.parents)
+
+    for candidate in candidates:
+        try:
+            root = candidate.resolve()
+        except Exception:
+            continue
+        if (root / "core").exists() and (root / "mcp").exists() and (root / "pyproject.toml").exists():
+            return root
+        if (root / ".git").exists() and (root / "core").exists():
+            return root
+    return Path(__file__).resolve().parent.parent
+
+
+CODE_ROOT = _discover_code_root()
 if str(CODE_ROOT) not in sys.path:
     sys.path.insert(0, str(CODE_ROOT))
 
@@ -1111,6 +1141,75 @@ def _prepare_profile_run(
     return artifact_manager.run_dir, profile_dir, run_id
 
 
+@contextlib.contextmanager
+def _profile_workdir_env(workdir: Path):
+    """Force profiling helpers to execute from a stable repository root cwd."""
+    prev = os.environ.get("AISP_PROFILE_WORKDIR")
+    os.environ["AISP_PROFILE_WORKDIR"] = str(workdir)
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop("AISP_PROFILE_WORKDIR", None)
+        else:
+            os.environ["AISP_PROFILE_WORKDIR"] = prev
+
+
+def _normalize_profile_command(command: Any) -> tuple[List[str], Optional[str]]:
+    """Normalize profiling command argv with repo-root script path resolution."""
+    if isinstance(command, str):
+        try:
+            command_list = shlex.split(command)
+        except Exception:
+            command_list = [command]
+    elif isinstance(command, list):
+        command_list = [str(part) for part in command]
+    else:
+        return [], "command must be a string or argv list"
+
+    if not command_list:
+        return [], None
+
+    normalized = list(command_list)
+
+    def _resolve_repo_script(script_arg: str) -> tuple[str, Optional[str]]:
+        script_path = Path(script_arg)
+        if script_path.is_absolute():
+            if not script_path.exists():
+                return script_arg, f"command script not found: {script_arg}"
+            return script_arg, None
+
+        repo_candidate = (CODE_ROOT / script_path).resolve()
+        if repo_candidate.exists():
+            return str(repo_candidate), None
+
+        cwd_candidate = (Path.cwd() / script_path).resolve()
+        if cwd_candidate.exists():
+            return str(cwd_candidate), None
+
+        return (
+            script_arg,
+            "command script not found; checked repo root and cwd: "
+            f"{script_arg}",
+        )
+
+    exe_name = Path(normalized[0]).name.lower()
+    if exe_name.startswith("python") and len(normalized) > 1:
+        second = normalized[1]
+        if second.endswith(".py"):
+            normalized_second, error = _resolve_repo_script(second)
+            normalized[1] = normalized_second
+            if error:
+                return normalized, error
+    elif normalized[0].endswith(".py"):
+        normalized_first, error = _resolve_repo_script(normalized[0])
+        normalized[0] = normalized_first
+        if error:
+            return normalized, error
+
+    return normalized, None
+
+
 def _read_progress_payload(progress_path: Optional[Path]) -> Optional[Dict[str, Any]]:
     if not progress_path:
         return None
@@ -1273,6 +1372,7 @@ _QUEUE_LOCK = threading.Lock()
 _QUEUE_LOG_LOCK = threading.Lock()
 _QUEUE_MAX_OVERLAP_RETRIES_ENV = "AISP_MCP_QUEUE_MAX_OVERLAP_RETRIES"
 _QUEUE_IDLE_TIMEOUT_ENV = "AISP_MCP_QUEUE_IDLE_TIMEOUT_SEC"
+_QUEUE_RUNNER_LOCK_TIMEOUT_ENV = "AISP_MCP_QUEUE_RUNNER_LOCK_TIMEOUT_SEC"
 
 
 def _queue_timestamp() -> str:
@@ -1297,6 +1397,15 @@ def _queue_idle_timeout_seconds() -> int:
     return max(0, value)
 
 
+def _queue_runner_lock_timeout_seconds() -> int:
+    raw = os.environ.get(_QUEUE_RUNNER_LOCK_TIMEOUT_ENV, "1800")
+    try:
+        value = int(raw)
+    except Exception:
+        value = 1800
+    return max(0, value)
+
+
 def _ensure_queue_artifacts() -> bool:
     try:
         _QUEUE_DIR.mkdir(parents=True, exist_ok=True)
@@ -1312,7 +1421,73 @@ def _ensure_queue_artifacts() -> bool:
             _QUEUE_SCRIPT_PATH.write_text(header)
         except Exception:
             return False
+    try:
+        _QUEUE_DIR.joinpath("queue.runner.lock").touch(exist_ok=True)
+    except Exception:
+        return False
     return True
+
+
+@contextlib.contextmanager
+def _queue_runner_lock(queue_id: str, tool_name: str, queue_label: Optional[str]):
+    """
+    Cross-process queue lock so multiple MCP server processes cannot run
+    bench/profiling payloads concurrently.
+    """
+    if fcntl is None:
+        yield
+        return
+    if not _ensure_queue_artifacts():
+        raise RuntimeError("Queue runner unavailable: failed to initialize artifacts/parallel_runs.")
+
+    lock_path = _QUEUE_DIR / "queue.runner.lock"
+    timeout = _queue_runner_lock_timeout_seconds()
+    started = time.monotonic()
+    wait_logged = False
+    lock_handle = lock_path.open("a+", encoding="utf-8")
+    acquired = False
+    try:
+        while True:
+            try:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except BlockingIOError:
+                if not wait_logged:
+                    _log_queue_event(
+                        f"RUNNER_LOCK_WAIT id={queue_id} tool={tool_name} label={queue_label} timeout_s={timeout}"
+                    )
+                    wait_logged = True
+                if timeout > 0 and (time.monotonic() - started) >= timeout:
+                    raise RuntimeError(
+                        f"Queue runner lock timeout after {timeout}s "
+                        f"(tool={tool_name}, id={queue_id}, label={queue_label})"
+                    )
+                time.sleep(1.0)
+        payload = {
+            "queue_id": queue_id,
+            "tool": tool_name,
+            "label": queue_label,
+            "pid": os.getpid(),
+            "ts": _queue_timestamp(),
+        }
+        lock_handle.seek(0)
+        lock_handle.truncate()
+        lock_handle.write(json.dumps(payload, default=str) + "\n")
+        lock_handle.flush()
+        _log_queue_event(f"RUNNER_LOCK_ACQUIRED id={queue_id} tool={tool_name} label={queue_label}")
+        yield
+    finally:
+        if acquired:
+            try:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            _log_queue_event(f"RUNNER_LOCK_RELEASED id={queue_id} tool={tool_name} label={queue_label}")
+        try:
+            lock_handle.close()
+        except Exception:
+            pass
 
 
 def _append_queue_script(entry: Dict[str, Any]) -> None:
@@ -1413,7 +1588,14 @@ def _active_run_processes(records: List[Dict[str, Any]], ignore_pids: set[int]) 
         if rec["pid"] in ignore_pids:
             continue
         cmd = rec["cmd"]
-        if "parallel_runs" in cmd or "bench_queue.sh" in cmd or "queue.log" in cmd:
+        if (
+            "parallel_runs" in cmd
+            or "bench_queue.sh" in cmd
+            or "queue.log" in cmd
+            or "queued_cmd." in cmd
+            or "queued_wrapper." in cmd
+            or "run_queue.sh" in cmd
+        ):
             continue
         if _is_active_run_command(cmd):
             active.append(rec)
@@ -1443,10 +1625,19 @@ def _wait_for_idle(poll_seconds: int = 5, timeout_seconds: Optional[int] = None)
         time.sleep(poll_seconds)
 
 
-def _monitor_overlap(stop_event: threading.Event, overlap_event: threading.Event, poll_seconds: int = 5) -> None:
+def _monitor_overlap(
+    stop_event: threading.Event,
+    overlap_event: threading.Event,
+    *,
+    baseline_ignore_pids: Optional[set[int]] = None,
+    poll_seconds: int = 5,
+) -> None:
+    baseline_roots = set(int(pid) for pid in (baseline_ignore_pids or set()))
     while not stop_event.is_set():
         records = _snapshot_processes()
         ignore_pids = _descendant_pids(os.getpid(), records)
+        for root in baseline_roots:
+            ignore_pids.update(_descendant_pids(root, records))
         active = _active_run_processes(records, ignore_pids)
         if active:
             overlap_event.set()
@@ -1505,82 +1696,109 @@ def _run_with_queue(
     if job_id:
         JOB_STORE.update_job(job_id, status="queued", note="Waiting for MCP queue runner.")
     with _QUEUE_LOCK:
-        if job_id:
-            JOB_STORE.update_job(job_id, status="running", note="Running via MCP queue runner.")
-        retries = 0
-        overlap_detected = False
-        idle_wait_timed_out = False
-        max_overlap_retries = _queue_max_overlap_retries()
-        while True:
-            idle_now = _wait_for_idle()
-            if not idle_now:
-                idle_wait_timed_out = True
-                _log_queue_event(
-                    f"WAIT_IDLE_BYPASS id={queue_id} tool={tool_name} label={queue_label} proceeding_with_overlap_guard=true"
+        with _queue_runner_lock(queue_id, tool_name, queue_label):
+            if job_id:
+                JOB_STORE.update_job(job_id, status="running", note="Running via MCP queue runner.")
+            retries = 0
+            overlap_detected = False
+            idle_wait_timed_out = False
+            max_overlap_retries = _queue_max_overlap_retries()
+            while True:
+                idle_now = _wait_for_idle()
+                if not idle_now:
+                    idle_wait_timed_out = True
+                    records = _snapshot_processes()
+                    ignore_pids = _descendant_pids(os.getpid(), records)
+                    active = _active_run_processes(records, ignore_pids)
+                    timeout_s = _queue_idle_timeout_seconds()
+                    _log_queue_event(
+                        f"WAIT_IDLE_ABORT id={queue_id} tool={tool_name} label={queue_label} "
+                        f"timeout_s={timeout_s} active_processes={len(active)}"
+                    )
+                    failure = {
+                        "success": False,
+                        "error": (
+                            f"Queue idle wait timed out after {timeout_s}s; refusing to run while other "
+                            "bench/profiling processes are active."
+                        ),
+                        "active_process_count": len(active),
+                        "active_processes": [rec.get("cmd", "") for rec in active[:5]],
+                    }
+                    return _attach_queue_metadata(failure, retries, overlap_detected, idle_wait_timed_out)
+                _log_queue_event(f"RUN_START id={queue_id} tool={tool_name} label={queue_label} attempt={retries + 1}")
+                start_ts = time.time()
+                stop_event = threading.Event()
+                overlap_event = threading.Event()
+                baseline_overlap_roots: set[int] = set()
+                if idle_wait_timed_out:
+                    # If we had to bypass idle-wait timeout, ignore those pre-existing
+                    # active runs when deciding overlap for this attempt.
+                    baseline_records = _snapshot_processes()
+                    baseline_ignore = _descendant_pids(os.getpid(), baseline_records)
+                    baseline_active = _active_run_processes(baseline_records, baseline_ignore)
+                    baseline_overlap_roots = {int(rec["pid"]) for rec in baseline_active}
+                monitor = threading.Thread(
+                    target=_monitor_overlap,
+                    args=(stop_event, overlap_event),
+                    kwargs={"baseline_ignore_pids": baseline_overlap_roots},
+                    daemon=True,
                 )
-            _log_queue_event(f"RUN_START id={queue_id} tool={tool_name} label={queue_label} attempt={retries + 1}")
-            start_ts = time.time()
-            stop_event = threading.Event()
-            overlap_event = threading.Event()
-            monitor = threading.Thread(
-                target=_monitor_overlap,
-                args=(stop_event, overlap_event),
-                daemon=True,
-            )
-            monitor.start()
-            try:
-                result = runner()
-            except Exception as exc:
+                monitor.start()
+                try:
+                    result = runner()
+                except Exception as exc:
+                    stop_event.set()
+                    monitor.join()
+                    _log_queue_event(
+                        f"RUN_END id={queue_id} tool={tool_name} label={queue_label} exit_code=1 error={exc}"
+                    )
+                    raise
                 stop_event.set()
                 monitor.join()
+                duration = time.time() - start_ts
+                overlap = overlap_event.is_set()
+                if overlap:
+                    overlap_detected = True
+                exit_code = _extract_exit_code(result)
                 _log_queue_event(
-                    f"RUN_END id={queue_id} tool={tool_name} label={queue_label} exit_code=1 error={exc}"
+                    f"RUN_END id={queue_id} tool={tool_name} label={queue_label} "
+                    f"exit_code={exit_code} overlap={overlap} duration_s={duration:.2f}"
                 )
-                raise
-            stop_event.set()
-            monitor.join()
-            duration = time.time() - start_ts
-            overlap = overlap_event.is_set()
-            if overlap:
-                overlap_detected = True
-            exit_code = _extract_exit_code(result)
-            _log_queue_event(
-                f"RUN_END id={queue_id} tool={tool_name} label={queue_label} "
-                f"exit_code={exit_code} overlap={overlap} duration_s={duration:.2f}"
-            )
-            if overlap:
-                # Avoid endless requeue loops on persistent overlap/noise.
-                if exit_code not in (0, None):
-                    _log_queue_event(
-                        f"OVERLAP_NOT_REQUEUED id={queue_id} tool={tool_name} "
-                        f"label={queue_label} reason=nonzero_exit exit_code={exit_code}"
-                    )
-                    result = _attach_queue_metadata(result, retries, overlap_detected, idle_wait_timed_out)
-                    if isinstance(result, dict):
-                        result.setdefault("queue", {})
-                        result["queue"]["overlap_retry_limit"] = max_overlap_retries
-                        result["queue"]["overlap_retry_exhausted"] = False
-                    return result
-                retries += 1
-                if retries > max_overlap_retries:
-                    _log_queue_event(
-                        f"OVERLAP_RETRY_EXHAUSTED id={queue_id} tool={tool_name} "
-                        f"label={queue_label} retries={retries - 1} limit={max_overlap_retries}"
-                    )
-                    result = _attach_queue_metadata(result, retries - 1, overlap_detected, idle_wait_timed_out)
-                    if isinstance(result, dict):
-                        result.setdefault("queue", {})
-                        result["queue"]["overlap_retry_limit"] = max_overlap_retries
-                        result["queue"]["overlap_retry_exhausted"] = True
-                    return result
-                _log_queue_event(f"REQUEUE id={queue_id} tool={tool_name} label={queue_label} reason=overlap")
-                continue
-            result = _attach_queue_metadata(result, retries, overlap_detected, idle_wait_timed_out)
-            if isinstance(result, dict):
-                result.setdefault("queue", {})
-                result["queue"]["overlap_retry_limit"] = max_overlap_retries
-                result["queue"]["overlap_retry_exhausted"] = False
-            return result
+                if overlap:
+                    # Avoid endless requeue loops on persistent overlap/noise.
+                    # Only requeue on an explicit successful run (exit_code == 0).
+                    # Any non-zero or unknown exit should fail loudly and stop retries.
+                    if exit_code != 0:
+                        _log_queue_event(
+                            f"OVERLAP_NOT_REQUEUED id={queue_id} tool={tool_name} "
+                            f"label={queue_label} reason=non_success_exit exit_code={exit_code}"
+                        )
+                        result = _attach_queue_metadata(result, retries, overlap_detected, idle_wait_timed_out)
+                        if isinstance(result, dict):
+                            result.setdefault("queue", {})
+                            result["queue"]["overlap_retry_limit"] = max_overlap_retries
+                            result["queue"]["overlap_retry_exhausted"] = False
+                        return result
+                    retries += 1
+                    if retries > max_overlap_retries:
+                        _log_queue_event(
+                            f"OVERLAP_RETRY_EXHAUSTED id={queue_id} tool={tool_name} "
+                            f"label={queue_label} retries={retries - 1} limit={max_overlap_retries}"
+                        )
+                        result = _attach_queue_metadata(result, retries - 1, overlap_detected, idle_wait_timed_out)
+                        if isinstance(result, dict):
+                            result.setdefault("queue", {})
+                            result["queue"]["overlap_retry_limit"] = max_overlap_retries
+                            result["queue"]["overlap_retry_exhausted"] = True
+                        return result
+                    _log_queue_event(f"REQUEUE id={queue_id} tool={tool_name} label={queue_label} reason=overlap")
+                    continue
+                result = _attach_queue_metadata(result, retries, overlap_detected, idle_wait_timed_out)
+                if isinstance(result, dict):
+                    result.setdefault("queue", {})
+                    result["queue"]["overlap_retry_limit"] = max_overlap_retries
+                    result["queue"]["overlap_retry_exhausted"] = False
+                return result
 
 
 def _context_snapshot() -> Dict[str, Any]:
@@ -2093,6 +2311,21 @@ def tool_system_network(params: Dict[str, Any]) -> Dict[str, Any]:
 )
 def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
     targets = params.get("targets") or []
+    for raw_target in targets:
+        target_text = str(raw_target).strip()
+        if not target_text:
+            return {
+                "error": "Empty target provided. Targets must be chapter or chapter:example strings.",
+                "success": False,
+            }
+        if target_text.startswith("-"):
+            return {
+                "error": (
+                    f"Invalid benchmark target '{target_text}'. "
+                    "Targets cannot begin with '-' (likely malformed CLI flags in target list)."
+                ),
+                "success": False,
+            }
 
     # Normalize profile - uses _COMMON_ALIASES for most common mistakes
     raw_profile = params.get("profile") or "minimal"
@@ -2181,6 +2414,41 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
             "hint": "Set rebenchmark_llm_patches=true to benchmark patches before explaining.",
             "success": False,
         }
+
+    # Return async ticket immediately; execute preflight + bench in background.
+    if run_async and not precheck_only and not dry_run:
+        run_dir = _resolve_run_dir(artifacts_dir, str(run_id)) if run_id else None
+        progress_path = _progress_path_for_run(run_dir, str(run_id)) if run_dir else None
+        sync_params = dict(params)
+        sync_params["async"] = False
+        if run_id and not sync_params.get("run_id"):
+            sync_params["run_id"] = str(run_id)
+        if profile and not sync_params.get("profile"):
+            sync_params["profile"] = profile
+        if artifacts_dir and not sync_params.get("artifacts_dir"):
+            sync_params["artifacts_dir"] = str(artifacts_dir)
+
+        job_id = f"run_benchmarks-{uuid.uuid4().hex[:10]}"
+        run_metadata = {
+            "run_id": run_id,
+            "run_dir": str(run_dir) if run_dir else None,
+            "progress_path": str(progress_path) if progress_path else None,
+        }
+        queued = _queue_job(
+            "run_benchmarks",
+            lambda: tool_run_benchmarks(sync_params),
+            params,
+            run_metadata=run_metadata,
+            job_id=job_id,
+        )
+        queued["targets"] = targets
+        queued["queue_log"] = str(_QUEUE_LOG_PATH)
+        queued["queue_script"] = str(_QUEUE_SCRIPT_PATH)
+        queued["note"] = (
+            "Background benchmark accepted; poll with job_status using job_id. "
+            "Preflight and benchmark execution run inside the queued job."
+        )
+        return queued
 
     llm_requested = bool(
         llm_analysis
@@ -2314,28 +2582,6 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
             auto_report=auto_report,
             report_format=report_format,
         )
-
-    if run_async:
-        job_id = f"run_benchmarks-{uuid.uuid4().hex[:10]}"
-        def _execute_benchmarks_queued():
-            return _execute_benchmarks(job_id)
-        run_metadata = {
-            "run_id": run_id,
-            "run_dir": str(run_dir) if run_dir else None,
-            "progress_path": str(progress_path) if progress_path else None,
-        }
-        queued = _queue_job(
-            "run_benchmarks",
-            _execute_benchmarks_queued,
-            params,
-            run_metadata=run_metadata,
-            job_id=job_id,
-        )
-        queued["targets"] = targets
-        queued["queue_log"] = str(_QUEUE_LOG_PATH)
-        queued["queue_script"] = str(_QUEUE_SCRIPT_PATH)
-        queued["note"] = "Background benchmark started; poll with job_status using job_id. When complete, use benchmark_triage to analyze results."
-        return queued
 
     result = _execute_benchmarks()
     # Add suggested next steps to help users continue their workflow
@@ -2627,6 +2873,34 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
     if not targets:
         return make_error("targets or path is required", include_context, context_level)
 
+    # Return async ticket immediately; run bench + deep-dive analysis in background.
+    if run_async:
+        sync_params = dict(params)
+        sync_params["async"] = False
+        if run_id and not sync_params.get("run_id"):
+            sync_params["run_id"] = str(run_id)
+        if output_dir and not sync_params.get("output_dir"):
+            sync_params["output_dir"] = output_dir
+        run_metadata = {
+            "run_id": run_id,
+            "run_dir": str(run_dir),
+            "progress_path": str(progress_path) if progress_path else None,
+        }
+        queued = _queue_job(
+            "benchmark_deep_dive_compare",
+            lambda: tool_benchmark_deep_dive_compare(sync_params),
+            params,
+            run_metadata=run_metadata,
+        )
+        queued["output_dir"] = output_dir
+        queued["run_id"] = run_id
+        queued["targets"] = targets
+        queued["note"] = (
+            "Background deep-dive accepted; poll with job_status using job_id. "
+            "Bench execution and profile analysis run inside the queued job."
+        )
+        return queued
+
     def _run_and_analyze() -> Dict[str, Any]:
         test_mode = _is_test_mode()
         profile_mode = "none" if test_mode else "deep_dive"
@@ -2877,19 +3151,6 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
             "progress_path": str(run_dir_path / "progress" / "run_progress.json"),
             "success": True,
         }
-
-    if run_async:
-        run_metadata = {
-            "run_id": run_id,
-            "run_dir": str(run_dir),
-            "progress_path": str(progress_path) if progress_path else None,
-        }
-        queued = _queue_job("benchmark_deep_dive_compare", _run_and_analyze, params, run_metadata=run_metadata)
-        queued["output_dir"] = output_dir
-        queued["run_id"] = run_id
-        queued["targets"] = targets
-        queued["note"] = "Background deep-dive started; poll with job_status using job_id."
-        return queued
 
     result = _run_and_analyze()
     result["run_id"] = run_id
@@ -5681,9 +5942,12 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
     from core.profiling.nsight_automation import NsightAutomation
 
     include_context, context_level = extract_context_opts(params)
-    command = params.get("command") or []
+    command_raw = params.get("command") or []
+    command, command_error = _normalize_profile_command(command_raw)
     if not command:
         return make_error("command is required", include_context, context_level)
+    if command_error:
+        return make_error(command_error, include_context, context_level)
 
     output_name = params.get("output_name", "mcp_nsys")
     run_dir, profile_dir, run_id = _prepare_profile_run(
@@ -5706,7 +5970,8 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
     timeout_param = params.get("timeout_seconds")
     timeout_seconds = None if timeout_param is None else int(timeout_param)
 
-    automation = NsightAutomation(profile_dir)
+    with _profile_workdir_env(CODE_ROOT):
+        automation = NsightAutomation(profile_dir)
     cuda_check = _cuda_precheck()
     precheck = {
         "nsys_available": automation.nsys_available,
@@ -5761,19 +6026,20 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
                 percent_complete=0.0,
             ),
         )
-        auto = NsightAutomation(profile_dir)
-        path = auto.profile_nsys(
-            command=command,
-            output_name=output_name,
-            trace_cuda=trace_cuda,
-            trace_nvtx=trace_nvtx,
-            trace_osrt=trace_osrt,
-            full_timeline=full_timeline,
-            trace_forks=trace_forks,
-            preset=preset,
-            force_lineinfo=force_lineinfo,
-            timeout_seconds=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
-        )
+        with _profile_workdir_env(CODE_ROOT):
+            auto = NsightAutomation(profile_dir)
+            path = auto.profile_nsys(
+                command=command,
+                output_name=output_name,
+                trace_cuda=trace_cuda,
+                trace_nvtx=trace_nvtx,
+                trace_osrt=trace_osrt,
+                full_timeline=full_timeline,
+                trace_forks=trace_forks,
+                preset=preset,
+                force_lineinfo=force_lineinfo,
+                timeout_seconds=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
+            )
         nsys_metrics: Dict[str, Any] = {}
         nsys_metrics_error = None
         if path:
@@ -5792,7 +6058,7 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
             "success": path is not None,
             "output": str(path) if path else None,
             "nsys_available": auto.nsys_available,
-            "cwd": str(profile_dir),
+            "cwd": str(getattr(auto, "last_run", {}).get("cwd", profile_dir)),
             "preset": preset,
             "full_timeline": full_timeline or preset == "full",
             "force_lineinfo": force_lineinfo,
@@ -5878,7 +6144,7 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
     "metric_set selects the NCU --set; workload_type picks custom metrics (only when metric_set=full). "
     "workload_type: memory_bound (default, fast), compute_bound, tensor_core. "
     "🕐 SLOW (varies). WORKFLOW: profile_kernels → profile_ncu. NOT FOR: Timeline (use profile_nsys). "
-    "DEFAULTS: metric_set='full' by default; use metric_set='minimal' (speed-of-light) for routine baseline/optimized compares; "
+    "DEFAULTS: metric_set='full' by default; use metric_set='minimal' (auto-resolves to speed-of-light/basic by Nsight version) for routine baseline/optimized compares; "
     "use metric_set='roofline' for bound analysis; use metric_set='full' for deep dives. "
     "COMPARE: compare_ncu auto-pairs baseline/optimized across subdirectories; pass pair if multiple pairs exist. "
     "Use launch_skip/launch_count to limit captures on many-launch benchmarks (e.g., 4096 batches). "
@@ -5961,8 +6227,8 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
         },
         "metric_set": {
             "type": "string",
-            "description": "NCU --set selection: full, speed-of-light (minimal), roofline. workload_type is used only when metric_set=full.",
-            "enum": ["full", "speed-of-light", "roofline", "minimal"],
+            "description": "NCU --set selection: full, roofline, minimal, speed-of-light, basic. workload_type is used only when metric_set=full.",
+            "enum": ["full", "speed-of-light", "roofline", "minimal", "basic"],
             "default": "full"
         },
         "launch_skip": {
@@ -5989,9 +6255,12 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
     from core.profiling.nsight_automation import NsightAutomation
 
     include_context, context_level = extract_context_opts(params)
-    command = params.get("command") or []
+    command_raw = params.get("command") or []
+    command, command_error = _normalize_profile_command(command_raw)
     if not command:
         return make_error("command is required", include_context, context_level)
+    if command_error:
+        return make_error(command_error, include_context, context_level)
 
     output_name = params.get("output_name", "mcp_ncu")
     run_dir, profile_dir, run_id = _prepare_profile_run(
@@ -6035,12 +6304,11 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
     effective_launch_skip = launch_skip
     effective_launch_count = launch_count
     if kernel_filter:
-        if effective_launch_skip is None:
-            effective_launch_skip = 100
         if effective_launch_count is None:
             effective_launch_count = 1
 
-    automation = NsightAutomation(profile_dir)
+    with _profile_workdir_env(CODE_ROOT):
+        automation = NsightAutomation(profile_dir)
     cuda_check = _cuda_precheck()
     precheck = {
         "nsys_available": automation.nsys_available,
@@ -6065,6 +6333,12 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
         return make_error("ncu is not installed or not on PATH", include_context, context_level, **precheck)
     if not cuda_check.get("ok", True):
         return make_error(cuda_check.get("reason", "CUDA not available"), include_context, context_level, **precheck)
+    try:
+        metric_set_resolved = automation._resolve_ncu_set(metric_set)  # type: ignore[attr-defined]
+    except ValueError as exc:
+        return make_error(str(exc), include_context, context_level, **precheck)
+    except Exception:
+        metric_set_resolved = None
 
     output_path = profile_dir / f"{output_name}.ncu-rep"
     if dry_run:
@@ -6080,6 +6354,7 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
             "timeout_seconds": timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
             "pm_sampling_interval": sampling_interval,
             "metric_set": metric_set,
+            "metric_set_resolved": metric_set_resolved,
             "launch_skip": effective_launch_skip,
             "launch_count": effective_launch_count,
             "replay_mode": replay_mode,
@@ -6104,27 +6379,29 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
                 percent_complete=0.0,
             ),
         )
-        auto = NsightAutomation(profile_dir)
-        path = auto.profile_ncu(
-            command=command,
-            output_name=output_name,
-            workload_type=workload_type,
-            kernel_filter=kernel_filter,
-            kernel_name_base=kernel_name_base,
-            nvtx_includes=nvtx_includes,
-            profile_from_start=profile_from_start,
-            force_lineinfo=force_lineinfo,
-            timeout_seconds=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
-            sampling_interval=sampling_interval,
-            metric_set=metric_set,
-            launch_skip=launch_skip,
-            launch_count=launch_count,
-            replay_mode=replay_mode,
-        )
+        with _profile_workdir_env(CODE_ROOT):
+            auto = NsightAutomation(profile_dir)
+            path = auto.profile_ncu(
+                command=command,
+                output_name=output_name,
+                workload_type=workload_type,
+                kernel_filter=kernel_filter,
+                kernel_name_base=kernel_name_base,
+                nvtx_includes=nvtx_includes,
+                profile_from_start=profile_from_start,
+                force_lineinfo=force_lineinfo,
+                timeout_seconds=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
+                sampling_interval=sampling_interval,
+                metric_set=metric_set,
+                launch_skip=launch_skip,
+                launch_count=launch_count,
+                replay_mode=replay_mode,
+            )
         run_details = getattr(auto, "last_run", {})  # type: ignore[attr-defined]
         launch_skip_used = run_details.get("launch_skip", launch_skip)
         launch_count_used = run_details.get("launch_count", launch_count)
         replay_mode_used = run_details.get("replay_mode", replay_mode)
+        metric_set_resolved_run = run_details.get("metric_set_resolved", metric_set_resolved)
         ncu_metrics: Dict[str, Any] = {}
         ncu_metrics_error = None
         if path:
@@ -6145,11 +6422,12 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
             "output": str(path) if path else None,
             "workload_type": workload_type,
             "ncu_available": auto.ncu_available,
-            "cwd": str(profile_dir),
+            "cwd": str(run_details.get("cwd", profile_dir)),
             "force_lineinfo": force_lineinfo,
             "timeout_seconds": timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
             "pm_sampling_interval": sampling_interval,
             "metric_set": metric_set,
+            "metric_set_resolved": metric_set_resolved_run,
             "launch_skip": launch_skip_used,
             "launch_count": launch_count_used,
             "replay_mode": replay_mode_used,
@@ -6428,17 +6706,17 @@ def tool_profile_torch(params: Dict[str, Any]) -> Dict[str, Any]:
 )
 def tool_profile_hta(params: Dict[str, Any]) -> Dict[str, Any]:
     """Run nsys + HTA analysis."""
-    import shlex
     from pathlib import Path
     from core.profiling.hta_capture import HTACaptureAutomation
     from core.profiling.nsight_automation import NsightAutomation
 
     include_context, context_level = extract_context_opts(params)
-    command_list = params.get("command") or []
-    if isinstance(command_list, str):
-        command_list = shlex.split(command_list)
+    command_raw = params.get("command") or []
+    command_list, command_error = _normalize_profile_command(command_raw)
     if not command_list:
         return make_error("command is required", include_context, context_level)
+    if command_error:
+        return make_error(command_error, include_context, context_level)
 
     output_name = params.get("output_name", "mcp_hta")
     run_dir, profile_dir, run_id = _prepare_profile_run(
@@ -6456,7 +6734,8 @@ def tool_profile_hta(params: Dict[str, Any]) -> Dict[str, Any]:
     timeout_param = params.get("timeout_seconds")
     timeout_seconds = None if timeout_param is None else int(timeout_param)
 
-    nsight = NsightAutomation(profile_dir)
+    with _profile_workdir_env(CODE_ROOT):
+        nsight = NsightAutomation(profile_dir)
     try:
         import hta  # noqa: F401
         hta_available = True
@@ -6502,14 +6781,15 @@ def tool_profile_hta(params: Dict[str, Any]) -> Dict[str, Any]:
                 percent_complete=0.0,
             ),
         )
-        runner = HTACaptureAutomation(profile_dir)
-        result = runner.capture(
-            command=command_list,
-            output_name=output_name,
-            preset=preset,
-            force_lineinfo=force_lineinfo,
-            timeout_seconds=timeout_seconds,
-        )
+        with _profile_workdir_env(CODE_ROOT):
+            runner = HTACaptureAutomation(profile_dir)
+            result = runner.capture(
+                command=command_list,
+                output_name=output_name,
+                preset=preset,
+                force_lineinfo=force_lineinfo,
+                timeout_seconds=timeout_seconds,
+            )
         result.update({"hta_available": hta_available, "nsys_available": nsight.nsys_available})
         nsys_metrics: Dict[str, Any] = {}
         nsys_metrics_error = None
@@ -7475,6 +7755,7 @@ def tool_compare_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
     "🕐 MEDIUM (~5s). USE when: Deep-diving into kernel-level improvements. "
     "Tip: if you used benchmark_deep_dive_compare, pass benchmarks[].profiles_dir here. "
     "Auto-pairs baseline/optimized across subdirectories; if multiple pairs exist, provide pair to select one. "
+    "Rank-only kernel symbol alignment is flagged as low-confidence for tuning and surfaced as a failed comparison. "
     "Always returns nsys/ncu comparison metrics when profiles are captured; analyze metric deltas to explain speedups/regressions. "
     "WORKFLOW: profile_ncu → optimize → compare_ncu. NOT FOR: Timeline comparison (use compare_nsys).",
     {"type": "object", "properties": with_context_params({
@@ -7495,6 +7776,18 @@ def tool_compare_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
         result = profile_insights.compare_ncu_files(profiles_dir, pair_key=pair_key)
         if result is None:
             result = {"error": "No comparable ncu files found", "success": False}
+        elif isinstance(result, dict):
+            alignment_valid = bool(result.get("alignment_valid_for_tuning", True))
+            if not alignment_valid:
+                result["success"] = False
+                result["error"] = (
+                    "NCU kernel comparison alignment is low-confidence (rank-only/unmatched symbols). "
+                    "Re-capture with tighter NVTX includes and kernel filters for decisive kernel deltas."
+                )
+                result.setdefault(
+                    "hint",
+                    "Use profile_ncu with kernel_filter + nvtx_include and compare a concrete baseline/optimized pair directory.",
+                )
         nsys_comparison = profile_insights.compare_nsys_files(profiles_dir, pair_key=pair_key)
         if nsys_comparison is not None:
             result["nsys_comparison"] = nsys_comparison

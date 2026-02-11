@@ -24,7 +24,7 @@ class TestBenchmarkDefaults:
         assert defaults.warmup == 10
         assert defaults.enable_profiling is False
         assert defaults.enable_nsys is False
-        assert defaults.enable_ncu is True
+        assert defaults.enable_ncu is False
         assert defaults.use_subprocess is True
         assert defaults.measurement_timeout_seconds == 1200
         assert defaults.execution_mode is None
@@ -40,7 +40,7 @@ class TestBenchmarkDefaults:
         # Should use declared defaults
         assert defaults.enable_profiling is False, "enable_profiling should default to False"
         assert defaults.enable_nsys is False, "enable_nsys should default to False"
-        assert defaults.enable_ncu is True, "enable_ncu should default to True"
+        assert defaults.enable_ncu is False, "enable_ncu should default to False"
         assert defaults.use_subprocess is True, "use_subprocess should default to True"
         assert defaults.execution_mode is None, "execution_mode should default to None"
         assert defaults.iterations == 100, "iterations should default to 100"
@@ -58,7 +58,7 @@ class TestBenchmarkConfigDefaults:
         assert config.warmup == 10
         assert config.enable_profiling is False, "enable_profiling should default to False"
         assert config.enable_nsys is False, "enable_nsys should default to False"
-        assert config.enable_ncu is True, "enable_ncu should default to True"
+        assert config.enable_ncu is False, "enable_ncu should default to False"
         assert config.use_subprocess is True, "use_subprocess should default to True"
         assert config.execution_mode == ExecutionMode.SUBPROCESS
         assert config.launch_via == LaunchVia.PYTHON

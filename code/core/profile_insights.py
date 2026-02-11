@@ -8,6 +8,7 @@ structures so they can be reused by any interface.
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 import math
@@ -39,13 +40,59 @@ def _materialize_profile_if_needed(path: Path, *, root: Optional[Path] = None) -
     except Exception:
         return path
 
-    dst = materialized_root / path.name
+    suffix = "".join(path.suffixes)
+    stem = path.name[: -len(suffix)] if suffix else path.name
+    digest_input = f"{path.absolute()}::{resolved}".encode("utf-8", errors="ignore")
+    digest = hashlib.sha1(digest_input).hexdigest()[:12]
+    dst_name = f"{stem}__{digest}{suffix}"
+    dst = materialized_root / dst_name
     try:
         if not dst.exists() or resolved.stat().st_mtime > dst.stat().st_mtime:
             shutil.copy2(resolved, dst)
         return dst
     except Exception:
         return path
+
+
+def _stage_profile_pair(
+    baseline_path: Path,
+    optimized_path: Path,
+    *,
+    root: Path,
+    label: str,
+) -> tuple[Path, Path]:
+    """Copy a selected pair into a concrete baseline/optimized staging directory."""
+    # Prefer concrete files for comparison tools; symlink-heavy layouts can make
+    # auto-pairing and downstream report generation brittle.
+    baseline_src = _materialize_profile_if_needed(baseline_path, root=root)
+    optimized_src = _materialize_profile_if_needed(optimized_path, root=root)
+
+    baseline_suffix = "".join(baseline_path.suffixes) or baseline_path.suffix
+    optimized_suffix = "".join(optimized_path.suffixes) or optimized_path.suffix
+    digest_src = (
+        f"{baseline_path.absolute()}::{optimized_path.absolute()}::"
+        f"{baseline_src.absolute()}::{optimized_src.absolute()}::{label}"
+    )
+    digest = hashlib.sha1(digest_src.encode("utf-8", errors="ignore")).hexdigest()[:12]
+    stage_dir = root / ".staged_profile_pairs" / f"pair_{digest}"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+
+    baseline_dst = stage_dir / f"baseline{baseline_suffix}"
+    optimized_dst = stage_dir / f"optimized{optimized_suffix}"
+
+    try:
+        if not baseline_dst.exists() or baseline_src.stat().st_mtime > baseline_dst.stat().st_mtime:
+            shutil.copy2(baseline_src, baseline_dst)
+    except Exception:
+        baseline_dst = baseline_src
+
+    try:
+        if not optimized_dst.exists() or optimized_src.stat().st_mtime > optimized_dst.stat().st_mtime:
+            shutil.copy2(optimized_src, optimized_dst)
+    except Exception:
+        optimized_dst = optimized_src
+
+    return baseline_dst, optimized_dst
 
 
 def _extract_ncu_sources(ncu_path: Path, limit: int = 12) -> List[Dict[str, str]]:
@@ -503,8 +550,12 @@ def compare_nsys_files(
         return None
 
     baseline_path, optimized_path = pair
-    baseline_path = _materialize_profile_if_needed(baseline_path, root=profiles_dir)
-    optimized_path = _materialize_profile_if_needed(optimized_path, root=profiles_dir)
+    baseline_path, optimized_path = _stage_profile_pair(
+        baseline_path,
+        optimized_path,
+        root=profiles_dir,
+        label="nsys",
+    )
 
     try:
         from core.profiling.extract_nsys_summary import harvest
@@ -515,6 +566,8 @@ def compare_nsys_files(
         comparison = {
             "baseline_file": baseline_path.name,
             "optimized_file": optimized_path.name,
+            "baseline_path": str(baseline_path),
+            "optimized_path": str(optimized_path),
             "pair_key": pair_key or selected_pair_key,
             "metrics": [],
             "baseline_sources": _extract_nsys_sources(baseline_path),
@@ -591,6 +644,12 @@ def compare_ncu_files(
             return None
 
         baseline_csv_path, optimized_csv_path = pair
+        baseline_csv_path, optimized_csv_path = _stage_profile_pair(
+            baseline_csv_path,
+            optimized_csv_path,
+            root=profiles_dir,
+            label="ncu_csv",
+        )
         selected_pair_key = pair_key or selected_key
 
         try:
@@ -611,6 +670,9 @@ def compare_ncu_files(
             comparison = {
                 "baseline_file": baseline_csv_path.name,
                 "optimized_file": optimized_csv_path.name,
+                "baseline_path": str(baseline_csv_path),
+                "optimized_path": str(optimized_csv_path),
+                "pair_key": pair_key or selected_pair_key,
                 "metrics": [],
             }
             if include_ncu_details and baseline_ncu and optimized_ncu:
@@ -624,6 +686,12 @@ def compare_ncu_files(
                     return rep_error
                 if rep_pair:
                     baseline_rep, optimized_rep = rep_pair
+                    baseline_rep, optimized_rep = _stage_profile_pair(
+                        baseline_rep,
+                        optimized_rep,
+                        root=profiles_dir,
+                        label="ncu_rep_details",
+                    )
                     comparison["baseline_sources"] = _extract_ncu_sources(baseline_rep)
                     comparison["optimized_sources"] = _extract_ncu_sources(optimized_rep)
                     comparison["baseline_disassembly"] = _extract_ncu_disassembly(baseline_rep)
@@ -762,8 +830,12 @@ def compare_ncu_files(
         return None
 
     baseline_path, optimized_path = pair
-    baseline_path = _materialize_profile_if_needed(baseline_path, root=profiles_dir)
-    optimized_path = _materialize_profile_if_needed(optimized_path, root=profiles_dir)
+    baseline_path, optimized_path = _stage_profile_pair(
+        baseline_path,
+        optimized_path,
+        root=profiles_dir,
+        label="ncu",
+    )
 
     try:
         baseline_per_kernel = _load_metrics(baseline_path)
@@ -820,6 +892,8 @@ def compare_ncu_files(
     comparison = {
         "baseline_file": baseline_path.name,
         "optimized_file": optimized_path.name,
+        "baseline_path": str(baseline_path),
+        "optimized_path": str(optimized_path),
         "pair_key": pair_key or selected_pair_key,
         "kernel_pairing": {
             "paired_count": len(paired_kernels),
@@ -830,10 +904,34 @@ def compare_ncu_files(
         },
         "kernel_comparison": [_kernel_payload(pair) for pair in paired_kernels],
     }
+    alignment_valid = (exact_count + fuzzy_count) > 0
+    if exact_count > 0:
+        alignment_quality = "exact"
+    elif fuzzy_count > 0:
+        alignment_quality = "fuzzy"
+    elif rank_count > 0:
+        alignment_quality = "rank_only"
+    elif unmatched_count > 0:
+        alignment_quality = "unmatched_only"
+    else:
+        alignment_quality = "none"
+    comparison["alignment_quality"] = alignment_quality
+    comparison["alignment_valid_for_tuning"] = alignment_valid
     if exact_count == 0 and fuzzy_count == 0 and paired_kernels:
         comparison["pairing_warning"] = (
-            "Kernel symbols did not align exactly; rely on aggregate metrics and dominant kernels for tuning."
+            "Kernel symbols did not align (rank-only/unmatched mapping). "
+            "Treat per-kernel deltas as low-confidence; capture with tighter NVTX/kernel filters for decisive tuning."
         )
+        comparison["success"] = False
+        comparison["error"] = (
+            "NCU kernel comparison alignment is low-confidence (rank-only/unmatched symbols). "
+            "Re-capture with tighter NVTX includes and kernel filters for decisive kernel deltas."
+        )
+        comparison["hint"] = (
+            "Use profile_ncu with kernel_filter + nvtx_include and compare a concrete baseline/optimized pair directory."
+        )
+    else:
+        comparison["success"] = True
 
     baseline_agg = _aggregate_ncu_metrics(baseline_per_kernel)
     optimized_agg = _aggregate_ncu_metrics(optimized_per_kernel)
@@ -1567,16 +1665,6 @@ def _path_name_candidates(path: Path) -> List[str]:
         names.append(path.parent.name)
     if path.parent and path.parent.parent:
         names.append(path.parent.parent.name)
-    try:
-        if path.is_symlink():
-            resolved = path.resolve()
-            names.append(resolved.name)
-            if resolved.parent:
-                names.append(resolved.parent.name)
-            if resolved.parent and resolved.parent.parent:
-                names.append(resolved.parent.parent.name)
-    except Exception:
-        pass
     return names
 
 
@@ -1611,11 +1699,39 @@ def _collect_profile_role_files(
     suffix: str,
     name_predicate: Optional[Callable[[Path], bool]] = None,
 ) -> Tuple[List[Path], List[Path]]:
+    def _safe_mtime(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except Exception:
+            return 0.0
+
     files = list(profiles_dir.glob(f"*{suffix}"))
     files.extend(list(profiles_dir.rglob(f"*{suffix}")))
+
+    # Avoid recursive self-noise from internal copy staging.
+    files = [
+        path
+        for path in files
+        if ".materialized_profiles" not in path.parts and ".staged_profile_pairs" not in path.parts
+    ]
+
+    # Materialize symlink artifacts up front so pairing/classification operates
+    # on concrete files even when capture directories contain link-heavy layouts.
+    materialized_files: List[Path] = []
+    for path in files:
+        if path.is_symlink():
+            materialized = _materialize_profile_if_needed(path, root=profiles_dir)
+            materialized_files.append(materialized)
+        else:
+            materialized_files.append(path)
+    files = materialized_files
+
     deduped: Dict[str, Path] = {}
     for path in files:
-        deduped[str(path)] = path
+        # Deduplicate by concrete discovered path only. Do not collapse by
+        # resolved target, otherwise distinct role-tagged captures can merge.
+        dedupe_key = str(path.absolute())
+        deduped[dedupe_key] = path
     files = list(deduped.values())
     if name_predicate is not None:
         files = [path for path in files if name_predicate(path)]
@@ -1636,7 +1752,16 @@ def _collect_profile_role_files(
     # are absent, infer baseline/optimized from capture time to keep compare
     # tools usable without symlink-based layouts.
     if not baseline_files and not optimized_files and len(unclassified) == 2:
-        ordered = sorted(unclassified, key=lambda p: p.stat().st_mtime)
+        ordered = sorted(unclassified, key=_safe_mtime)
+        baseline_files = [ordered[0]]
+        optimized_files = [ordered[1]]
+
+    # Robust fallback: some symlink-heavy layouts can misclassify both files as
+    # the same role via parent directory tokens. If there are exactly two files,
+    # force deterministic baseline/optimized assignment by capture time.
+    all_files = baseline_files + optimized_files + unclassified
+    if len(all_files) == 2 and (not baseline_files or not optimized_files):
+        ordered = sorted(all_files, key=_safe_mtime)
         baseline_files = [ordered[0]]
         optimized_files = [ordered[1]]
     return baseline_files, optimized_files
@@ -1680,6 +1805,43 @@ def _select_profile_pair(
     pair_key: Optional[str],
     label: str,
 ) -> tuple[Optional[tuple[Path, Path]], Optional[str], Optional[Dict[str, Any]]]:
+    def _safe_mtime(path: Path) -> float:
+        try:
+            return float(path.stat().st_mtime)
+        except Exception:
+            return 0.0
+
+    def _role_pair_fallback(
+        baselines: List[Path],
+        optimized: List[Path],
+        requested_key: Optional[str],
+    ) -> tuple[Path, Path]:
+        # Token-aware fallback when canonical key grouping fails (e.g., standalone
+        # captures with non-matching filenames). Prefer stronger name overlap,
+        # then tighter capture-time proximity, then newest captures.
+        key_tokens = set(_tokenize_profile_name(requested_key or ""))
+        scored: List[Tuple[float, float, float, Path, Path]] = []
+        for b in baselines:
+            b_tokens = set(_tokenize_profile_name(b.name)) - _ROLE_TOKENS
+            for o in optimized:
+                o_tokens = set(_tokenize_profile_name(o.name)) - _ROLE_TOKENS
+                overlap = len(b_tokens & o_tokens)
+                union = len(b_tokens | o_tokens) or 1
+                token_score = overlap / union
+                if key_tokens:
+                    key_score = (
+                        len((b_tokens | o_tokens) & key_tokens) / max(len(key_tokens), 1)
+                    )
+                else:
+                    key_score = 0.0
+                dt_score = -abs(_safe_mtime(b) - _safe_mtime(o))
+                scored.append((key_score, token_score, dt_score, b, o))
+        if not scored:
+            raise ValueError("no baseline/optimized files available")
+        scored.sort(key=lambda item: (item[0], item[1], item[2], item[3], item[4]))
+        _, _, _, baseline_choice, optimized_choice = scored[-1]
+        return baseline_choice, optimized_choice
+
     if not baseline_files or not optimized_files:
         return None, None, None
 
@@ -1689,7 +1851,10 @@ def _select_profile_pair(
     if not candidates and len(baseline_files) == 1 and len(optimized_files) == 1:
         return (baseline_files[0], optimized_files[0]), "single_role_pair", None
     if not candidates:
-        return None, None, None
+        fallback_baseline, fallback_optimized = _role_pair_fallback(
+            baseline_files, optimized_files, pair_key
+        )
+        return (fallback_baseline, fallback_optimized), "role_fallback", None
 
     candidate_keys = sorted(candidates.keys())
     if pair_key is None:

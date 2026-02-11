@@ -237,7 +237,8 @@ if not torch.cuda.is_available():
     print("CUDA not available")
     exit(1)
 x = torch.randn(1000, 1000, device="cuda")
-y = torch.mm(x, x)
+for _ in range(16):
+    y = torch.mm(x, x)
 torch.cuda.synchronize()
 print("OK")
 ''')
