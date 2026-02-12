@@ -1,9 +1,9 @@
-"""CUDA extension loader for CUTLASS SM100 NVFP4 block-scaled grouped GEMM."""
+"""CUDA extension loader for experimental SM100 NVFP4 dynamic blockscaled grouped GEMM."""
 
 from __future__ import annotations
 
-import sys
 import builtins
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -15,12 +15,11 @@ import torch
 
 from core.utils.extension_loader_template import load_cuda_extension
 
-_EXT_NAME = "nvfp4_group_gemm_cutlass_sm100"
+_EXT_NAME = "nvfp4_group_gemm_cutlass_sm100_dyn"
 _EXT: Optional[object] = None
 
 
 def _get_process_extension_cache() -> dict[str, object]:
-    """Return a process-global cache shared across import paths."""
     cache_name = "_AISP_EXT_PROCESS_CACHE"
     cache = getattr(builtins, cache_name, None)
     if not isinstance(cache, dict):
@@ -29,11 +28,12 @@ def _get_process_extension_cache() -> dict[str, object]:
     return cache
 
 
-def load_cutlass_nvfp4_grouped_gemm_sm100(*, verbose: bool = False) -> object:
-    """Load (and JIT-build if needed) the CUTLASS NVFP4 grouped GEMM extension."""
+def load_cutlass_nvfp4_grouped_gemm_sm100_dyn(*, verbose: bool = False) -> object:
+    """Load (and JIT-build if needed) the experimental dynamic-schedule extension."""
     global _EXT
     if _EXT is not None:
         return _EXT
+
     process_cache = _get_process_extension_cache()
     cached = process_cache.get(_EXT_NAME)
     if cached is not None:
@@ -45,7 +45,7 @@ def load_cutlass_nvfp4_grouped_gemm_sm100(*, verbose: bool = False) -> object:
         return _EXT
 
     lab_dir = Path(__file__).resolve().parent
-    source = lab_dir / "cutlass_nvfp4_grouped_gemm_sm100.cu"
+    source = lab_dir / "cutlass_nvfp4_grouped_gemm_sm100_dyn.cu"
 
     cutlass_util_inc = REPO_ROOT / "third_party" / "cutlass" / "tools" / "util" / "include"
     if not cutlass_util_inc.exists():
@@ -58,7 +58,6 @@ def load_cutlass_nvfp4_grouped_gemm_sm100(*, verbose: bool = False) -> object:
         "--expt-relaxed-constexpr",
         "--expt-extended-lambda",
         "-lineinfo",
-        # B200 (SM100). We keep this narrow to reduce compile time.
         "-gencode=arch=compute_100a,code=sm_100a",
     ]
 
@@ -70,10 +69,10 @@ def load_cutlass_nvfp4_grouped_gemm_sm100(*, verbose: bool = False) -> object:
         extra_ldflags=["-lcuda"],
         verbose=verbose,
     )
-    # Keep cache coherent even when module is imported through different paths.
+
     process_cache[_EXT_NAME] = _EXT
     sys.modules[_EXT_NAME] = _EXT
     return _EXT
 
 
-__all__ = ["load_cutlass_nvfp4_grouped_gemm_sm100"]
+__all__ = ["load_cutlass_nvfp4_grouped_gemm_sm100_dyn"]

@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, cast
 import torch
 
 from labs.nvfp4_group_gemm.cutlass_extension import load_cutlass_nvfp4_grouped_gemm_sm100
+from labs.nvfp4_group_gemm.cutlass_extension_dyn import load_cutlass_nvfp4_grouped_gemm_sm100_dyn
 from labs.nvfp4_group_gemm.task import input_t, output_t
 
 
@@ -36,10 +37,12 @@ _KernelVariant = Literal[
     "1sm_n128",
     "2sm",
     "2sm_mxf4",
+    "2sm_mxf4_s1",
     "2sm_s1",
     "2sm_s2",
     "2sm_s3",
     "2sm_s4",
+    "2sm_s5",
     "2sm_n64",
     "2sm_n64_s1",
     "2sm_n64_s2",
@@ -51,6 +54,10 @@ _KernelVariant = Literal[
     "2sm_n128_s2",
     "2sm_n128_s3",
     "2sm_n128_s4",
+    "2sm_dyn_s1a1",
+    "2sm_dyn_s1a2",
+    "2sm_dyn_s2a1",
+    "2sm_dyn_s2a2",
 ]
 _SUPPORTED_VARIANTS: Tuple[_KernelVariant, ...] = (
     "1sm",
@@ -58,10 +65,12 @@ _SUPPORTED_VARIANTS: Tuple[_KernelVariant, ...] = (
     "1sm_n128",
     "2sm",
     "2sm_mxf4",
+    "2sm_mxf4_s1",
     "2sm_s1",
     "2sm_s2",
     "2sm_s3",
     "2sm_s4",
+    "2sm_s5",
     "2sm_n64",
     "2sm_n64_s1",
     "2sm_n64_s2",
@@ -73,6 +82,10 @@ _SUPPORTED_VARIANTS: Tuple[_KernelVariant, ...] = (
     "2sm_n128_s2",
     "2sm_n128_s3",
     "2sm_n128_s4",
+    "2sm_dyn_s1a1",
+    "2sm_dyn_s1a2",
+    "2sm_dyn_s2a1",
+    "2sm_dyn_s2a2",
 )
 _CaseKey = Tuple[_KernelVariant, int, int, int, int, bool, Tuple[Tuple[int, int, int, int], ...]]
 _CASE_CACHE: Dict[_CaseKey, Dict[str, Any]] = {}
@@ -100,10 +113,9 @@ def _variant_fns(ext: Any, variant: _KernelVariant) -> tuple[Any, Any]:
     if variant == "2sm":
         return ext.build_metadata_2sm, ext.create_plan_2sm
     if variant == "2sm_mxf4":
-        # CUTLASS SM100 ptr-array MXF4 schedule requires SF vector=32, but this
-        # challenge workload uses SF vector=16. Keep this variant aliasing to a
-        # proven 2SM StageCount=4 path so sweeps remain runnable.
-        return ext.build_metadata_2sm_s4, ext.create_plan_2sm_s4
+        return ext.build_metadata_2sm_mxf4, ext.create_plan_2sm_mxf4
+    if variant == "2sm_mxf4_s1":
+        return ext.build_metadata_2sm_mxf4_s1, ext.create_plan_2sm_mxf4_s1
     if variant == "2sm_s1":
         return ext.build_metadata_2sm_s1, ext.create_plan_2sm_s1
     if variant == "2sm_s2":
@@ -112,6 +124,8 @@ def _variant_fns(ext: Any, variant: _KernelVariant) -> tuple[Any, Any]:
         return ext.build_metadata_2sm_s3, ext.create_plan_2sm_s3
     if variant == "2sm_s4":
         return ext.build_metadata_2sm_s4, ext.create_plan_2sm_s4
+    if variant == "2sm_s5":
+        return ext.build_metadata_2sm_s5, ext.create_plan_2sm_s5
     if variant == "2sm_n64":
         return ext.build_metadata_2sm_n64, ext.create_plan_2sm_n64
     if variant == "2sm_n64_s1":
@@ -132,6 +146,14 @@ def _variant_fns(ext: Any, variant: _KernelVariant) -> tuple[Any, Any]:
         return ext.build_metadata_2sm_n128_s3, ext.create_plan_2sm_n128_s3
     if variant == "2sm_n128_s4":
         return ext.build_metadata_2sm_n128_s4, ext.create_plan_2sm_n128_s4
+    if variant == "2sm_dyn_s1a1":
+        return ext.build_metadata_2sm_dyn_s1a1, ext.create_plan_2sm_dyn_s1a1
+    if variant == "2sm_dyn_s1a2":
+        return ext.build_metadata_2sm_dyn_s1a2, ext.create_plan_2sm_dyn_s1a2
+    if variant == "2sm_dyn_s2a1":
+        return ext.build_metadata_2sm_dyn_s2a1, ext.create_plan_2sm_dyn_s2a1
+    if variant == "2sm_dyn_s2a2":
+        return ext.build_metadata_2sm_dyn_s2a2, ext.create_plan_2sm_dyn_s2a2
     return ext.build_metadata_2sm_n128, ext.create_plan_2sm_n128
 
 
@@ -145,10 +167,12 @@ def _get_case_ctx(problem_sizes: Sequence[Tuple[int, int, int, int]], *, variant
         if variant in {
             "2sm",
             "2sm_mxf4",
+            "2sm_mxf4_s1",
             "2sm_s1",
             "2sm_s2",
             "2sm_s3",
             "2sm_s4",
+            "2sm_s5",
             "2sm_n64",
             "2sm_n64_s1",
             "2sm_n64_s2",
@@ -160,6 +184,10 @@ def _get_case_ctx(problem_sizes: Sequence[Tuple[int, int, int, int]], *, variant
             "2sm_n128_s2",
             "2sm_n128_s3",
             "2sm_n128_s4",
+            "2sm_dyn_s1a1",
+            "2sm_dyn_s1a2",
+            "2sm_dyn_s2a1",
+            "2sm_dyn_s2a2",
         }
         else 1
     )
@@ -179,7 +207,15 @@ def _get_case_ctx(problem_sizes: Sequence[Tuple[int, int, int, int]], *, variant
         problem_sizes_key,
     )
 
-    ext = load_cutlass_nvfp4_grouped_gemm_sm100(verbose=False)
+    if variant in {
+        "2sm_dyn_s1a1",
+        "2sm_dyn_s1a2",
+        "2sm_dyn_s2a1",
+        "2sm_dyn_s2a2",
+    }:
+        ext = load_cutlass_nvfp4_grouped_gemm_sm100_dyn(verbose=False)
+    else:
+        ext = load_cutlass_nvfp4_grouped_gemm_sm100(verbose=False)
     build_metadata, create_plan = _variant_fns(ext, variant)
 
     if key not in _CASE_CACHE:
@@ -220,6 +256,21 @@ def _capture_plan_graph(ctx: Dict[str, Any]) -> None:
     - Capture happens in setup() via prepare_*_graph wrappers.
     - Timed path calls graph.replay(), not capture.
     """
+    # IMPORTANT: After capture, invalidate output buffers so the first warmup/timed
+    # replay must perform real compute. This prevents accidental “empty graph” captures
+    # from reusing warmup outputs and producing unrealistically low timings while still
+    # passing verification.
+    def _invalidate_outputs() -> None:
+        outputs = ctx.get("outputs")
+        if not outputs:
+            return
+        for t in outputs:
+            try:
+                t.zero_()
+            except Exception:
+                # Defensive: if any output isn't a tensor, skip it.
+                pass
+
     # Warm up once before capture to avoid lazy first-run effects inside capture.
     plan = ctx.get("plan")
     if plan is not None:
@@ -229,6 +280,7 @@ def _capture_plan_graph(ctx: Dict[str, Any]) -> None:
         with torch.cuda.graph(graph):
             plan.run()
         ctx["graph"] = graph
+        _invalidate_outputs()
         return
 
     plans = ctx.get("plans")
@@ -263,6 +315,7 @@ def _capture_plan_graph(ctx: Dict[str, Any]) -> None:
 
             if stream_graphs:
                 ctx["stream_graphs"] = stream_graphs
+                _invalidate_outputs()
                 return
 
         for p in plans:
@@ -273,6 +326,7 @@ def _capture_plan_graph(ctx: Dict[str, Any]) -> None:
             for p in plans:
                 p.run()
         ctx["graph"] = graph
+        _invalidate_outputs()
         return
 
     small_plan = ctx.get("small_plan")
@@ -292,6 +346,7 @@ def _capture_plan_graph(ctx: Dict[str, Any]) -> None:
         if large_plan is not None:
             large_plan.run()
     ctx["graph"] = graph
+    _invalidate_outputs()
 
 
 def _attach_graphs(prepared: Optional[Sequence[tuple[Any, ...]]]) -> Optional[Sequence[tuple[Any, ...]]]:
@@ -882,6 +937,10 @@ def prepare_cutlass_cached(data_list: Sequence[input_t]) -> Optional[Sequence[tu
     """Prepare using the CUTLASS 1SM MMA kernel (default)."""
     return _prepare_cutlass_cached(data_list, variant="1sm")
 
+def prepare_cutlass_cached_1sm(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare using the CUTLASS 1SM MMA kernel."""
+    return _prepare_cutlass_cached(data_list, variant="1sm")
+
 def prepare_cutlass_cached_1sm_n64(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
     """Prepare using the CUTLASS 1SM MMA kernel (N=64 tile)."""
     return _prepare_cutlass_cached(data_list, variant="1sm_n64")
@@ -898,6 +957,10 @@ def prepare_cutlass_cached_2sm_mxf4(data_list: Sequence[input_t]) -> Optional[Se
     """Prepare using the CUTLASS 2SM MXF4 MMA kernel."""
     return _prepare_cutlass_cached(data_list, variant="2sm_mxf4")
 
+def prepare_cutlass_cached_2sm_mxf4_s1(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare using the CUTLASS 2SM MXF4 MMA kernel (StageCount=1)."""
+    return _prepare_cutlass_cached(data_list, variant="2sm_mxf4_s1")
+
 def prepare_cutlass_cached_2sm_s1(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
     """Prepare using the CUTLASS 2SM MMA kernel (StageCount=1)."""
     return _prepare_cutlass_cached(data_list, variant="2sm_s1")
@@ -913,6 +976,10 @@ def prepare_cutlass_cached_2sm_s3(data_list: Sequence[input_t]) -> Optional[Sequ
 def prepare_cutlass_cached_2sm_s4(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
     """Prepare using the CUTLASS 2SM MMA kernel (StageCount=4)."""
     return _prepare_cutlass_cached(data_list, variant="2sm_s4")
+
+def prepare_cutlass_cached_2sm_s5(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare using the CUTLASS 2SM MMA kernel (StageCount=5)."""
+    return _prepare_cutlass_cached(data_list, variant="2sm_s5")
 
 def prepare_cutlass_cached_2sm_n32(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
     """N=32 tile is unsupported by CUTLASS SM100 block-scaled 2SM kernels."""
@@ -962,14 +1029,46 @@ def prepare_cutlass_cached_2sm_n128_s4(data_list: Sequence[input_t]) -> Optional
     """Prepare using the CUTLASS 2SM MMA kernel (N=128 tile, StageCount=4)."""
     return _prepare_cutlass_cached(data_list, variant="2sm_n128_s4")
 
+def prepare_cutlass_cached_2sm_dyn_s1a1(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare using the CUTLASS 2SM dynamic blockscaled kernel (scheduler=1, accum=1)."""
+    return _prepare_cutlass_cached(data_list, variant="2sm_dyn_s1a1")
+
+def prepare_cutlass_cached_2sm_dyn_s1a2(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare using the CUTLASS 2SM dynamic blockscaled kernel (scheduler=1, accum=2)."""
+    return _prepare_cutlass_cached(data_list, variant="2sm_dyn_s1a2")
+
+def prepare_cutlass_cached_2sm_dyn_s2a1(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare using the CUTLASS 2SM dynamic blockscaled kernel (scheduler=2, accum=1)."""
+    return _prepare_cutlass_cached(data_list, variant="2sm_dyn_s2a1")
+
+def prepare_cutlass_cached_2sm_dyn_s2a2(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare using the CUTLASS 2SM dynamic blockscaled kernel (scheduler=2, accum=2)."""
+    return _prepare_cutlass_cached(data_list, variant="2sm_dyn_s2a2")
+
 
 def prepare_cutlass_cached_2sm_persistent(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
     """Prepare one fused-request plan using the CUTLASS 2SM kernel."""
     return _prepare_cutlass_cached_persistent_requests(data_list, variant="2sm")
 
+def prepare_cutlass_cached_1sm_persistent(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare one fused-request plan using the CUTLASS 1SM kernel."""
+    return _prepare_cutlass_cached_persistent_requests(data_list, variant="1sm")
+
+def prepare_cutlass_cached_1sm_n64_persistent(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare one fused-request plan using the CUTLASS 1SM N64 kernel."""
+    return _prepare_cutlass_cached_persistent_requests(data_list, variant="1sm_n64")
+
+def prepare_cutlass_cached_1sm_n128_persistent(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare one fused-request plan using the CUTLASS 1SM N128 kernel."""
+    return _prepare_cutlass_cached_persistent_requests(data_list, variant="1sm_n128")
+
 def prepare_cutlass_cached_2sm_mxf4_persistent(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
     """Prepare one fused-request plan using the CUTLASS 2SM MXF4 kernel."""
     return _prepare_cutlass_cached_persistent_requests(data_list, variant="2sm_mxf4")
+
+def prepare_cutlass_cached_2sm_mxf4_s1_persistent(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare one fused-request plan using the CUTLASS 2SM MXF4 StageCount=1 kernel."""
+    return _prepare_cutlass_cached_persistent_requests(data_list, variant="2sm_mxf4_s1")
 
 def prepare_cutlass_cached_2sm_s1_persistent(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
     """Prepare one fused-request plan using the CUTLASS 2SM StageCount=1 kernel."""
@@ -986,6 +1085,10 @@ def prepare_cutlass_cached_2sm_s3_persistent(data_list: Sequence[input_t]) -> Op
 def prepare_cutlass_cached_2sm_s4_persistent(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
     """Prepare one fused-request plan using the CUTLASS 2SM StageCount=4 kernel."""
     return _prepare_cutlass_cached_persistent_requests(data_list, variant="2sm_s4")
+
+def prepare_cutlass_cached_2sm_s5_persistent(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare one fused-request plan using the CUTLASS 2SM StageCount=5 kernel."""
+    return _prepare_cutlass_cached_persistent_requests(data_list, variant="2sm_s5")
 
 def prepare_cutlass_cached_2sm_n32_persistent(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
     """N=32 tile is unsupported by CUTLASS SM100 block-scaled 2SM kernels."""
@@ -1046,15 +1149,65 @@ def prepare_cutlass_cached_2sm_n128_s4_persistent(
     return _prepare_cutlass_cached_persistent_requests(data_list, variant="2sm_n128_s4")
 
 
+def prepare_cutlass_cached_2sm_dyn_s1a1_persistent(
+    data_list: Sequence[input_t],
+) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare one fused-request plan using dynamic blockscaled kernel (scheduler=1, accum=1)."""
+    return _prepare_cutlass_cached_persistent_requests(data_list, variant="2sm_dyn_s1a1")
+
+
+def prepare_cutlass_cached_2sm_dyn_s1a2_persistent(
+    data_list: Sequence[input_t],
+) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare one fused-request plan using dynamic blockscaled kernel (scheduler=1, accum=2)."""
+    return _prepare_cutlass_cached_persistent_requests(data_list, variant="2sm_dyn_s1a2")
+
+
+def prepare_cutlass_cached_2sm_dyn_s2a1_persistent(
+    data_list: Sequence[input_t],
+) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare one fused-request plan using dynamic blockscaled kernel (scheduler=2, accum=1)."""
+    return _prepare_cutlass_cached_persistent_requests(data_list, variant="2sm_dyn_s2a1")
+
+
+def prepare_cutlass_cached_2sm_dyn_s2a2_persistent(
+    data_list: Sequence[input_t],
+) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare one fused-request plan using dynamic blockscaled kernel (scheduler=2, accum=2)."""
+    return _prepare_cutlass_cached_persistent_requests(data_list, variant="2sm_dyn_s2a2")
+
+
 def prepare_cutlass_cached_2sm_persistent_graph(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
     """Prepare fused-request 2SM plan(s) with CUDA Graph replay capture."""
     return _attach_graphs(_prepare_cutlass_cached_persistent_requests(data_list, variant="2sm"))
+
+def prepare_cutlass_cached_1sm_persistent_graph(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare fused-request 1SM plan(s) with CUDA Graph replay capture."""
+    return _attach_graphs(_prepare_cutlass_cached_persistent_requests(data_list, variant="1sm"))
+
+def prepare_cutlass_cached_1sm_n64_persistent_graph(
+    data_list: Sequence[input_t],
+) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare fused-request 1SM N64 plan(s) with CUDA Graph replay capture."""
+    return _attach_graphs(_prepare_cutlass_cached_persistent_requests(data_list, variant="1sm_n64"))
+
+def prepare_cutlass_cached_1sm_n128_persistent_graph(
+    data_list: Sequence[input_t],
+) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare fused-request 1SM N128 plan(s) with CUDA Graph replay capture."""
+    return _attach_graphs(_prepare_cutlass_cached_persistent_requests(data_list, variant="1sm_n128"))
 
 def prepare_cutlass_cached_2sm_mxf4_persistent_graph(
     data_list: Sequence[input_t],
 ) -> Optional[Sequence[tuple[Any, ...]]]:
     """Prepare fused-request 2SM MXF4 plan(s) with CUDA Graph replay capture."""
     return _attach_graphs(_prepare_cutlass_cached_persistent_requests(data_list, variant="2sm_mxf4"))
+
+def prepare_cutlass_cached_2sm_mxf4_s1_persistent_graph(
+    data_list: Sequence[input_t],
+) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare fused-request 2SM MXF4 StageCount=1 plan(s) with CUDA Graph replay capture."""
+    return _attach_graphs(_prepare_cutlass_cached_persistent_requests(data_list, variant="2sm_mxf4_s1"))
 
 def prepare_cutlass_cached_2sm_s1_persistent_graph(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
     """Prepare fused-request 2SM StageCount=1 plan(s) with CUDA Graph replay capture."""
@@ -1071,6 +1224,10 @@ def prepare_cutlass_cached_2sm_s3_persistent_graph(data_list: Sequence[input_t])
 def prepare_cutlass_cached_2sm_s4_persistent_graph(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
     """Prepare fused-request 2SM StageCount=4 plan(s) with CUDA Graph replay capture."""
     return _attach_graphs(_prepare_cutlass_cached_persistent_requests(data_list, variant="2sm_s4"))
+
+def prepare_cutlass_cached_2sm_s5_persistent_graph(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare fused-request 2SM StageCount=5 plan(s) with CUDA Graph replay capture."""
+    return _attach_graphs(_prepare_cutlass_cached_persistent_requests(data_list, variant="2sm_s5"))
 
 def prepare_cutlass_cached_2sm_n32_persistent_graph(
     data_list: Sequence[input_t],
@@ -1147,7 +1304,39 @@ def prepare_cutlass_cached_2sm_n128_s4_persistent_graph(
     return _attach_graphs(_prepare_cutlass_cached_persistent_requests(data_list, variant="2sm_n128_s4"))
 
 
+def prepare_cutlass_cached_2sm_dyn_s1a1_persistent_graph(
+    data_list: Sequence[input_t],
+) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare fused-request dynamic blockscaled plan(s) (scheduler=1, accum=1) with graph capture."""
+    return _attach_graphs(_prepare_cutlass_cached_persistent_requests(data_list, variant="2sm_dyn_s1a1"))
+
+
+def prepare_cutlass_cached_2sm_dyn_s1a2_persistent_graph(
+    data_list: Sequence[input_t],
+) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare fused-request dynamic blockscaled plan(s) (scheduler=1, accum=2) with graph capture."""
+    return _attach_graphs(_prepare_cutlass_cached_persistent_requests(data_list, variant="2sm_dyn_s1a2"))
+
+
+def prepare_cutlass_cached_2sm_dyn_s2a1_persistent_graph(
+    data_list: Sequence[input_t],
+) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare fused-request dynamic blockscaled plan(s) (scheduler=2, accum=1) with graph capture."""
+    return _attach_graphs(_prepare_cutlass_cached_persistent_requests(data_list, variant="2sm_dyn_s2a1"))
+
+
+def prepare_cutlass_cached_2sm_dyn_s2a2_persistent_graph(
+    data_list: Sequence[input_t],
+) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare fused-request dynamic blockscaled plan(s) (scheduler=2, accum=2) with graph capture."""
+    return _attach_graphs(_prepare_cutlass_cached_persistent_requests(data_list, variant="2sm_dyn_s2a2"))
+
+
 def prepare_cutlass_cached_graph(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare using CUTLASS 1SM MMA kernel with CUDA Graph replay capture."""
+    return _attach_graphs(_prepare_cutlass_cached(data_list, variant="1sm"))
+
+def prepare_cutlass_cached_1sm_graph(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
     """Prepare using CUTLASS 1SM MMA kernel with CUDA Graph replay capture."""
     return _attach_graphs(_prepare_cutlass_cached(data_list, variant="1sm"))
 
@@ -1170,6 +1359,10 @@ def prepare_cutlass_cached_2sm_mxf4_graph(data_list: Sequence[input_t]) -> Optio
     """Prepare using CUTLASS 2SM MXF4 kernel with CUDA Graph replay capture."""
     return _attach_graphs(_prepare_cutlass_cached(data_list, variant="2sm_mxf4"))
 
+def prepare_cutlass_cached_2sm_mxf4_s1_graph(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare using CUTLASS 2SM MXF4 StageCount=1 kernel with CUDA Graph replay capture."""
+    return _attach_graphs(_prepare_cutlass_cached(data_list, variant="2sm_mxf4_s1"))
+
 def prepare_cutlass_cached_2sm_s1_graph(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
     """Prepare using CUTLASS 2SM StageCount=1 kernel with CUDA Graph replay capture."""
     return _attach_graphs(_prepare_cutlass_cached(data_list, variant="2sm_s1"))
@@ -1185,6 +1378,10 @@ def prepare_cutlass_cached_2sm_s3_graph(data_list: Sequence[input_t]) -> Optiona
 def prepare_cutlass_cached_2sm_s4_graph(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
     """Prepare using CUTLASS 2SM StageCount=4 kernel with CUDA Graph replay capture."""
     return _attach_graphs(_prepare_cutlass_cached(data_list, variant="2sm_s4"))
+
+def prepare_cutlass_cached_2sm_s5_graph(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare using CUTLASS 2SM StageCount=5 kernel with CUDA Graph replay capture."""
+    return _attach_graphs(_prepare_cutlass_cached(data_list, variant="2sm_s5"))
 
 def prepare_cutlass_cached_2sm_n32_graph(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
     """N=32 tile is unsupported by CUTLASS SM100 block-scaled 2SM kernels."""
@@ -1235,6 +1432,26 @@ def prepare_cutlass_cached_2sm_n128_s3_graph(data_list: Sequence[input_t]) -> Op
 def prepare_cutlass_cached_2sm_n128_s4_graph(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
     """Prepare using CUTLASS 2SM N128 StageCount=4 kernel with CUDA Graph replay capture."""
     return _attach_graphs(_prepare_cutlass_cached(data_list, variant="2sm_n128_s4"))
+
+
+def prepare_cutlass_cached_2sm_dyn_s1a1_graph(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare using dynamic blockscaled kernel (scheduler=1, accum=1) with graph replay capture."""
+    return _attach_graphs(_prepare_cutlass_cached(data_list, variant="2sm_dyn_s1a1"))
+
+
+def prepare_cutlass_cached_2sm_dyn_s1a2_graph(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare using dynamic blockscaled kernel (scheduler=1, accum=2) with graph replay capture."""
+    return _attach_graphs(_prepare_cutlass_cached(data_list, variant="2sm_dyn_s1a2"))
+
+
+def prepare_cutlass_cached_2sm_dyn_s2a1_graph(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare using dynamic blockscaled kernel (scheduler=2, accum=1) with graph replay capture."""
+    return _attach_graphs(_prepare_cutlass_cached(data_list, variant="2sm_dyn_s2a1"))
+
+
+def prepare_cutlass_cached_2sm_dyn_s2a2_graph(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
+    """Prepare using dynamic blockscaled kernel (scheduler=2, accum=2) with graph replay capture."""
+    return _attach_graphs(_prepare_cutlass_cached(data_list, variant="2sm_dyn_s2a2"))
 
 
 def _slice_input_groups(data: input_t, group_indices: Sequence[int]) -> input_t:
@@ -1423,14 +1640,17 @@ def custom_kernel_cutlass_cached_hybrid(data: tuple[Any, ...]) -> output_t:
 
 __all__ = [
     "prepare_cutlass_cached",
+    "prepare_cutlass_cached_1sm",
     "prepare_cutlass_cached_1sm_n64",
     "prepare_cutlass_cached_1sm_n128",
     "prepare_cutlass_cached_2sm",
     "prepare_cutlass_cached_2sm_mxf4",
+    "prepare_cutlass_cached_2sm_mxf4_s1",
     "prepare_cutlass_cached_2sm_s1",
     "prepare_cutlass_cached_2sm_s2",
     "prepare_cutlass_cached_2sm_s3",
     "prepare_cutlass_cached_2sm_s4",
+    "prepare_cutlass_cached_2sm_s5",
     "prepare_cutlass_cached_2sm_n32",
     "prepare_cutlass_cached_2sm_n64",
     "prepare_cutlass_cached_2sm_n64_s1",
@@ -1443,12 +1663,17 @@ __all__ = [
     "prepare_cutlass_cached_2sm_n128_s2",
     "prepare_cutlass_cached_2sm_n128_s3",
     "prepare_cutlass_cached_2sm_n128_s4",
+    "prepare_cutlass_cached_1sm_persistent",
+    "prepare_cutlass_cached_1sm_n64_persistent",
+    "prepare_cutlass_cached_1sm_n128_persistent",
     "prepare_cutlass_cached_2sm_persistent",
     "prepare_cutlass_cached_2sm_mxf4_persistent",
+    "prepare_cutlass_cached_2sm_mxf4_s1_persistent",
     "prepare_cutlass_cached_2sm_s1_persistent",
     "prepare_cutlass_cached_2sm_s2_persistent",
     "prepare_cutlass_cached_2sm_s3_persistent",
     "prepare_cutlass_cached_2sm_s4_persistent",
+    "prepare_cutlass_cached_2sm_s5_persistent",
     "prepare_cutlass_cached_2sm_n32_persistent",
     "prepare_cutlass_cached_2sm_n64_persistent",
     "prepare_cutlass_cached_2sm_n64_s1_persistent",
@@ -1461,12 +1686,17 @@ __all__ = [
     "prepare_cutlass_cached_2sm_n128_s2_persistent",
     "prepare_cutlass_cached_2sm_n128_s3_persistent",
     "prepare_cutlass_cached_2sm_n128_s4_persistent",
+    "prepare_cutlass_cached_1sm_persistent_graph",
+    "prepare_cutlass_cached_1sm_n64_persistent_graph",
+    "prepare_cutlass_cached_1sm_n128_persistent_graph",
     "prepare_cutlass_cached_2sm_persistent_graph",
     "prepare_cutlass_cached_2sm_mxf4_persistent_graph",
+    "prepare_cutlass_cached_2sm_mxf4_s1_persistent_graph",
     "prepare_cutlass_cached_2sm_s1_persistent_graph",
     "prepare_cutlass_cached_2sm_s2_persistent_graph",
     "prepare_cutlass_cached_2sm_s3_persistent_graph",
     "prepare_cutlass_cached_2sm_s4_persistent_graph",
+    "prepare_cutlass_cached_2sm_s5_persistent_graph",
     "prepare_cutlass_cached_2sm_n32_persistent_graph",
     "prepare_cutlass_cached_2sm_n64_persistent_graph",
     "prepare_cutlass_cached_2sm_n64_s1_persistent_graph",
@@ -1480,14 +1710,17 @@ __all__ = [
     "prepare_cutlass_cached_2sm_n128_s3_persistent_graph",
     "prepare_cutlass_cached_2sm_n128_s4_persistent_graph",
     "prepare_cutlass_cached_graph",
+    "prepare_cutlass_cached_1sm_graph",
     "prepare_cutlass_cached_1sm_n64_graph",
     "prepare_cutlass_cached_1sm_n128_graph",
     "prepare_cutlass_cached_2sm_graph",
     "prepare_cutlass_cached_2sm_mxf4_graph",
+    "prepare_cutlass_cached_2sm_mxf4_s1_graph",
     "prepare_cutlass_cached_2sm_s1_graph",
     "prepare_cutlass_cached_2sm_s2_graph",
     "prepare_cutlass_cached_2sm_s3_graph",
     "prepare_cutlass_cached_2sm_s4_graph",
+    "prepare_cutlass_cached_2sm_s5_graph",
     "prepare_cutlass_cached_2sm_n32_graph",
     "prepare_cutlass_cached_2sm_n64_graph",
     "prepare_cutlass_cached_2sm_n64_s1_graph",

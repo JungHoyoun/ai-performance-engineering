@@ -1,4 +1,4 @@
-"""Vendor ceiling: torch._scaled_mm_v2 (competition case 3).
+"""Vendor reference: torch._scaled_mm (competition case 3).
 
 This uses cuBLASLt via PyTorch to establish a performance target under the exact
 competition shapes. Not intended as the final non-cuBLAS submission.
@@ -19,18 +19,15 @@ from labs.nvfp4_group_gemm.nvfp4_group_gemm_common import (
     NVFP4GroupGemmBenchmark,
     attach_benchmark_metadata,
 )
-from labs.nvfp4_group_gemm.torch_scaled_mm_submission import (
-    custom_kernel_scaled_mm_v2,
-    prepare_torch_scaled_mm_v2,
-)
+from labs.nvfp4_group_gemm.torch_scaled_mm_submission import custom_kernel_scaled_mm_v1, prepare_torch_scaled_mm_v1
 
 
 def get_benchmark() -> BaseBenchmark:
     case = COMPETITION_CASES[3]
     bench = NVFP4GroupGemmBenchmark(
         case=case,
-        custom_kernel=custom_kernel_scaled_mm_v2,
-        prepare=prepare_torch_scaled_mm_v2,
+        custom_kernel=custom_kernel_scaled_mm_v1,
+        prepare=prepare_torch_scaled_mm_v1,
         inputs_per_iteration=15,
         name=f"nvfp4_group_gemm_{case.name}_optimized_scaled_mm",
     )

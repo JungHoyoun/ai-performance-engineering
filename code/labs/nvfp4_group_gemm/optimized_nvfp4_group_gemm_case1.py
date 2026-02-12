@@ -1,10 +1,4 @@
-"""Optimized NVFP4 grouped GEMM (competition case 1).
-
-Best measured credible path in-harness:
-- CUTLASS 2SM grouped kernel with persistent request fusion
-- tuned scheduler knobs (cluster/raster/PDL)
-- fused launch over all requests per iteration
-"""
+"""Optimized NVFP4 grouped GEMM (competition case 1, custom CUDA path)."""
 
 from __future__ import annotations
 
@@ -16,16 +10,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-os.environ["AISP_NVFP4_GROUP_GEMM_CLUSTER_M"] = "2"
-os.environ["AISP_NVFP4_GROUP_GEMM_CLUSTER_N"] = "1"
-os.environ["AISP_NVFP4_GROUP_GEMM_RASTER_ORDER"] = "2"
-os.environ["AISP_NVFP4_GROUP_GEMM_USE_PDL"] = "1"
-os.environ["AISP_NVFP4_GROUP_GEMM_PERSISTENT_REQUEST_CHUNK"] = "0"
+os.environ["AISP_NVFP4_GROUP_GEMM_CUSTOM_BLOCK_M"] = "16"
+os.environ["AISP_NVFP4_GROUP_GEMM_CUSTOM_BLOCK_N"] = "32"
+os.environ["AISP_NVFP4_GROUP_GEMM_CUSTOM_VEC_N"] = "2"
 
 from core.harness.benchmark_harness import BaseBenchmark
-from labs.nvfp4_group_gemm.cutlass_submission_cached import (
-    custom_kernel_cutlass_cached,
-    prepare_cutlass_cached_2sm_persistent,
+from labs.nvfp4_group_gemm.custom_cuda_submission import (
+    custom_kernel_custom_cuda,
+    prepare_custom_cuda,
 )
 from labs.nvfp4_group_gemm.nvfp4_group_gemm_common import (
     COMPETITION_CASES,
@@ -38,11 +30,14 @@ def get_benchmark() -> BaseBenchmark:
     case = COMPETITION_CASES[1]
     bench = NVFP4GroupGemmBenchmark(
         case=case,
-        custom_kernel=custom_kernel_cutlass_cached,
-        prepare=prepare_cutlass_cached_2sm_persistent,
+        custom_kernel=custom_kernel_custom_cuda,
+        prepare=prepare_custom_cuda,
         inputs_per_iteration=15,
-        capture_iter_graph=False,
-        name=f"nvfp4_group_gemm_{case.name}_optimized_cutlass_cached_2sm_cm2_cn1_ro2_pdl1_persistent",
+        capture_iter_graph=True,
+        name=(
+            f"nvfp4_group_gemm_{case.name}_optimized_custom_cuda_"
+            "blockm8_blockn32_itergraph"
+        ),
     )
     return attach_benchmark_metadata(bench, __file__)
 

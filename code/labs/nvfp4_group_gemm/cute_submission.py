@@ -7,7 +7,6 @@ import cutlass.utils.blackwell_helpers as sm100_utils
 import cutlass.utils.blockscaled_layout as blockscaled_utils
 from cutlass.cute.runtime import make_ptr
 
-import functools
 import os
 from typing import Tuple, List
 
@@ -71,6 +70,25 @@ def ceil_div(a, b):
     return (a + b - 1) // b
 
 
+def build_cluster_lookup(
+    problem_sizes: List[Tuple[int, int, int, int]],
+) -> List[Tuple[int, int, int]]:
+    """Build (group_idx, coord_x, coord_y) metadata for each CTA/cluster.
+
+    The ordering must exactly match the previous blockIdx.z delinearization:
+    groups are contiguous and each group's tiles are laid out with coord_x as the
+    fastest-varying index (then coord_y).
+    """
+    cluster_lookup: List[Tuple[int, int, int]] = []
+    for group_idx, (m, n, _, _) in enumerate(problem_sizes):
+        cta_m = ceil_div(int(m), int(mma_tiler_mnk[0]))
+        cta_n = ceil_div(int(n), int(mma_tiler_mnk[1]))
+        for coord_y in range(cta_n):
+            for coord_x in range(cta_m):
+                cluster_lookup.append((int(group_idx), int(coord_x), int(coord_y)))
+    return cluster_lookup
+
+
 # The CuTe reference implementation for NVFP4 block-scaled GEMM
 @cute.kernel
 def kernel(
@@ -91,7 +109,7 @@ def kernel(
     b_smem_layout_staged: cute.ComposedLayout,
     sfa_smem_layout_staged: cute.Layout,
     sfb_smem_layout_staged: cute.Layout,
-    cta_mn_list: List[Tuple[int, int]],
+    cluster_lookup: cute.Tensor,
     num_tma_load_bytes: cutlass.Constexpr[int],
 ):
     """
@@ -101,25 +119,12 @@ def kernel(
     warp_idx = cute.arch.make_warp_uniform(warp_idx)
     tidx, _, _ = cute.arch.thread_idx()
 
-    #
-    # Delinearize bidz to coord_x, coord_y and group_idx for each CTA
-    #
     bidx, bidy, bidz = cute.arch.block_idx()
-    group_idx = 0
-    find = False
-    coord_x = 0
-    coord_y = 0
-    cta_rest = bidz
-    for _, (cta_m, cta_n) in enumerate(cta_mn_list):
-        if cta_rest >= (cta_m * cta_n):
-            group_idx += 1
-            cta_rest -= cta_m * cta_n
-        else:
-            if not find:
-                coord_y = cta_rest // cta_m
-                coord_x = cta_rest % cta_m
-                cta_rest -= cta_m * cta_n
-                find = True
+    # Fast path: precomputed CTA->(group, coord_x, coord_y) mapping avoids
+    # a per-CTA linear search through all groups.
+    group_idx = cluster_lookup[(bidz, 0)]
+    coord_x = cluster_lookup[(bidz, 1)]
+    coord_y = cluster_lookup[(bidz, 2)]
 
     #
     # Construct C Tensor for each CTA
@@ -688,6 +693,7 @@ def my_kernel(
     ptr_of_tensor_of_problem_sizes: cute.Pointer,
     ptr_of_tensor_of_abc_ptrs: cute.Pointer,
     ptr_of_tensor_of_sfasfb_ptrs: cute.Pointer,
+    ptr_of_tensor_of_cluster_lookup: cute.Pointer,
     ptr_of_tensor_of_tensormap: cute.Pointer,
     total_num_clusters: cutlass.Int32,
     problem_sizes: List[
@@ -704,6 +710,10 @@ def my_kernel(
     )
     tensor_of_problem_sizes = cute.make_tensor(
         ptr_of_tensor_of_problem_sizes, cute.make_layout((num_groups, 4), stride=(4, 1))
+    )
+    tensor_of_cluster_lookup = cute.make_tensor(
+        ptr_of_tensor_of_cluster_lookup,
+        cute.make_layout((total_num_clusters, 3), stride=(3, 1)),
     )
     tensor_of_tensormap = cute.make_tensor(
         ptr_of_tensor_of_tensormap, cute.make_layout((total_num_clusters, 4, 16), stride=(64, 16, 1))
@@ -848,12 +858,6 @@ def my_kernel(
         a_copy_size + b_copy_size + sfa_copy_size + sfb_copy_size
     ) * atom_thr_size
 
-    # Store CTA shape information for each Group in a List
-    cta_mn_list = []
-    for group_idx, (m, n, k, l) in enumerate(problem_sizes):
-        x, y = cute.ceil_div(problem_sizes[group_idx][:2], mma_tiler_mnk[0:2])
-        cta_mn_list.append((x, y))
-
     # Compute grid size
     grid = (1, 1, total_num_clusters)
 
@@ -891,8 +895,8 @@ def my_kernel(
         sfb_smem_layout_staged,     # Staged shared memory layout for SFB (includes stage dimension)
         
         # CTA grid configuration per group
-        cta_mn_list,                # List of (M_tiles, N_tiles) for each group
-        
+        tensor_of_cluster_lookup,   # Per-CTA (group_idx, coord_x, coord_y) metadata
+
         # Pipeline synchronization parameter
         num_tma_load_bytes,         # Total bytes to load per TMA transaction (for barrier setup)
     ).launch(
@@ -936,6 +940,9 @@ def compile_kernel(problem_sizes):
     cute_ptr_of_tensor_of_sfasfb_ptrs = make_ptr(
         cutlass.Int64, 0, cute.AddressSpace.gmem, assumed_align=16,
     )
+    cute_ptr_of_tensor_of_cluster_lookup = make_ptr(
+        cutlass.Int32, 0, cute.AddressSpace.gmem, assumed_align=16,
+    )
     # Fake cluster numbers for compile only.
     total_num_clusters = cutlass.Int32(1)
     num_groups = cutlass.Int32(len(problem_sizes))
@@ -949,6 +956,7 @@ def compile_kernel(problem_sizes):
         cute_ptr_of_tensor_of_problem_sizes,
         cute_ptr_of_tensor_of_abc_ptrs,
         cute_ptr_of_tensor_of_sfasfb_ptrs,
+        cute_ptr_of_tensor_of_cluster_lookup,
         cute_ptr_of_tensor_of_tensormap,
         total_num_clusters,
         problem_sizes,
@@ -1012,26 +1020,12 @@ def custom_kernel(data: input_t) -> output_t:
     tensor_of_abc_ptrs = torch.tensor(abc_ptrs, dtype=torch.int64, device="cuda")
     tensor_of_sfasfb_ptrs = torch.tensor(sfasfb_ptrs, dtype=torch.int64, device="cuda")
 
-    # Compute the tile shape for each CUDA Thread Block (CTA).
-    # Keep this consistent with the CuTe local_tile() shapes derived from mma_tiler_mnk.
-    cta_tile_shape_mn = [mma_tiler_mnk[0], mma_tiler_mnk[1]]
-    # cluster_tile_shape_mn: Total tile shape per cluster (same as CTA since cluster is 1x1)
-    cluster_tile_shape_mn = tuple(
-        x * y for x, y in zip(cta_tile_shape_mn, (1, 1))
-    )
-    
-    # Compute total number of cluster tiles needed across all groups
-    # Each group's (m, n) dimensions are divided into tiles of size cluster_tile_shape_mn
-    # This determines the total grid size (bidz dimension) for kernel launch
-    total_num_clusters = 0
+    # Precompute CTA->(group, coord_x, coord_y) mapping for this launch.
+    cluster_lookup = build_cluster_lookup(problem_sizes)
+    total_num_clusters = len(cluster_lookup)
+    if total_num_clusters <= 0:
+        return [abc_tensors[i][2] for i in range(len(problem_sizes))]
     num_groups = len(problem_sizes)
-    for m, n, _, _ in problem_sizes:
-        # Calculate number of tiles needed in M and N dimensions for this group
-        num_clusters_mn = tuple(
-            (x + y - 1) // y for x, y in zip((m, n), cluster_tile_shape_mn)
-        )
-        # Multiply M_tiles * N_tiles to get total tiles for this group
-        total_num_clusters += functools.reduce(lambda x, y: x * y, num_clusters_mn)
 
     # Allocate device memory for tensormap descriptors
     # Each cluster needs its own set of tensormaps (one for A, B, SFA, SFB)
@@ -1043,6 +1037,9 @@ def custom_kernel(data: input_t) -> output_t:
         bytes_per_tensormap // 8,
     )
     tensor_of_tensormap = torch.empty(tensormap_shape, dtype=torch.int64, device="cuda")
+    tensor_of_cluster_lookup = torch.tensor(
+        cluster_lookup, dtype=torch.int32, device="cuda"
+    )
 
     # Create CuTe pointers to the metadata tensors that will be passed to the kernel
     # These allow the GPU kernel to read problem sizes and tensor pointers
@@ -1064,6 +1061,12 @@ def custom_kernel(data: input_t) -> output_t:
         cute.AddressSpace.gmem,
         assumed_align=16,
     )
+    cute_ptr_of_tensor_of_cluster_lookup = make_ptr(
+        cutlass.Int32,
+        tensor_of_cluster_lookup.data_ptr(),
+        cute.AddressSpace.gmem,
+        assumed_align=16,
+    )
     cute_ptr_of_tensor_of_tensormap = make_ptr(
         cutlass.Int64,
         tensor_of_tensormap.data_ptr(),
@@ -1077,6 +1080,7 @@ def custom_kernel(data: input_t) -> output_t:
         cute_ptr_of_tensor_of_problem_sizes, # Pointer to problem sizes array
         cute_ptr_of_tensor_of_abc_ptrs,      # Pointer to ABC tensor pointers array
         cute_ptr_of_tensor_of_sfasfb_ptrs,   # Pointer to scale factor pointers array
+        cute_ptr_of_tensor_of_cluster_lookup, # Pointer to CTA lookup metadata
         cute_ptr_of_tensor_of_tensormap,     # Pointer to tensormap buffer
         total_num_clusters,                  # Total number of CTAs to launch
         problem_sizes,                       # Problem sizes list (for host-side processing)

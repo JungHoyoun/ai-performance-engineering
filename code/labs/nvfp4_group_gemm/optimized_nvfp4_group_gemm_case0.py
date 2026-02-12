@@ -2,8 +2,8 @@
 
 Best measured credible path in-harness:
 - CUTLASS 2SM grouped kernel
-- tuned scheduler knobs (cluster/raster/PDL)
-- fused-request persistent preparation to reduce launch overhead
+- persistent graph request-major schedule
+- tuned launch knobs (cluster/raster/swizzle, PDL off for this case)
 """
 
 from __future__ import annotations
@@ -19,12 +19,17 @@ if str(REPO_ROOT) not in sys.path:
 os.environ["AISP_NVFP4_GROUP_GEMM_CLUSTER_M"] = "2"
 os.environ["AISP_NVFP4_GROUP_GEMM_CLUSTER_N"] = "1"
 os.environ["AISP_NVFP4_GROUP_GEMM_RASTER_ORDER"] = "2"
-os.environ["AISP_NVFP4_GROUP_GEMM_USE_PDL"] = "1"
+os.environ["AISP_NVFP4_GROUP_GEMM_USE_PDL"] = "0"
+os.environ["AISP_NVFP4_GROUP_GEMM_PERSISTENT_REQUEST_CHUNK"] = "0"
+os.environ["AISP_NVFP4_GROUP_GEMM_PERSISTENT_CONCURRENT_STREAMS"] = "1"
+os.environ["AISP_NVFP4_GROUP_GEMM_PERSISTENT_GROUP_ORDER"] = "none"
+os.environ["AISP_NVFP4_GROUP_GEMM_PERSISTENT_TASK_ORDER"] = "request_major"
+os.environ["AISP_NVFP4_GROUP_GEMM_MAX_SWIZZLE"] = "0"
 
 from core.harness.benchmark_harness import BaseBenchmark
 from labs.nvfp4_group_gemm.cutlass_submission_cached import (
     custom_kernel_cutlass_cached,
-    prepare_cutlass_cached_2sm_persistent,
+    prepare_cutlass_cached_2sm_persistent_graph,
 )
 from labs.nvfp4_group_gemm.nvfp4_group_gemm_common import (
     COMPETITION_CASES,
@@ -38,10 +43,13 @@ def get_benchmark() -> BaseBenchmark:
     bench = NVFP4GroupGemmBenchmark(
         case=case,
         custom_kernel=custom_kernel_cutlass_cached,
-        prepare=prepare_cutlass_cached_2sm_persistent,
+        prepare=prepare_cutlass_cached_2sm_persistent_graph,
         inputs_per_iteration=15,
         capture_iter_graph=False,
-        name=f"nvfp4_group_gemm_{case.name}_optimized_cutlass_cached_2sm_cm2_cn1_ro2_pdl1_persistent",
+        name=(
+            f"nvfp4_group_gemm_{case.name}_optimized_cutlass_cached_2sm_"
+            "cm2_cn1_ro2_pdl0_persistent_graph_request_major_swz0"
+        ),
     )
     return attach_benchmark_metadata(bench, __file__)
 

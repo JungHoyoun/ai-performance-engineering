@@ -13,8 +13,7 @@ per-input allocations into `prepare_cached()` so the timed hot path is:
 
 from __future__ import annotations
 
-import functools
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import torch
 
@@ -23,17 +22,8 @@ from labs.nvfp4_group_gemm.task import input_t, output_t
 from labs.nvfp4_group_gemm import cute_submission as base
 
 
-def _ceil_div(a: int, b: int) -> int:
-    return (a + b - 1) // b
-
-
 def _compute_total_num_clusters(problem_sizes: Sequence[Tuple[int, int, int, int]]) -> int:
-    # Must match cute_submission.py CTA tiling (mma_tiler_mnk[:2]).
-    cta_tile_shape_mn = (int(base.mma_tiler_mnk[0]), int(base.mma_tiler_mnk[1]))
-    total = 0
-    for m, n, _, _ in problem_sizes:
-        total += _ceil_div(int(m), cta_tile_shape_mn[0]) * _ceil_div(int(n), cta_tile_shape_mn[1])
-    return int(total)
+    return int(len(base.build_cluster_lookup(list(problem_sizes))))
 
 
 def prepare_cached(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any, ...]]]:
@@ -49,12 +39,14 @@ def prepare_cached(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any,
     problem_sizes = data_list[0][3]
     num_groups = len(problem_sizes)
     total_num_clusters = _compute_total_num_clusters(problem_sizes)
+    cluster_lookup = base.build_cluster_lookup(list(problem_sizes))
 
     compiled_func = base.compile_kernel(problem_sizes)
 
     tensor_of_problem_sizes = torch.tensor(problem_sizes, dtype=torch.int32, device="cuda")
     tensormap_shape = (total_num_clusters, base.num_tensormaps, base.bytes_per_tensormap // 8)
     tensor_of_tensormap = torch.empty(tensormap_shape, dtype=torch.int64, device="cuda")
+    tensor_of_cluster_lookup = torch.tensor(cluster_lookup, dtype=torch.int32, device="cuda")
 
     # Case-level CuTe pointers (stable across inputs for this benchmark case).
     case_ctx: Dict[str, Any] = {
@@ -65,9 +57,16 @@ def prepare_cached(data_list: Sequence[input_t]) -> Optional[Sequence[tuple[Any,
         # Keep tensors alive; CuTe pointers below alias their storage.
         "tensor_of_problem_sizes": tensor_of_problem_sizes,
         "tensor_of_tensormap": tensor_of_tensormap,
+        "tensor_of_cluster_lookup": tensor_of_cluster_lookup,
         "ptr_problem_sizes": base.make_ptr(
             base.cutlass.Int32,
             tensor_of_problem_sizes.data_ptr(),
+            base.cute.AddressSpace.gmem,
+            assumed_align=16,
+        ),
+        "ptr_cluster_lookup": base.make_ptr(
+            base.cutlass.Int32,
+            tensor_of_cluster_lookup.data_ptr(),
             base.cute.AddressSpace.gmem,
             assumed_align=16,
         ),
@@ -135,6 +134,7 @@ def custom_kernel_cached(data: tuple[Any, ...]) -> output_t:
         case["ptr_problem_sizes"],
         ctx["ptr_abc"],
         ctx["ptr_sfasfb"],
+        case["ptr_cluster_lookup"],
         case["ptr_tensormap"],
         total_num_clusters,
         case["problem_sizes"],
