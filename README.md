@@ -255,7 +255,7 @@ Recent sessions:
 - [PyTorch Model Optimization](resources/PyTorch_Model_Optimization.pdf)
 
 ### Monthly Meetup Summaries
-- **Feb 16, 2026** - [YouTube Coming Soon](https://www.youtube.com/@AIPerformanceEngineering) & Slides: [NVFP4 Low Precision Numerics](resources/NVFP4_Low_Precision_Numerics_Verda.pdf): NVFP4 Low Precision Numerics by Riccardo Mereu @ Verda
+- **Feb 16, 2026** - [YouTube Coming Soon](https://www.youtube.com/@AIPerformanceEngineering) & Slides: [NVFP4 Low Precision Numerics by Riccardo Mereu @ Verda](resources/NVFP4_Low_Precision_Numerics_Verda.pdf)
 - **Jan 19, 2026** - [YouTube](https://www.youtube.com/watch?v=o-etY6VLHZo) & Slides: [Optimizing_Data_Transfer_With_NVIDIA_Nsight_Systems_Profiler_by_Chaim_Rand](resources/Optimizing_Data_Transfer_With_NVIDIA_Nsight_Systems_Profiler_by_Chaim_Rand.pdf)
 - **November 17, 2025** - [YouTube](https://youtu.be/2EWDG_Dxjs8) & Slides: [SpeedOfLight_Inference_Modular_Nov_17_2025_Abdul_Dakkak](resources/SpeedOfLight_Inference_Modular_Nov_17_2025_Abdul_Dakkak.pdf): Speed of Light Inference with NVIDIA and AMD GPUs and Modular Platform by Abdul Dakkak
 - **October 20, 2025** - [YouTube](https://youtu.be/d3ZLodGTlAo): AI-Powered GPU Kernel Optimization + Distributed PyTorch with nbdistributed
