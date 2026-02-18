@@ -10,12 +10,10 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 
 CSS = """
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;700&family=Noto+Sans+Mono&display=swap');
-
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
   body {
-    font-family: 'Noto Sans KR', 'Malgun Gothic', '맑은 고딕', 'Apple SD Gothic Neo', sans-serif;
+    font-family: 'NanumBarunGothic', '나눔바른고딕', 'NanumGothic', '나눔고딕', 'Malgun Gothic', '맑은 고딕', sans-serif;
     font-size: 14px;
     line-height: 1.8;
     color: #1a1a2e;
@@ -107,12 +105,14 @@ CSS = """
     margin: 12px 0;
     font-size: 0.85em;
     line-height: 1.6;
+    font-family: 'NanumGothicCoding', '나눔고딕코딩', 'Consolas', monospace;
   }
   pre code {
     background: none;
     color: inherit;
     padding: 0;
     font-size: inherit;
+    font-family: inherit;
   }
 
   /* 리스트 */
